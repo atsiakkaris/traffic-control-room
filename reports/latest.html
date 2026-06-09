@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SWARCO API Test History</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f6f8; color: #333; }
+  header { background: #1a1a2e; color: white; padding: 20px 32px; }
+  header h1 { font-size: 1.4rem; }
+  header p  { font-size: 0.85rem; opacity: .7; margin-top: 4px; }
+  .content { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+  .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .card { background: white; border-radius: 8px; padding: 20px 24px; flex: 1; min-width: 150px;
+           box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .card .val { font-size: 2rem; font-weight: 700; }
+  .card .lbl { font-size: 0.8rem; color: #888; margin-top: 4px; }
+  .green { color: #28a745; } .red { color: #dc3545; } .orange { color: #fd7e14; }
+  .section { background: white; border-radius: 8px; padding: 20px 24px; margin-bottom: 24px;
+              box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .section h2 { font-size: 1rem; margin-bottom: 16px; color: #555; text-transform: uppercase;
+                 letter-spacing: .05em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f8f9fa; text-align: left; padding: 8px 10px; border-bottom: 2px solid #dee2e6; }
+  td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:hover td { background: rgba(0,0,0,.02); }
+  .chart-wrap { height: 200px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🚦 SWARCO API Test Suite</h1>
+  <p>Generated 2026-06-09 11:52 UTC · Historical data since first run</p>
+</header>
+
+<div class="content">
+
+  <!-- Summary cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="val red">3/7</div>
+      <div class="lbl">Passed (latest run)</div>
+    </div>
+    <div class="card">
+      <div class="val red">4</div>
+      <div class="lbl">Failed</div>
+    </div>
+    <div class="card">
+      <div class="val green">0</div>
+      <div class="lbl">Errored</div>
+    </div>
+    <div class="card">
+      <div class="val">1</div>
+      <div class="lbl">Total runs recorded</div>
+    </div>
+  </div>
+
+  <!-- Trend chart -->
+  <div class="section">
+    <h2>Pass / Fail Trend (last 30 runs)</h2>
+    <div class="chart-wrap">
+      <canvas id="trendChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Latest run results -->
+  <div class="section">
+    <h2>Latest Run — 2026-06-09 11:52:09 UTC</h2>
+    <table>
+      <thead><tr>
+        <th>Test</th><th>Result</th><th>HTTP</th><th>Time</th><th>Failure reason</th><th>Endpoint</th>
+      </tr></thead>
+      <tbody><tr><td colspan="6" style="background:#343a40;color:white;padding:8px 12px;font-weight:bold">Bluetooth</td></tr>
+            <tr style="background:#d4edda">
+                <td>Bluetooth Inventory</td>
+                <td>✅ PASS</td>
+                <td>200</td>
+                <td>1319.3 ms</td>
+                <td style="font-size:12px;word-break:break-word"></td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/BTMeasurementSiteTablePublication</td>
+            </tr>
+            <tr style="background:#f8d7da">
+                <td>Bluetooth Paths Inventory</td>
+                <td>❌ FAIL</td>
+                <td>200</td>
+                <td>2271.8 ms</td>
+                <td style="font-size:12px;word-break:break-word">predefined_paths_count: Total predefined paths: 0</td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationPublication</td>
+            </tr>
+            <tr style="background:#f8d7da">
+                <td>Bluetooth Paths Live (FCD)</td>
+                <td>❌ FAIL</td>
+                <td>200</td>
+                <td>10947.2 ms</td>
+                <td style="font-size:12px;word-break:break-word">Response time 10947ms > 5000ms limit | bt_paths_speed_and_traveltime: Speed OK: 425/513 | Travel time OK: 425/513 | Failing paths: 75 (no speed, no travel time), 79 (no speed, no travel time), 80 (no speed, no travel time), 94 (no speed, no travel time), 122 (no speed, no travel time), 134 (no speed, no travel time), 135 (no speed, no travel time), 137 (no speed, no travel time), 138 (no speed, no travel time), 139 (no speed, no travel time)</td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationDataPublication</td>
+            </tr><tr><td colspan="6" style="background:#343a40;color:white;padding:8px 12px;font-weight:bold">Traffic Detection</td></tr>
+            <tr style="background:#d4edda">
+                <td>Traffic Detection Inventory</td>
+                <td>✅ PASS</td>
+                <td>200</td>
+                <td>1541.0 ms</td>
+                <td style="font-size:12px;word-break:break-word"></td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/TrafficMeasurementSiteTablePublication</td>
+            </tr>
+            <tr style="background:#f8d7da">
+                <td>Traffic Detection Live</td>
+                <td>❌ FAIL</td>
+                <td>200</td>
+                <td>1052.3 ms</td>
+                <td style="font-size:12px;word-break:break-word">sensor_speed_status: Working: 0 | Malfunctioning (speed=-1): 74 — 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 | No measurement: 30</td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/MeasuredDataPublication</td>
+            </tr><tr><td colspan="6" style="background:#343a40;color:white;padding:8px 12px;font-weight:bold">VMS</td></tr>
+            <tr style="background:#d4edda">
+                <td>VMS Inventory</td>
+                <td>✅ PASS</td>
+                <td>200</td>
+                <td>1478.0 ms</td>
+                <td style="font-size:12px;word-break:break-word"></td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsTablePublication</td>
+            </tr>
+            <tr style="background:#f8d7da">
+                <td>VMS Live Data</td>
+                <td>❌ FAIL</td>
+                <td>200</td>
+                <td>1281.2 ms</td>
+                <td style="font-size:12px;word-break:break-word">vms_controller_status: Working: 4 | Not working: 33 — 11 (notWorking), 12 (notWorking), 14 (notWorking), 15 (notWorking), 16 (notWorking), 18 (notWorking), 19 (notWorking), 20 (notWorking), 22 (notWorking), 23 (notWorking), 24 (notWorking), 26 (notWorking), 27 (notWorking), 28 (notWorking), 29 (notWorking), 30 (notWorking), 31 (notWorking), 32 (notWorking), 53 (notWorking), 54 (notWorking), 55 (notWorking), 56 (notWorking), 57 (notWorking), 58 (notWorking), 60 (notWorking), 61 (notWorking), 62 (notWorking), 64 (notWorking), 67 (notWorking), 68 (notWorking), 69 (notWorking), 70 (notWorking), 72 (notWorking) | No status: 8 — 17, 21, 25, 59, 63, 65, 66, 71</td>
+                <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsPublication</td>
+            </tr></tbody>
+    </table>
+  </div>
+
+  <!-- Run history -->
+  <div class="section">
+    <h2>Run History</h2>
+    <table>
+      <thead><tr><th>Date (UTC)</th><th>Passed</th><th>Failed</th><th>Errored</th><th>Pass rate</th></tr></thead>
+      <tbody>
+        <tr>
+            <td>2026-06-09 11:52:09</td>
+            <td><span style="color:#dc3545;font-weight:bold">3/7</span></td>
+            <td>4</td>
+            <td>0</td>
+            <td>
+                <div style="background:#e9ecef;border-radius:4px;height:14px;width:120px">
+                  <div style="background:#dc3545;height:14px;border-radius:4px;width:43%"></div>
+                </div>
+            </td>
+        </tr></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+const ctx = document.getElementById('trendChart').getContext('2d');
+new Chart(ctx, {
+  type: 'bar',
+  data: {
+    labels: ["2026-06-09 11:52"],
+    datasets: [
+      { label: 'Passed', data: [3], backgroundColor: '#28a745' },
+      { label: 'Failed/Error', data: [4], backgroundColor: '#dc3545' }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { position: 'top' } },
+    scales: {
+      x: { stacked: true },
+      y: { stacked: true, beginAtZero: true, ticks: { stepSize: 1 } }
+    }
+  }
+});
+</script>
+</body></html>
