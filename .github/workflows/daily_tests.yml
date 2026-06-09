@@ -1,0 +1,52 @@
+name: Daily API Tests
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run API tests
+        env:
+          BASE_URL:      ${{ secrets.BASE_URL }}
+          SWARCO:        ${{ secrets.SWARCO }}
+          GMAIL_USER:    ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:  ${{ secrets.GMAIL_APP_PW }}
+          NOTIFY_EMAIL:  ${{ secrets.NOTIFY_EMAIL }}
+          DB_PATH:       results/history.db
+        run: python runner/run_tests.py
+
+      - name: Commit results
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add results/history.db reports/latest.html
+          git diff --cached --quiet || git commit -m "chore: test results $(date -u +%Y-%m-%dT%H:%M)Z"
+          git push
+
+      - name: Upload HTML report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.run_id }}
+          path: reports/latest.html
+          retention-days: 90
