@@ -182,8 +182,8 @@ def run_all():
     report_path = generate_report()
     log.info("Report written to %s", report_path)
 
-    # Send email
-    send_email(run_id, run_at, totals, all_results, report_path)
+    # Send email -To-Do
+    # send_email(run_id, run_at, totals, all_results, report_path)
 
     # Exit non-zero if any failures (makes GitHub Actions mark the run red)
     if totals["failed"] > 0 or totals["errored"] > 0:
