@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# endpoints.yaml  –  SWARCO API test definitions
+#
+# HOW TO ADD A NEW ENDPOINT:
+#   1. Add a new entry under the appropriate group (or create a new group).
+#   2. Set `path` to the URL suffix after {{swarco}} (e.g. MyNewEndpoint).
+#   3. Optionally set `expected_status`, `max_response_ms`, and `checks`.
+#   4. Commit and push — the next scheduled run will pick it up automatically.
+#
+# VARIABLES (set as GitHub Secrets → passed as env vars at runtime):
+#   BASE_URL  – e.g. https://datex.example.com/
+#   SWARCO    – e.g. swarco/
+# ─────────────────────────────────────────────────────────────────────────────
+
+groups:
+
+  - name: VMS
+    description: Variable Message Signs installed on the road network.
+    endpoints:
+
+      - name: VMS Inventory
+        path: VmsTablePublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+          
+      - name: VMS Live Data
+        path: VmsPublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+          - vms_controller_status   # parses working / not-working / no-status controllers
+
+  - name: Bluetooth
+    description: Bluetooth devices installed on the road network.
+    endpoints:
+
+      - name: Bluetooth Inventory
+        path: BTMeasurementSiteTablePublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+
+      - name: Bluetooth Paths Inventory
+        path: PredefinedLocationPublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+          - predefined_paths_count   # asserts at least 1 predefined path exists
+
+      - name: Bluetooth Paths Live (FCD)
+        path: PredefinedLocationDataPublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+          - bt_paths_speed_and_traveltime   # all paths must have speed>0 and traveltime>0
+
+  - name: Traffic Detection
+    description: Urban Traffic Counter Loop sensors on the road network.
+    endpoints:
+
+      - name: Traffic Detection Inventory
+        path: TrafficMeasurementSiteTablePublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+
+      - name: Traffic Detection Live
+        path: MeasuredDataPublication
+        expected_status: 200
+        max_response_ms: 5000
+        checks:
+          - valid_xml
+          - sensor_speed_status   # categorises sensors: working / malfunctioning / no-measurement
