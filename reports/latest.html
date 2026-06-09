@@ -32,7 +32,7 @@
 <body>
 <header>
   <h1>🚦 SWARCO API Test Suite</h1>
-  <p>Generated 2026-06-09 11:52 UTC · Historical data since first run</p>
+  <p>Generated 2026-06-09 11:58 UTC · Historical data since first run</p>
 </header>
 
 <div class="content">
@@ -44,15 +44,15 @@
       <div class="lbl">Passed (latest run)</div>
     </div>
     <div class="card">
-      <div class="val red">4</div>
+      <div class="val red">3</div>
       <div class="lbl">Failed</div>
     </div>
     <div class="card">
-      <div class="val green">0</div>
+      <div class="val orange">1</div>
       <div class="lbl">Errored</div>
     </div>
     <div class="card">
-      <div class="val">1</div>
+      <div class="val">2</div>
       <div class="lbl">Total runs recorded</div>
     </div>
   </div>
@@ -67,7 +67,7 @@
 
   <!-- Latest run results -->
   <div class="section">
-    <h2>Latest Run — 2026-06-09 11:52:09 UTC</h2>
+    <h2>Latest Run — 2026-06-09 11:57:50 UTC</h2>
     <table>
       <thead><tr>
         <th>Test</th><th>Result</th><th>HTTP</th><th>Time</th><th>Failure reason</th><th>Endpoint</th>
@@ -77,7 +77,7 @@
                 <td>Bluetooth Inventory</td>
                 <td>✅ PASS</td>
                 <td>200</td>
-                <td>1319.3 ms</td>
+                <td>1153.5 ms</td>
                 <td style="font-size:12px;word-break:break-word"></td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/BTMeasurementSiteTablePublication</td>
             </tr>
@@ -85,23 +85,23 @@
                 <td>Bluetooth Paths Inventory</td>
                 <td>❌ FAIL</td>
                 <td>200</td>
-                <td>2271.8 ms</td>
+                <td>1812.0 ms</td>
                 <td style="font-size:12px;word-break:break-word">predefined_paths_count: Total predefined paths: 0</td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationPublication</td>
             </tr>
-            <tr style="background:#f8d7da">
+            <tr style="background:#fff3cd">
                 <td>Bluetooth Paths Live (FCD)</td>
-                <td>❌ FAIL</td>
-                <td>200</td>
-                <td>10947.2 ms</td>
-                <td style="font-size:12px;word-break:break-word">Response time 10947ms > 5000ms limit | bt_paths_speed_and_traveltime: Speed OK: 425/513 | Travel time OK: 425/513 | Failing paths: 75 (no speed, no travel time), 79 (no speed, no travel time), 80 (no speed, no travel time), 94 (no speed, no travel time), 122 (no speed, no travel time), 134 (no speed, no travel time), 135 (no speed, no travel time), 137 (no speed, no travel time), 138 (no speed, no travel time), 139 (no speed, no travel time)</td>
+                <td>⚠️ ERROR</td>
+                <td>—</td>
+                <td>— ms</td>
+                <td style="font-size:12px;word-break:break-word">Request timed out after 10s</td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationDataPublication</td>
             </tr><tr><td colspan="6" style="background:#343a40;color:white;padding:8px 12px;font-weight:bold">Traffic Detection</td></tr>
             <tr style="background:#d4edda">
                 <td>Traffic Detection Inventory</td>
                 <td>✅ PASS</td>
                 <td>200</td>
-                <td>1541.0 ms</td>
+                <td>1601.7 ms</td>
                 <td style="font-size:12px;word-break:break-word"></td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/TrafficMeasurementSiteTablePublication</td>
             </tr>
@@ -109,7 +109,7 @@
                 <td>Traffic Detection Live</td>
                 <td>❌ FAIL</td>
                 <td>200</td>
-                <td>1052.3 ms</td>
+                <td>1694.2 ms</td>
                 <td style="font-size:12px;word-break:break-word">sensor_speed_status: Working: 0 | Malfunctioning (speed=-1): 74 — 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 | No measurement: 30</td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/MeasuredDataPublication</td>
             </tr><tr><td colspan="6" style="background:#343a40;color:white;padding:8px 12px;font-weight:bold">VMS</td></tr>
@@ -117,7 +117,7 @@
                 <td>VMS Inventory</td>
                 <td>✅ PASS</td>
                 <td>200</td>
-                <td>1478.0 ms</td>
+                <td>1009.2 ms</td>
                 <td style="font-size:12px;word-break:break-word"></td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsTablePublication</td>
             </tr>
@@ -125,7 +125,7 @@
                 <td>VMS Live Data</td>
                 <td>❌ FAIL</td>
                 <td>200</td>
-                <td>1281.2 ms</td>
+                <td>1737.1 ms</td>
                 <td style="font-size:12px;word-break:break-word">vms_controller_status: Working: 4 | Not working: 33 — 11 (notWorking), 12 (notWorking), 14 (notWorking), 15 (notWorking), 16 (notWorking), 18 (notWorking), 19 (notWorking), 20 (notWorking), 22 (notWorking), 23 (notWorking), 24 (notWorking), 26 (notWorking), 27 (notWorking), 28 (notWorking), 29 (notWorking), 30 (notWorking), 31 (notWorking), 32 (notWorking), 53 (notWorking), 54 (notWorking), 55 (notWorking), 56 (notWorking), 57 (notWorking), 58 (notWorking), 60 (notWorking), 61 (notWorking), 62 (notWorking), 64 (notWorking), 67 (notWorking), 68 (notWorking), 69 (notWorking), 70 (notWorking), 72 (notWorking) | No status: 8 — 17, 21, 25, 59, 63, 65, 66, 71</td>
                 <td style="font-size:11px;color:#888">https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsPublication</td>
             </tr></tbody>
@@ -138,6 +138,17 @@
     <table>
       <thead><tr><th>Date (UTC)</th><th>Passed</th><th>Failed</th><th>Errored</th><th>Pass rate</th></tr></thead>
       <tbody>
+        <tr>
+            <td>2026-06-09 11:57:50</td>
+            <td><span style="color:#dc3545;font-weight:bold">3/7</span></td>
+            <td>3</td>
+            <td>1</td>
+            <td>
+                <div style="background:#e9ecef;border-radius:4px;height:14px;width:120px">
+                  <div style="background:#dc3545;height:14px;border-radius:4px;width:43%"></div>
+                </div>
+            </td>
+        </tr>
         <tr>
             <td>2026-06-09 11:52:09</td>
             <td><span style="color:#dc3545;font-weight:bold">3/7</span></td>
@@ -159,10 +170,10 @@ const ctx = document.getElementById('trendChart').getContext('2d');
 new Chart(ctx, {
   type: 'bar',
   data: {
-    labels: ["2026-06-09 11:52"],
+    labels: ["2026-06-09 11:52", "2026-06-09 11:57"],
     datasets: [
-      { label: 'Passed', data: [3], backgroundColor: '#28a745' },
-      { label: 'Failed/Error', data: [4], backgroundColor: '#dc3545' }
+      { label: 'Passed', data: [3, 3], backgroundColor: '#28a745' },
+      { label: 'Failed/Error', data: [4, 4], backgroundColor: '#dc3545' }
     ]
   },
   options: {
