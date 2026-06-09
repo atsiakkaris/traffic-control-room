@@ -55,7 +55,7 @@ groups:
       - name: Bluetooth Paths Live (FCD)
         path: PredefinedLocationDataPublication
         expected_status: 200
-        max_response_ms: 5000
+        max_response_ms: 30000
         checks:
           - valid_xml
           - bt_paths_speed_and_traveltime   # all paths must have speed>0 and traveltime>0

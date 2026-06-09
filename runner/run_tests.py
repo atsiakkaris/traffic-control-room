@@ -70,7 +70,7 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
 
     try:
         t0 = time.perf_counter()
-        resp = httpx.get(url, timeout=max_ms / 1000 + 5, follow_redirects=True)
+        resp = httpx.get(url, timeout=max_ms / 1000 + 10, follow_redirects=True)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         result["status_code"] = resp.status_code

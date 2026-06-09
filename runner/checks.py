@@ -71,7 +71,25 @@ def predefined_paths_count(response_text: str) -> dict:
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
+    # Try wildcard namespace first, then fall back to searching all tags
     paths = root.findall(".//{*}predefinedLocation")
+
+    # Fallback: scan all elements for any tag ending in 'predefinedLocation'
+    if not paths:
+        paths = [el for el in root.iter() if el.tag.split("}")[-1].lower() == "predefinedlocation"]
+
+    # Second fallback: look for 'predefinedlocationreference' (used in live feed)
+    if not paths:
+        paths = [el for el in root.iter() if "predefinedlocation" in el.tag.split("}")[-1].lower()]
+
+    # Log all unique tag names at root+1 level to help debug if still 0
+    if not paths:
+        child_tags = list({el.tag.split("}")[-1] for el in root.iter()})[:20]
+        return {
+            "passed": False,
+            "detail": f"No predefinedLocation elements found. Tags in response: {', '.join(child_tags)}"
+        }
+
     count = len(paths)
     return {
         "passed": count > 0,
