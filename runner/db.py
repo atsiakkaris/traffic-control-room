@@ -34,13 +34,25 @@ def init_db():
             test_name       TEXT NOT NULL,
             endpoint        TEXT NOT NULL,
             method          TEXT NOT NULL DEFAULT 'GET',
-            status          TEXT NOT NULL,   -- 'pass' | 'fail' | 'error'
+            status          TEXT NOT NULL,
             status_code     INTEGER,
             expected_code   INTEGER DEFAULT 200,
             response_ms     REAL,
             failure_reason  TEXT,
             FOREIGN KEY (run_id) REFERENCES runs(run_id)
         );
+
+        CREATE TABLE IF NOT EXISTS sensor_results (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id      TEXT NOT NULL,
+            run_at      TEXT NOT NULL,
+            group_name  TEXT NOT NULL,
+            sensor_id   TEXT NOT NULL,
+            status      TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sensor_results_sensor
+            ON sensor_results (group_name, sensor_id, run_at);
     """)
     conn.commit()
     conn.close()
@@ -103,3 +115,30 @@ def fetch_history_for_test(test_name, limit=30):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def insert_sensor_result(run_id, run_at, group_name, sensor_id, status):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO sensor_results (run_id, run_at, group_name, sensor_id, status) VALUES (?,?,?,?,?)",
+        (run_id, run_at, group_name, sensor_id, status)
+    )
+    conn.commit()
+    conn.close()
+
+
+def fetch_sensor_stability():
+    """Return per-sensor history: [{group_name, sensor_id, history: [{run_at, status}]}]"""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT group_name, sensor_id, run_at, status FROM sensor_results ORDER BY group_name, sensor_id, run_at"
+    ).fetchall()
+    conn.close()
+
+    sensors = {}
+    for row in rows:
+        key = (row["group_name"], row["sensor_id"])
+        if key not in sensors:
+            sensors[key] = {"group_name": row["group_name"], "sensor_id": row["sensor_id"], "history": []}
+        sensors[key]["history"].append({"run_at": row["run_at"], "status": row["status"]})
+    return list(sensors.values())

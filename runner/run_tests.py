@@ -28,7 +28,7 @@ from pathlib import Path
 # Make sure runner/ is on the path when called from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db import init_db, insert_run, insert_result
+from db import init_db, insert_run, insert_result, insert_sensor_result
 from tests import REGISTRY
 from report import generate_report
 
@@ -99,6 +99,8 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
                 )
                 if not check_result["passed"]:
                     failures.append(f"{check_name}: {check_result['detail']}")
+                if check_result.get("sensors"):
+                    result.setdefault("sensors", {}).update(check_result["sensors"])
             except Exception as e:
                 failures.append(f"{check_name} raised exception: {e}")
 
@@ -161,6 +163,8 @@ def run_all():
                 response_ms=r["response_ms"],
                 failure_reason=r["failure_reason"],
             )
+            for sensor_id, s_status in r.get("sensors", {}).items():
+                insert_sensor_result(run_id, run_at, group_name, sensor_id, s_status)
 
             icon = {"pass": "✓", "fail": "✗", "error": "⚠"}.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])

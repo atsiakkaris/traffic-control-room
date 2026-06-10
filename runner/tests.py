@@ -37,6 +37,7 @@ def vms_controller_status(response_text: str) -> dict:
     controllers = root.findall(".//{*}vmsControllerStatus")
     working, not_working, no_status = [], [], []
 
+    sensors_map = {}
     for ctrl in controllers:
         cid_el = ctrl.find("{*}vmsControllerReference")
         cid = cid_el.get("id", "unknown") if cid_el is not None else "unknown"
@@ -44,10 +45,13 @@ def vms_controller_status(response_text: str) -> dict:
         ws_el = ctrl.find(".//{*}workingStatus")
         if ws_el is None:
             no_status.append(cid)
+            sensors_map[cid] = "no_status"
         elif ws_el.text == "working":
             working.append(cid)
+            sensors_map[cid] = "working"
         else:
             not_working.append(cid)
+            sensors_map[cid] = "not_working"
 
     detail_lines = [
         f"Working: {len(working)}",
@@ -58,7 +62,8 @@ def vms_controller_status(response_text: str) -> dict:
     passed = len(not_working) == 0
     return {
         "passed": passed,
-        "detail": " | ".join(detail_lines)
+        "detail": " | ".join(detail_lines),
+        "sensors": sensors_map,
     }
 
 
@@ -131,12 +136,17 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
         if missing:
             failing.append(pid)
 
+    sensors_map = {}
+    for path in paths:
+        pid = path.get("id", "unknown")
+        sensors_map[pid] = "failing" if pid in failing else "ok"
+
     passed = len(failing) == 0
     detail = (
         f"Speed OK: {speed_ok}/{total} | Travel time OK: {ttime_ok}/{total}"
         + (f" | Failing paths: {', '.join(failing[:10])}" if failing else "")
     )
-    return {"passed": passed, "detail": detail}
+    return {"passed": passed, "detail": detail, "sensors": sensors_map}
 
 
 # ─── Traffic Detection ────────────────────────────────────────────────────────
@@ -148,6 +158,7 @@ def sensor_speed_status(response_text: str) -> dict:
 
     sensors = root.findall(".//{*}siteMeasurements")
     working, malfunctioning, no_traffic, no_measurement = [], [], [], []
+    sensors_map = {}
     total_flow = 0
     flow_count = 0
 
@@ -177,12 +188,17 @@ def sensor_speed_status(response_text: str) -> dict:
         # Categorise by speed
         if speed_val is None:
             no_measurement.append(sid)
+            sensor_status = "no_measurement"
         elif speed_val == -1:
             malfunctioning.append(sid)
+            sensor_status = "malfunctioning"
         elif speed_val == 0:
             no_traffic.append(sid)
+            sensor_status = "no_traffic"
         else:
             working.append(sid)
+            sensor_status = "working"
+        sensors_map[sid] = sensor_status
 
     total = len(sensors)
     avg_flow = round(total_flow / flow_count, 1) if flow_count > 0 else 0
@@ -191,11 +207,11 @@ def sensor_speed_status(response_text: str) -> dict:
     detail_parts = [
         f"Working: {len(working)}/{total}",
         f"No traffic (speed=0): {len(no_traffic)}",
-        f"Malfunctioning (speed=-1): {len(malfunctioning)}" + (f" — {', '.join(malfunctioning[:10])}" if malfunctioning else ""),
+        f"Malfunctioning (speed=-1): {len(malfunctioning)}" + (f" — {', '.join(malfunctioning[:5])}" if malfunctioning else ""),
         f"No measurement: {len(no_measurement)}",
         f"Avg flow rate: {avg_flow} veh/hr ({flow_count} sensors reporting)",
     ]
-    return {"passed": passed, "detail": " | ".join(detail_parts)}
+    return {"passed": passed, "detail": " | ".join(detail_parts), "sensors": sensors_map}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

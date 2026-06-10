@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability
 
 REPORT_PATH = Path("reports/latest.html")
 
@@ -64,19 +64,96 @@ def parse_sensor_detail(failure_reason):
     }
 
 
-def build_sensor_stability(runs):
-    """For each test, compute how many runs it passed vs failed."""
-    conn = get_connection()
-    stability = {}
-    for run in runs:
-        results = fetch_results_for_run(run["run_id"])
-        for r in results:
-            name = r["test_name"]
-            if name not in stability:
-                stability[name] = {"pass": 0, "fail": 0, "error": 0, "group": r["group_name"]}
-            stability[name][r["status"]] += 1
-    conn.close()
-    return stability
+STATUS_COLOR = {
+    "working": "#1d9e75",
+    "ok": "#1d9e75",
+    "no_traffic": "#9ca3af",
+    "no_measurement": "#9ca3af",
+    "no_status": "#9ca3af",
+    "not_working": "#e24b4a",
+    "malfunctioning": "#e24b4a",
+    "failing": "#e24b4a",
+}
+
+STATUS_LABEL = {
+    "working": "Working",
+    "ok": "OK",
+    "no_traffic": "No traffic",
+    "no_measurement": "No data",
+    "no_status": "No status",
+    "not_working": "Not working",
+    "malfunctioning": "Malfunctioning",
+    "failing": "Failing",
+}
+
+GOOD_STATUSES = {"working", "ok"}
+
+
+def build_sensor_stability_html(sensors):
+    """Build the sensor stability panel HTML with a group dropdown."""
+    if not sensors:
+        return "<p style='color:var(--color-text-secondary);font-size:13px'>No sensor data recorded yet.</p>"
+
+    groups = sorted({s["group_name"] for s in sensors})
+
+    options = '<option value="all">All groups</option>'
+    for g in groups:
+        options += f'<option value="{g}">{g}</option>'
+
+    rows = ""
+    for s in sorted(sensors, key=lambda x: (x["group_name"], x["sensor_id"])):
+        history = s["history"]
+        total = len(history)
+        good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
+        pct = round(good / total * 100) if total else 0
+
+        if pct == 100:
+            badge_bg, badge_color, badge_label = "#e1f5ee", "#0f6e56", "Always on"
+        elif pct == 0:
+            badge_bg, badge_color, badge_label = "#fcebeb", "#a32d2d", "Always off"
+        elif pct >= 70:
+            badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Mostly on"
+        else:
+            badge_bg, badge_color, badge_label = "#faece7", "#993c1d", "Unstable"
+
+        # Sparkline: last 40 runs as tiny squares
+        sparks = ""
+        for h in history[-40:]:
+            c = STATUS_COLOR.get(h["status"], "#9ca3af")
+            label = STATUS_LABEL.get(h["status"], h["status"])
+            ts = h["run_at"][:16].replace("T", " ")
+            sparks += f'<span title="{ts}: {label}" style="display:inline-block;width:6px;height:14px;border-radius:2px;background:{c};margin-right:1px"></span>'
+
+        gid = s["group_name"].replace(" ", "_")
+        rows += f"""
+        <tr data-group="{s['group_name']}" data-gid="{gid}">
+          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{s['group_name']}</td>
+          <td style="font-size:13px;color:var(--color-text-primary);font-family:monospace">{s['sensor_id']}</td>
+          <td style="white-space:nowrap">{sparks}</td>
+          <td><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span></td>
+          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total} runs</td>
+        </tr>"""
+
+    return f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <div class="section-label" style="margin-bottom:0">Sensor stability</div>
+      <select id="groupFilter" onchange="filterGroup(this.value)"
+              style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
+                     background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer">
+        {options}
+      </select>
+    </div>
+    <table id="sensorTable">
+      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Status</th><th>Runs</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <script>
+    function filterGroup(val) {{
+      document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
+        tr.style.display = (val === 'all' || tr.dataset.group === val) ? '' : 'none';
+      }});
+    }}
+    </script>"""
 
 
 def generate_report() -> str:
@@ -101,9 +178,9 @@ def generate_report() -> str:
     chart_passed = json.dumps([r["passed"] for r in chart_runs])
     chart_failed = json.dumps([r["failed"] + r["errored"] for r in chart_runs])
 
-    # Stability data
-    stability = build_sensor_stability(runs[:30])
-    total_runs = len(runs[:30])
+    # Sensor stability
+    all_sensors = fetch_sensor_stability()
+    sensor_stability_html = build_sensor_stability_html(all_sensors)
 
     # Build group status cards
     def group_status_card(group_name, icon, results):
@@ -172,7 +249,6 @@ def generate_report() -> str:
                             <span style="color:#888"><b>{d['no_measurement']}</b> no data</span>
                           </div>
                           {"<div style='color:var(--color-text-secondary);line-height:1.6'>Malfunctioning IDs: " + d['mal_ids'] + "</div>" if d['mal_ids'] else ""}
-                          <div style="color:var(--color-text-secondary);margin-top:4px">Avg flow: {d['avg_flow']} veh/hr</div>
                         </div>"""
 
         return f"""
@@ -220,48 +296,6 @@ def generate_report() -> str:
           </td>
         </tr>"""
 
-    # Stability rows
-    stability_rows = ""
-    for test_name, s in sorted(stability.items(), key=lambda x: x[1]["group"]):
-        total_s = s["pass"] + s["fail"] + s["error"]
-        if total_s == 0:
-            continue
-        pass_pct = round(s["pass"] / total_s * 100)
-        if pass_pct == 100:
-            badge_bg, badge_color, badge_label = "#e1f5ee", "#0f6e56", "Always on"
-        elif pass_pct == 0:
-            badge_bg, badge_color, badge_label = "#fcebeb", "#a32d2d", "Always off"
-        elif pass_pct >= 70:
-            badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Mostly on"
-        else:
-            badge_bg, badge_color, badge_label = "#faece7", "#993c1d", "Unstable"
-
-        bar_html = ""
-        seg_w_pass = pass_pct
-        seg_w_fail = round(s["fail"] / total_s * 100)
-        seg_w_err = 100 - seg_w_pass - seg_w_fail
-        if seg_w_pass:
-            bar_html += f'<div style="width:{seg_w_pass}%;background:#1d9e75;height:100%"></div>'
-        if seg_w_fail:
-            bar_html += f'<div style="width:{seg_w_fail}%;background:#e24b4a;height:100%"></div>'
-        if seg_w_err:
-            bar_html += f'<div style="width:{seg_w_err}%;background:#e58e0a;height:100%"></div>'
-
-        stability_rows += f"""
-        <tr>
-          <td style="font-size:13px;color:var(--color-text-secondary)">{s['group']}</td>
-          <td style="font-size:13px;color:var(--color-text-primary)">{test_name}</td>
-          <td>
-            <div style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:var(--color-border-tertiary)">
-              {bar_html}
-            </div>
-          </td>
-          <td>
-            <span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span>
-          </td>
-          <td style="font-size:12px;color:var(--color-text-secondary)">{s['pass']}/{total_s} runs</td>
-        </tr>"""
-
     run_time = latest_run["run_at"][:19].replace("T", " ")
     total_runs_label = len(runs)
 
@@ -278,10 +312,20 @@ def generate_report() -> str:
   :root {{
     --bg: #f5f6f8; --surface: #ffffff; --border: rgba(0,0,0,0.08);
     --text: #1a1a2e; --muted: #6b7280; --header-bg: #1a1a2e;
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f5f6f8;
+    --color-text-primary: #1a1a2e;
+    --color-text-secondary: #6b7280;
+    --color-border-tertiary: rgba(0,0,0,0.08);
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{ --bg: #111318; --surface: #1c1f26; --border: rgba(255,255,255,0.08);
-             --text: #f0f2f5; --muted: #9ca3af; --header-bg: #0d0f14; }}
+             --text: #f0f2f5; --muted: #9ca3af; --header-bg: #0d0f14;
+             --color-background-primary: #1c1f26;
+             --color-background-secondary: #111318;
+             --color-text-primary: #f0f2f5;
+             --color-text-secondary: #9ca3af;
+             --color-border-tertiary: rgba(255,255,255,0.08); }}
   }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
           background: var(--bg); color: var(--text); min-height: 100vh; }}
@@ -323,22 +367,18 @@ def generate_report() -> str:
   </div>
 
   <div class="panel">
-    <div class="section-label" style="margin-bottom:16px">Pass / fail trend — last {len(chart_runs)} runs</div>
+    <div class="section-label" style="margin-bottom:6px">Pass / fail trend — last {len(chart_runs)} runs</div>
     <div style="position:relative;height:180px">
       <canvas id="trendChart" role="img" aria-label="Stacked bar chart showing passed and failed test counts across recent runs"></canvas>
     </div>
-    <div style="display:flex;gap:20px;margin-top:12px;font-size:12px;color:var(--muted)">
+    <div style="display:flex;gap:20px;margin-top:12px;font-size:2px;color:var(--muted)">
       <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Passed</span>
       <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#e24b4a;display:inline-block"></span>Failed / errored</span>
     </div>
   </div>
 
   <div class="panel">
-    <div class="section-label" style="margin-bottom:16px">Endpoint stability — last {total_runs_label} runs</div>
-    <table>
-      <thead><tr><th>Group</th><th>Endpoint</th><th>History</th><th>Status</th><th>Runs</th></tr></thead>
-      <tbody>{stability_rows}</tbody>
-    </table>
+    {sensor_stability_html}
   </div>
 
   <div class="panel">
