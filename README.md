@@ -11,7 +11,7 @@ Automated twice-daily API tests for SWARCO DATEX II endpoints, running on GitHub
 │   └── endpoints.yaml          ← Define / add endpoints here
 ├── runner/
 │   ├── run_tests.py            ← Entry point
-│   ├── checks.py               ← XML assertion logic per endpoint type
+│   ├── tests.py                ← XML assertion logic per endpoint type
 │   ├── db.py                   ← SQLite helpers
 │   └── report.py               ← HTML dashboard generator
 ├── results/
@@ -91,7 +91,23 @@ Commit and push via GitHub Desktop — the next scheduled run picks it up automa
 
 ## Resetting History
 
-To clear all historical data and start fresh, delete `results/history.db` via GitHub Desktop or directly on GitHub. The next run creates a new empty database.
+To clear all historical data and start fresh, delete `results/history.db` via GitHub Desktop or directly on GitHub. The next run creates a new empty database with the current schema (runs, test_results, sensor_results).
+
+---
+
+## Dashboard
+
+The HTML report has three sections:
+
+**Infrastructure groups** — one card per group (VMS, Bluetooth, Traffic Detection, …) showing current pass/fail status and a breakdown of each check.
+
+**Sensor stability** — a table with one row per individual sensor, controller, or path ID. A group dropdown filters by group; any new group added to `endpoints.yaml` appears there automatically. Each row shows:
+- A sparkline of up to 40 runs (green = working/ok, red = malfunctioning/failing, grey = no data/no traffic)
+- A badge: **Always on** · **Mostly on** (≥70 % good) · **Unstable** · **Always off**
+
+This lets you distinguish a permanent hardware fault from a one-off hiccup.
+
+**Run history** — pass/fail counts and pass-rate bar for the last 20 runs.
 
 ---
 
