@@ -47,11 +47,11 @@ def vms_controller_status(response_text: str) -> dict:
         elif ws_el.text == "working":
             working.append(cid)
         else:
-            not_working.append(f"{cid} ({ws_el.text})")
+            not_working.append(cid)
 
     detail_lines = [
         f"Working: {len(working)}",
-        f"Not working: {len(not_working)}" + (f" — {', '.join(not_working)}" if not_working else ""),
+        f"Not working: {len(not_working)}" + (f" — IDs: — {', '.join(not_working)}" if not_working else ""),
         f"No status: {len(no_status)}" + (f" — {', '.join(no_status)}" if no_status else ""),
     ]
 
@@ -129,7 +129,7 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
         if not (ttime and ttime > 0):
             missing.append("no travel time")
         if missing:
-            failing.append(f"{pid} ({', '.join(missing)})")
+            failing.append(pid)
 
     passed = len(failing) == 0
     detail = (
