@@ -73,7 +73,7 @@ def build_sensor_stability(runs):
         for r in results:
             name = r["test_name"]
             if name not in stability:
-                stability[name] = {"passed": 0, "failed": 0, "errored": 0, "group": r["group_name"]}
+                stability[name] = {"pass": 0, "fail": 0, "error": 0, "group": r["group_name"]}
             stability[name][r["status"]] += 1
     conn.close()
     return stability
@@ -223,10 +223,10 @@ def generate_report() -> str:
     # Stability rows
     stability_rows = ""
     for test_name, s in sorted(stability.items(), key=lambda x: x[1]["group"]):
-        total_s = s["passed"] + s["failed"] + s["errored"]
+        total_s = s["pass"] + s["fail"] + s["error"]
         if total_s == 0:
             continue
-        pass_pct = round(s["passed"] / total_s * 100)
+        pass_pct = round(s["pass"] / total_s * 100)
         if pass_pct == 100:
             badge_bg, badge_color, badge_label = "#e1f5ee", "#0f6e56", "Always on"
         elif pass_pct == 0:
@@ -238,7 +238,7 @@ def generate_report() -> str:
 
         bar_html = ""
         seg_w_pass = pass_pct
-        seg_w_fail = round(s["failed"] / total_s * 100)
+        seg_w_fail = round(s["fail"] / total_s * 100)
         seg_w_err = 100 - seg_w_pass - seg_w_fail
         if seg_w_pass:
             bar_html += f'<div style="width:{seg_w_pass}%;background:#1d9e75;height:100%"></div>'
@@ -259,7 +259,7 @@ def generate_report() -> str:
           <td>
             <span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span>
           </td>
-          <td style="font-size:12px;color:var(--color-text-secondary)">{s['passed']}/{total_s} runs</td>
+          <td style="font-size:12px;color:var(--color-text-secondary)">{s['pass']}/{total_s} runs</td>
         </tr>"""
 
     run_time = latest_run["run_at"][:19].replace("T", " ")

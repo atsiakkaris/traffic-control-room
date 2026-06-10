@@ -1,6 +1,6 @@
-# SWARCO API Test Suite
+# SWARCO Infrastructure Health — API Test Suite
 
-Automated daily API tests for SWARCO DATEX II endpoints, running on GitHub Actions with SQLite history and HTML reports delivered by email.
+Automated twice-daily API tests for SWARCO DATEX II endpoints, running on GitHub Actions with SQLite history and a live HTML dashboard.
 
 ---
 
@@ -11,64 +11,68 @@ Automated daily API tests for SWARCO DATEX II endpoints, running on GitHub Actio
 │   └── endpoints.yaml          ← Define / add endpoints here
 ├── runner/
 │   ├── run_tests.py            ← Entry point
-│   ├── checks.py               ← XML assertion logic
+│   ├── checks.py               ← XML assertion logic per endpoint type
 │   ├── db.py                   ← SQLite helpers
-│   └── report.py               ← HTML report generator
+│   └── report.py               ← HTML dashboard generator
 ├── results/
-│   └── history.db              ← SQLite DB (auto-committed by CI)
+│   └── history.db              ← SQLite DB (auto-committed after each run)
 ├── reports/
-│   └── latest.html             ← Generated report (auto-committed by CI)
+│   └── latest.html             ← Generated dashboard (auto-committed after each run)
 ├── .github/workflows/
-│   └── daily_tests.yml         ← GitHub Actions schedule
+│   └── daily_tests.yml         ← GitHub Actions schedule (runs at 06:00 and 12:00 Cyprus time)
 └── requirements.txt
 ```
 
 ---
 
-## Setup (one-time)
+## How It Works
 
-### 1. Create a GitHub repository
-
-Push this folder as a new repo:
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-gh repo create swarco-api-tests --private --source=. --push
-```
-
-### 2. Add GitHub Secrets
-
-Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
-
-| Secret name    | Value |
-|----------------|-------|
-| `BASE_URL`     | Your base URL, e.g. `https://datex.example.com/` |
-| `SWARCO`       | The path segment, e.g. `swarco/` |
-| `GMAIL_USER`   | Your Gmail address, e.g. `you@gmail.com` |
-| `GMAIL_APP_PW` | A Gmail **App Password** (see below) |
-| `NOTIFY_EMAIL` | Where to send the daily report |
-
-### 3. Create a Gmail App Password
-
-1. Go to [myaccount.google.com/security](https://myaccount.google.com/security)
-2. Enable **2-Step Verification** if not already on
-3. Search for **App passwords** → select **Mail** → **Other (custom name)** → type `API Tests`
-4. Copy the 16-character password — paste it as the `GMAIL_APP_PW` secret
-
-### 4. Enable GitHub Actions write permission
-
-Go to **Settings → Actions → General → Workflow permissions** and select **Read and write permissions** (needed to commit `history.db` back to the repo after each run).
-
-### 5. Run manually to test
-
-Go to **Actions → Daily API Tests → Run workflow**.
+1. GitHub Actions triggers at **06:00 and 12:00 Cyprus time (03:00 and 09:00 UTC)**
+2. All endpoints in `endpoints.yaml` are tested — HTTP status, response time, and XML assertions
+3. Results are written to `results/history.db`
+4. `reports/latest.html` is regenerated with the full dashboard
+5. Both files are committed back to the repo automatically
+6. GitHub Pages redeploys — the live report URL reflects the latest run within ~1 minute
+7. An email summary is sent to the configured recipient
 
 ---
 
-## Adding new endpoints
+## Endpoints & Checks
 
-Open `config/endpoints.yaml` and add an entry under the appropriate group:
+| Group | Endpoint | Checks |
+|---|---|---|
+| VMS | VMS Inventory | Valid XML |
+| VMS | VMS Live Data | Valid XML, working/not-working/no-status controller counts |
+| Bluetooth | BT Inventory | Valid XML |
+| Bluetooth | BT Paths Inventory | Valid XML, predefined path count > 0 |
+| Bluetooth | BT Paths Live (FCD) | Valid XML, speed & travel time present for all paths |
+| Traffic Detection | TD Inventory | Valid XML |
+| Traffic Detection | TD Live | Valid XML, sensor speed categorisation (working / no traffic / malfunctioning / no data) + avg flow rate |
+
+---
+
+## GitHub Secrets Required
+
+Go to **Settings → Secrets and variables → Actions → Repository secrets**:
+
+| Secret | Value |
+|---|---|
+| `BASE_URL` | Base URL, e.g. `https://datex.example.com/` |
+| `SWARCO` | Path segment, e.g. `swarco/api/Data/` |
+| `GMAIL_USER` | Gmail address used to send notifications |
+| `GMAIL_APP_PW` | Gmail App Password (16-char, not your regular password) |
+| `NOTIFY_EMAIL` | Recipient address for the daily email summary |
+
+### Creating a Gmail App Password
+1. Go to [myaccount.google.com](https://myaccount.google.com) and search **App passwords**
+2. Create one named `API Tests` — copy the 16-character code
+3. Paste it as the `GMAIL_APP_PW` secret
+
+---
+
+## Adding New Endpoints
+
+Open `config/endpoints.yaml` and add an entry under the appropriate group (or create a new group):
 
 ```yaml
 - name: My New Endpoint
@@ -81,22 +85,38 @@ Open `config/endpoints.yaml` and add an entry under the appropriate group:
 
 Available checks: `valid_xml`, `vms_controller_status`, `predefined_paths_count`, `bt_paths_speed_and_traveltime`, `sensor_speed_status`.
 
-Commit and push — the next run will include it automatically.
+Commit and push via GitHub Desktop — the next scheduled run picks it up automatically.
 
 ---
 
-## Viewing results
+## Resetting History
 
-- **Email**: a summary table is sent every day after the run.
-- **HTML report**: committed to `reports/latest.html` — viewable as a GitHub Pages site, or download it from the Actions artifacts tab.
-- **Raw data**: `results/history.db` is a standard SQLite file — open with [DB Browser for SQLite](https://sqlitebrowser.org/) for ad-hoc queries.
+To clear all historical data and start fresh, delete `results/history.db` via GitHub Desktop or directly on GitHub. The next run creates a new empty database.
+
+---
+
+## Viewing Results
+
+- **Live dashboard**: your GitHub Pages URL at `https://YOUR_USERNAME.github.io/YOUR_REPO/reports/latest.html` (updates after every run)
+- **Email**: summary table sent after each run to `NOTIFY_EMAIL`
+- **Raw data**: `results/history.db` is a standard SQLite file — open with [DB Browser for SQLite](https://sqlitebrowser.org/) for ad-hoc queries
+- **Artifacts**: each run uploads `latest.html` as a downloadable artifact under Actions → the run → Artifacts
 
 ---
 
 ## Schedule
 
-Edit `.github/workflows/daily_tests.yml` to change the time:
+Runs twice daily. Edit `.github/workflows/daily_tests.yml` to change times:
+
 ```yaml
-- cron: "0 7 * * *"   # 07:00 UTC every day
+- cron: "0 3 * * *"   # 06:00 Cyprus (UTC+3)
+- cron: "0 9 * * *"   # 12:00 Cyprus (UTC+3)
 ```
-Use [crontab.guru](https://crontab.guru) to build your preferred schedule.
+
+Use [crontab.guru](https://crontab.guru) to build a custom schedule. Note: GitHub cron is always UTC.
+
+---
+
+## GitHub Actions Permissions
+
+Go to **Settings → Actions → General → Workflow permissions** and set **Read and write permissions** — required so the bot can commit `history.db` and `latest.html` back to the repo after each run.
