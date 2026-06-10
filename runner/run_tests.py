@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from db import init_db, insert_run, insert_result
-from checks import REGISTRY
+from tests import REGISTRY
 from report import generate_report
 
 logging.basicConfig(
@@ -182,7 +182,7 @@ def run_all():
     report_path = generate_report()
     log.info("Report written to %s", report_path)
 
-    # Send email -To-Do
+    # Send email (disabled — uncomment to re-enable)
     # send_email(run_id, run_at, totals, all_results, report_path)
 
     # Exit non-zero if any failures (makes GitHub Actions mark the run red)
