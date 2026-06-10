@@ -2,7 +2,8 @@ name: Daily API Tests
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "0 3 * * *"   # 06:00 Cyprus
+    - cron: "0 19 * * *"   # 22:00 Cyprus
   workflow_dispatch:
 
 jobs:
