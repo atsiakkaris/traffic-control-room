@@ -34,9 +34,7 @@ def vms_controller_status(response_text: str) -> dict:
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
-    ns_map = _extract_namespaces(response_text)
     controllers = root.findall(".//{*}vmsControllerStatus")
-
     working, not_working, no_status = [], [], []
 
     for ctrl in controllers:
@@ -82,7 +80,7 @@ def predefined_paths_count(response_text: str) -> dict:
     if not paths:
         paths = [el for el in root.iter() if "predefinedlocation" in el.tag.split("}")[-1].lower()]
 
-    # Log all unique tag names at root+1 level to help debug if still 0
+    # Log all unique tag names to help debug if still 0
     if not paths:
         child_tags = list({el.tag.split("}")[-1] for el in root.iter()})[:20]
         return {
@@ -149,36 +147,53 @@ def sensor_speed_status(response_text: str) -> dict:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
     sensors = root.findall(".//{*}siteMeasurements")
-    working, malfunctioning, no_measurement = [], [], []
+    working, malfunctioning, no_traffic, no_measurement = [], [], [], []
+    total_flow = 0
+    flow_count = 0
 
     for sensor in sensors:
         ref = sensor.find("{*}measurementSiteReference")
         sid = ref.get("id", "unknown") if ref is not None else "unknown"
 
-        quantities = sensor.findall(".//{*}physicalQuantity")
         speed_val = None
+        flow_val = None
 
-        for q in quantities:
-            basic = q.find(".//{*}basicData")
-            if basic is not None:
-                xsi_type = basic.get("{http://www.w3.org/2001/XMLSchema-instance}type", "")
-                if "TrafficSpeed" in xsi_type:
-                    speed_el = basic.find(".//{*}speed")
-                    speed_val = _safe_float(speed_el)
-                    break
+        for basic in sensor.findall(".//{*}basicData"):
+            xsi_type = basic.get("{http://www.w3.org/2001/XMLSchema-instance}type", "")
 
+            if "TrafficSpeed" in xsi_type and speed_val is None:
+                speed_el = basic.find(".//{*}speed")
+                speed_val = _safe_float(speed_el)
+
+            if "TrafficFlow" in xsi_type and flow_val is None:
+                flow_el = basic.find(".//{*}vehicleFlowRate")
+                flow_val = _safe_float(flow_el)
+
+        # Accumulate total flow across all sensors (ignore negative/malfunction values)
+        if flow_val is not None and flow_val >= 0:
+            total_flow += flow_val
+            flow_count += 1
+
+        # Categorise by speed
         if speed_val is None:
             no_measurement.append(sid)
         elif speed_val == -1:
             malfunctioning.append(sid)
+        elif speed_val == 0:
+            no_traffic.append(sid)
         else:
             working.append(sid)
 
+    total = len(sensors)
+    avg_flow = round(total_flow / flow_count, 1) if flow_count > 0 else 0
+
     passed = len(malfunctioning) == 0
     detail_parts = [
-        f"Working: {len(working)}",
+        f"Working: {len(working)}/{total}",
+        f"No traffic (speed=0): {len(no_traffic)}",
         f"Malfunctioning (speed=-1): {len(malfunctioning)}" + (f" — {', '.join(malfunctioning[:10])}" if malfunctioning else ""),
         f"No measurement: {len(no_measurement)}",
+        f"Avg flow rate: {avg_flow} veh/hr ({flow_count} sensors reporting)",
     ]
     return {"passed": passed, "detail": " | ".join(detail_parts)}
 
