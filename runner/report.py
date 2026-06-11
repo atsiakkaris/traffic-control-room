@@ -605,6 +605,7 @@ def generate_report() -> str:
         <button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,'bt')">Bluetooth Sites</button>
         <button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,'vms')">VMS</button>
         <button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,'paths')">BT Paths</button>
+        <button class="map-toggle" onclick="showAllLayers()" style="margin-left:4px">Show all</button>
         <span style="flex:1"></span>
         <button class="map-toggle active" data-filter="all" onclick="setFilter(this,'all')">All</button>
         <button class="map-toggle" data-filter="issues" onclick="setFilter(this,'issues')">Issues only</button>
@@ -853,11 +854,12 @@ _btPaths.forEach(function(p) {
 });
 
 /* -- Legend ------------------------------------------------------- */
-var _legend = L.control({position:'bottomright'});
+var _legend = L.control({position:'bottomleft'});
 _legend.onAdd = function() {
   var d = L.DomUtil.create('div');
-  d.style.cssText = 'background:rgba(255,255,255,0.97);padding:10px 14px;border-radius:10px;'+
-    'font-size:11px;box-shadow:0 2px 10px rgba(0,0,0,0.18);line-height:1.6;min-width:168px;pointer-events:none';
+  d.style.cssText = 'background:rgba(255,255,255,0.97);border-radius:10px;'+
+    'font-size:11px;box-shadow:0 2px 10px rgba(0,0,0,0.18);line-height:1.6;min-width:168px;pointer-events:auto;cursor:default';
+  L.DomEvent.disableClickPropagation(d);
   function row(html) { return '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'+html+'</div>'; }
   function dot(color,shape) {
     shape = shape||'50%';
@@ -874,8 +876,7 @@ _legend.onAdd = function() {
     return '<span style="display:inline-block;width:26px;height:'+w+'px;background:'+color+
            ';border-radius:2px;flex-shrink:0"></span>';
   }
-  d.innerHTML =
-    '<div style="font-weight:700;font-size:12px;margin-bottom:7px;color:#1a1a2e">Legend</div>'+
+  var body =
     '<div style="font-weight:600;color:#6b7280;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
     row(iconBox('ti-traffic-cone','#6b7280')+'Traffic Detection')+
     row(iconBox('ti-bluetooth','#6b7280')+'Bluetooth Site')+
@@ -888,6 +889,20 @@ _legend.onAdd = function() {
     row(dot('#e24b4a')+'Issue / Fault')+
     row(dot('#9ca3af')+'No data / No status')+
     row(dot('#e58e0a')+'Stale / Missing');
+  var _legendOpen = true;
+  function render() {
+    d.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer" id="_legendHdr">'+
+      '<span style="font-weight:700;font-size:12px;color:#1a1a2e">Legend</span>'+
+      '<span style="font-size:14px;color:#6b7280;margin-left:10px;line-height:1" id="_legendChev">'+(_legendOpen?'&#x25BE;':'&#x25B4;')+'</span>'+
+      '</div>'+
+      (_legendOpen ? '<div style="padding:0 12px 10px">'+body+'</div>' : '');
+    d.querySelector('#_legendHdr').onclick = function() {
+      _legendOpen = !_legendOpen;
+      render();
+    };
+  }
+  render();
   return d;
 };
 _legend.addTo(_map);
@@ -909,6 +924,12 @@ function applyVisibility() {
 function toggleLayer(btn, key) {
   _activeLayers[key] = !_activeLayers[key];
   btn.classList.toggle('active', _activeLayers[key]);
+  applyVisibility();
+}
+
+function showAllLayers() {
+  Object.keys(_activeLayers).forEach(function(k){ _activeLayers[k] = true; });
+  document.querySelectorAll('[data-layer]').forEach(function(b){ b.classList.add('active'); });
   applyVisibility();
 }
 
