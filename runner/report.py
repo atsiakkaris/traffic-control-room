@@ -466,6 +466,7 @@ def generate_report() -> str:
     map_sensors_json = json.dumps(map_sensors)
     map_bt_paths_json = json.dumps(map_bt_paths)
     has_map_data = bool(map_sensors or map_bt_paths)
+    map_script_html = _build_map_script(map_sensors_json, map_bt_paths_json) if has_map_data else ""
 
     if not has_map_data:
         map_panel_html = '<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>'
@@ -720,7 +721,15 @@ window._trendChart = new Chart(document.getElementById('trendChart'), {{
 }});
 </script>
 
-{'<script>' + """
+{map_script_html}
+</body></html>"""
+
+    REPORT_PATH.write_text(html, encoding="utf-8")
+    return str(REPORT_PATH)
+
+
+def _build_map_script(map_sensors_json, map_bt_paths_json):
+    return """<script>
 var _sensors = """ + map_sensors_json + """;
 var _btPaths  = """ + map_bt_paths_json + """;
 var _activeFilter = 'all';
@@ -966,8 +975,4 @@ function closeMapPanel() {
     _highlighted = null;
   }
 }
-""" + '</script>' if has_map_data else ''}
-</body></html>"""
-
-    REPORT_PATH.write_text(html, encoding="utf-8")
-    return str(REPORT_PATH)
+</script>"""
