@@ -679,7 +679,10 @@ function togglePanel(id) {{
   c.classList.toggle('open', !open);
 }}
 
-var _dark = false;
+var _dark = true;
+document.body.classList.add('dark');
+document.getElementById('dmIcon').className = 'ti ti-sun';
+document.getElementById('dmLabel').textContent = 'Light';
 function toggleDark() {{
   _dark = !_dark;
   document.body.classList.toggle('dark', _dark);
