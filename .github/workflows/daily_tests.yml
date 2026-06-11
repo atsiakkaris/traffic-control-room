@@ -40,7 +40,8 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add results/history.db reports/latest.html
+          [ -f results/history.db ] && git add results/history.db
+          [ -f reports/latest.html ] && git add reports/latest.html
           git diff --cached --quiet || git commit -m "chore: test results $(date -u +%Y-%m-%dT%H:%M)Z"
           git push
 
