@@ -601,11 +601,11 @@ def generate_report() -> str:
       {'<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>' if not has_map_data else f"""
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
         <span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>
+        <button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>
         <button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,'td')">Traffic Detection</button>
         <button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,'bt')">Bluetooth Sites</button>
         <button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,'vms')">VMS</button>
         <button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,'paths')">BT Paths</button>
-        <button class="map-toggle" onclick="showAllLayers()" style="margin-left:4px">Show all</button>
         <span style="flex:1"></span>
         <button class="map-toggle active" data-filter="all" onclick="setFilter(this,'all')">All</button>
         <button class="map-toggle" data-filter="issues" onclick="setFilter(this,'issues')">Issues only</button>
@@ -764,7 +764,7 @@ function makeIcon(group, color, faded) {
 /* -- Popup helpers ------------------------------------------------ */
 function popRow(label, val, color) {
   if (val === null || val === undefined || val === '') return '';
-  var v = color ? '<span style="color:'+color+';font-weight:600">'+val+'</span>' : '<b>'+val+'</b>';
+  var v = color ? '<span style="color:'+color+';font-weight:600">'+val+'</span>' : '<b style="color:#1a1a2e">'+val+'</b>';
   return '<tr><td style="color:#888;padding:2px 12px 2px 0;white-space:nowrap">'+label+'</td><td>'+v+'</td></tr>';
 }
 function fmtSpeed(v) {
@@ -854,11 +854,12 @@ _btPaths.forEach(function(p) {
 });
 
 /* -- Legend ------------------------------------------------------- */
-var _legend = L.control({position:'bottomleft'});
+var _legend = L.control({position:'bottomright'});
+var _legendOpen = true;
 _legend.onAdd = function() {
   var d = L.DomUtil.create('div');
-  d.style.cssText = 'background:rgba(255,255,255,0.97);border-radius:10px;'+
-    'font-size:11px;box-shadow:0 2px 10px rgba(0,0,0,0.18);line-height:1.6;min-width:168px;pointer-events:auto;cursor:default';
+  d.style.cssText = 'background:#fff;border-radius:10px;font-size:11px;line-height:1.6;min-width:168px;'+
+    'pointer-events:auto;cursor:default;box-shadow:0 2px 10px rgba(0,0,0,0.18);overflow:hidden';
   L.DomEvent.disableClickPropagation(d);
   function row(html) { return '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'+html+'</div>'; }
   function dot(color,shape) {
@@ -877,26 +878,26 @@ _legend.onAdd = function() {
            ';border-radius:2px;flex-shrink:0"></span>';
   }
   var body =
-    '<div style="font-weight:600;color:#6b7280;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
-    row(iconBox('ti-traffic-cone','#6b7280')+'Traffic Detection')+
-    row(iconBox('ti-bluetooth','#6b7280')+'Bluetooth Site')+
-    row(iconBox('ti-road-sign','#6b7280','6px')+'VMS Controller')+
-    row(line('#1d9e75','3')+'BT Path (OK)')+
-    row(line('#e24b4a','4')+'BT Path (issue)')+
-    row(line('#9ca3af','2')+'BT Path (no data)')+
-    '<div style="font-weight:600;color:#6b7280;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin:7px 0 4px">Status</div>'+
-    row(dot('#1d9e75')+'Working / OK')+
-    row(dot('#e24b4a')+'Issue / Fault')+
-    row(dot('#9ca3af')+'No data / No status')+
-    row(dot('#e58e0a')+'Stale / Missing');
-  var _legendOpen = true;
+    '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
+    row(iconBox('ti-traffic-cone','#6b7280')+'<span style="color:#1a1a2e">Traffic Detection</span>')+
+    row(iconBox('ti-bluetooth','#6b7280')+'<span style="color:#1a1a2e">Bluetooth Site</span>')+
+    row(iconBox('ti-road-sign','#6b7280','6px')+'<span style="color:#1a1a2e">VMS Controller</span>')+
+    row(line('#1d9e75','3')+'<span style="color:#1a1a2e">BT Path (OK)</span>')+
+    row(line('#e24b4a','4')+'<span style="color:#1a1a2e">BT Path (issue)</span>')+
+    row(line('#9ca3af','2')+'<span style="color:#1a1a2e">BT Path (no data)</span>')+
+    '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin:7px 0 4px">Status</div>'+
+    row(dot('#1d9e75')+'<span style="color:#1a1a2e">Working / OK</span>')+
+    row(dot('#e24b4a')+'<span style="color:#1a1a2e">Issue / Fault</span>')+
+    row(dot('#9ca3af')+'<span style="color:#1a1a2e">No data / No status</span>')+
+    row(dot('#e58e0a')+'<span style="color:#1a1a2e">Stale / Missing</span>');
   function render() {
     d.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer" id="_legendHdr">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;'+
+      'padding:8px 12px;cursor:pointer;border-bottom:'+(_legendOpen?'1px solid #eee':'none')+'" id="_legendHdr">'+
       '<span style="font-weight:700;font-size:12px;color:#1a1a2e">Legend</span>'+
-      '<span style="font-size:14px;color:#6b7280;margin-left:10px;line-height:1" id="_legendChev">'+(_legendOpen?'&#x25BE;':'&#x25B4;')+'</span>'+
+      '<span style="font-size:14px;color:#555;margin-left:10px;line-height:1">'+(_legendOpen?'&#x25BE;':'&#x25B4;')+'</span>'+
       '</div>'+
-      (_legendOpen ? '<div style="padding:0 12px 10px">'+body+'</div>' : '');
+      (_legendOpen ? '<div style="padding:8px 12px 10px">'+body+'</div>' : '');
     d.querySelector('#_legendHdr').onclick = function() {
       _legendOpen = !_legendOpen;
       render();
@@ -921,15 +922,25 @@ function applyVisibility() {
   });
 }
 
+function _syncShowAll() {
+  var allOn = Object.values(_activeLayers).every(Boolean);
+  var btn = document.getElementById('btn-showall');
+  if (btn) btn.classList.toggle('active', allOn);
+}
+
 function toggleLayer(btn, key) {
   _activeLayers[key] = !_activeLayers[key];
   btn.classList.toggle('active', _activeLayers[key]);
+  _syncShowAll();
   applyVisibility();
 }
 
-function showAllLayers() {
-  Object.keys(_activeLayers).forEach(function(k){ _activeLayers[k] = true; });
-  document.querySelectorAll('[data-layer]').forEach(function(b){ b.classList.add('active'); });
+function toggleShowAll(btn) {
+  var allOn = Object.values(_activeLayers).every(Boolean);
+  var turnOn = !allOn;
+  Object.keys(_activeLayers).forEach(function(k){ _activeLayers[k] = turnOn; });
+  document.querySelectorAll('[data-layer]').forEach(function(b){ b.classList.toggle('active', turnOn); });
+  btn.classList.toggle('active', turnOn);
   applyVisibility();
 }
 
