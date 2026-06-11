@@ -138,16 +138,26 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
             failing.append(pid)
 
     sensors_map = {}
+    measurements_map = {}
     for path in paths:
         pid = path.get("id", "unknown")
+        ext = path.find(".//{*}_predefinedLocationExtension")
+        speed_el = ext.find("obs_speed") if ext is not None else None
+        ttime_el = ext.find("obs_t_time") if ext is not None else None
+        spd = _safe_float(speed_el)
+        ttime = _safe_float(ttime_el)
         sensors_map[pid] = "failing" if pid in failing else "ok"
+        measurements_map[pid] = {
+            "speed_kmh": round(spd, 1) if spd is not None else None,
+            "travel_time_s": round(ttime, 0) if ttime is not None else None,
+        }
 
     passed = len(failing) == 0
     detail = (
         f"Speed OK: {speed_ok}/{total} | Travel time OK: {ttime_ok}/{total}"
         + (f" | Failing paths: {', '.join(failing)}" if failing else "")
     )
-    return {"passed": passed, "detail": detail, "sensors": sensors_map}
+    return {"passed": passed, "detail": detail, "sensors": sensors_map, "measurements": measurements_map}
 
 
 # ─── Traffic Detection ────────────────────────────────────────────────────────
@@ -160,6 +170,7 @@ def sensor_speed_status(response_text: str) -> dict:
     sensors = root.findall(".//{*}siteMeasurements")
     working, malfunctioning, no_traffic, no_measurement = [], [], [], []
     sensors_map = {}
+    measurements_map = {}
     total_flow = 0
     flow_count = 0
 
@@ -200,6 +211,10 @@ def sensor_speed_status(response_text: str) -> dict:
             working.append(sid)
             sensor_status = "working"
         sensors_map[sid] = sensor_status
+        measurements_map[sid] = {
+            "speed_kmh": round(speed_val, 1) if speed_val is not None else None,
+            "flow_veh_hr": round(flow_val, 0) if flow_val is not None else None,
+        }
 
     total = len(sensors)
     avg_flow = round(total_flow / flow_count, 1) if flow_count > 0 else 0
@@ -212,7 +227,7 @@ def sensor_speed_status(response_text: str) -> dict:
         f"No measurement: {len(no_measurement)}",
         f"Avg flow rate: {avg_flow} veh/hr ({flow_count} sensors reporting)",
     ]
-    return {"passed": passed, "detail": " | ".join(detail_parts), "sensors": sensors_map}
+    return {"passed": passed, "detail": " | ".join(detail_parts), "sensors": sensors_map, "measurements": measurements_map}
 
 
 def bt_site_count(response_text: str) -> dict:

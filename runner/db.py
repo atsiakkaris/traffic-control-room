@@ -54,6 +54,21 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_sensor_results_sensor
             ON sensor_results (group_name, sensor_id, run_at);
+
+        CREATE TABLE IF NOT EXISTS sensor_coords (
+            sensor_id   TEXT NOT NULL,
+            group_name  TEXT NOT NULL,
+            lat         REAL NOT NULL,
+            lon         REAL NOT NULL,
+            name        TEXT,
+            PRIMARY KEY (sensor_id, group_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS bt_path_coords (
+            path_id TEXT PRIMARY KEY,
+            name    TEXT,
+            coords  TEXT
+        );
     """)
     conn.commit()
 
@@ -61,6 +76,25 @@ def init_db():
     cols = [r[1] for r in conn.execute("PRAGMA table_info(test_results)").fetchall()]
     if "check_summary" not in cols:
         conn.execute("ALTER TABLE test_results ADD COLUMN check_summary TEXT")
+        conn.commit()
+
+    # Migrate: add data column to sensor_results if absent
+    sr_cols = [r[1] for r in conn.execute("PRAGMA table_info(sensor_results)").fetchall()]
+    if "data" not in sr_cols:
+        conn.execute("ALTER TABLE sensor_results ADD COLUMN data TEXT")
+        conn.commit()
+
+    # Migrate: create coord tables if they predate this schema addition
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "sensor_coords" not in tables:
+        conn.execute("""CREATE TABLE sensor_coords (
+            sensor_id TEXT NOT NULL, group_name TEXT NOT NULL,
+            lat REAL NOT NULL, lon REAL NOT NULL, name TEXT,
+            PRIMARY KEY (sensor_id, group_name))""")
+        conn.commit()
+    if "bt_path_coords" not in tables:
+        conn.execute("""CREATE TABLE bt_path_coords (
+            path_id TEXT PRIMARY KEY, name TEXT, coords TEXT)""")
         conn.commit()
 
     conn.close()
@@ -141,14 +175,94 @@ def fetch_sensor_statuses_for_run(run_id):
     return result
 
 
-def insert_sensor_result(run_id, run_at, group_name, sensor_id, status):
+def insert_sensor_result(run_id, run_at, group_name, sensor_id, status, data=None):
+    import json as _json
     conn = get_connection()
     conn.execute(
-        "INSERT INTO sensor_results (run_id, run_at, group_name, sensor_id, status) VALUES (?,?,?,?,?)",
-        (run_id, run_at, group_name, sensor_id, status)
+        "INSERT INTO sensor_results (run_id, run_at, group_name, sensor_id, status, data) VALUES (?,?,?,?,?,?)",
+        (run_id, run_at, group_name, sensor_id, status, _json.dumps(data) if data else None)
     )
     conn.commit()
     conn.close()
+
+
+def fetch_sensor_live_data_for_run(run_id):
+    """Return {group_name: {sensor_id: {status, data}}} for a specific run."""
+    import json as _json
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT group_name, sensor_id, status, data FROM sensor_results WHERE run_id = ?",
+        (run_id,)
+    ).fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        g, sid = row["group_name"], row["sensor_id"]
+        result.setdefault(g, {})[sid] = {
+            "status": row["status"],
+            "data": _json.loads(row["data"]) if row["data"] else {},
+        }
+    return result
+
+
+def upsert_sensor_coords(group_name, coords_dict):
+    """coords_dict: {sensor_id: {lat, lon, name}}"""
+    conn = get_connection()
+    for sid, c in coords_dict.items():
+        conn.execute(
+            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(sensor_id, group_name) DO UPDATE
+               SET lat=excluded.lat, lon=excluded.lon, name=excluded.name""",
+            (sid, group_name, c["lat"], c["lon"], c.get("name", sid))
+        )
+    conn.commit()
+    conn.close()
+
+
+def upsert_bt_path_coords(paths_dict):
+    """paths_dict: {path_id: {name, coords: [[lat,lon],...]}}"""
+    import json
+    conn = get_connection()
+    for pid, p in paths_dict.items():
+        conn.execute(
+            """INSERT INTO bt_path_coords (path_id, name, coords)
+               VALUES (?,?,?)
+               ON CONFLICT(path_id) DO UPDATE
+               SET name=excluded.name, coords=excluded.coords""",
+            (pid, p["name"], json.dumps(p["coords"]))
+        )
+    conn.commit()
+    conn.close()
+
+
+def fetch_sensor_coords():
+    """Return {group_name: {sensor_id: {lat, lon, name}}}"""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT sensor_id, group_name, lat, lon, name FROM sensor_coords"
+    ).fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        result.setdefault(r["group_name"], {})[r["sensor_id"]] = {
+            "lat": r["lat"], "lon": r["lon"], "name": r["name"] or r["sensor_id"]
+        }
+    return result
+
+
+def fetch_bt_path_coords():
+    """Return {path_id: {name, coords: [[lat,lon],...]}}"""
+    import json
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT path_id, name, coords FROM bt_path_coords"
+    ).fetchall()
+    conn.close()
+    return {
+        r["path_id"]: {"name": r["name"], "coords": json.loads(r["coords"])}
+        for r in rows
+    }
 
 
 def fetch_sensor_stability():

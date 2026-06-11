@@ -1,0 +1,94 @@
+"""
+geo.py — Extract geographic coordinates from DATEX II inventory feeds.
+"""
+import html as _html
+import re
+import xml.etree.ElementTree as ET
+
+
+def extract_measurement_site_coords(response_text):
+    """Return {site_id: {lat, lon, name}} from a MeasurementSiteTablePublication."""
+    try:
+        root = ET.fromstring(response_text.strip())
+    except ET.ParseError:
+        return {}
+    result = {}
+    for site in root.findall(".//{*}measurementSite"):
+        sid = site.get("id")
+        if not sid:
+            continue
+        lat_el = site.find(".//{*}latitude")
+        lon_el = site.find(".//{*}longitude")
+        name_el = site.find(".//{*}measurementSiteName//{*}value")
+        if lat_el is not None and lon_el is not None:
+            try:
+                result[sid] = {
+                    "lat": float(lat_el.text),
+                    "lon": float(lon_el.text),
+                    "name": name_el.text if name_el is not None else sid,
+                }
+            except (ValueError, TypeError):
+                pass
+    return result
+
+
+def extract_vms_coords(response_text):
+    """Return {controller_id: {lat, lon, name}} from a VmsTablePublication."""
+    try:
+        root = ET.fromstring(response_text.strip())
+    except ET.ParseError:
+        return {}
+    result = {}
+    for ctrl in root.findall(".//{*}vmsController"):
+        cid = ctrl.get("id")
+        if not cid:
+            continue
+        lat_el = ctrl.find(".//{*}latitude")
+        lon_el = ctrl.find(".//{*}longitude")
+        desc_el = ctrl.find(".//{*}description//{*}value")
+        ext_id_el = ctrl.find(".//{*}externalIdentifier")
+        name = (desc_el.text if desc_el is not None else
+                ext_id_el.text if ext_id_el is not None else cid)
+        if lat_el is not None and lon_el is not None:
+            try:
+                result[cid] = {
+                    "lat": float(lat_el.text),
+                    "lon": float(lon_el.text),
+                    "name": name,
+                }
+            except (ValueError, TypeError):
+                pass
+    return result
+
+
+def extract_bt_path_coords(response_text):
+    """Return {path_id: {name, coords: [[lat,lon],...]}} from PredefinedLocationsPublication."""
+    try:
+        root = ET.fromstring(response_text.strip())
+    except ET.ParseError:
+        return {}
+    result = {}
+    for loc in root.findall(".//{*}predefinedLocationReference"):
+        pid = loc.get("id")
+        if not pid:
+            continue
+        name_el = loc.find(".//{*}predefinedLocationName//{*}value")
+        name = name_el.text if name_el is not None else pid
+        pos_el = loc.find(".//{*}posList")
+        if pos_el is None or not pos_el.text:
+            continue
+        gml_text = _html.unescape(pos_el.text)
+        m = re.search(r'<gml:coordinates[^>]*>(.*?)</gml:coordinates>', gml_text, re.DOTALL)
+        if not m:
+            continue
+        coords = []
+        for pair in m.group(1).strip().split():
+            parts = pair.split(',')
+            if len(parts) == 2:
+                try:
+                    coords.append([float(parts[0]), float(parts[1])])
+                except ValueError:
+                    pass
+        if coords:
+            result[pid] = {"name": name, "coords": coords}
+    return result

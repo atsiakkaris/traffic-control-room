@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run
 
 CYPRUS_TZ = timezone(timedelta(hours=3))  # EET/EEST — UTC+3 (summer); update to +2 in winter if needed
 
@@ -427,6 +427,44 @@ def generate_report() -> str:
           </td>
         </tr>"""
 
+    # Map data
+    all_coords = fetch_sensor_coords()
+    all_bt_paths = fetch_bt_path_coords()
+    live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
+
+    # Build sensor list for map: includes live measurements for rich popups
+    map_sensors = []
+    for group_name_c, sensors_dict in all_coords.items():
+        group_live = live_data.get(group_name_c, {})
+        for sid, c in sensors_dict.items():
+            entry = group_live.get(sid, {})
+            st = entry.get("status", "unknown")
+            color = STATUS_COLOR.get(st, "#6b7280")
+            label = STATUS_LABEL.get(st, "Unknown")
+            map_sensors.append({
+                "id": sid, "group": group_name_c,
+                "name": c["name"], "lat": c["lat"], "lon": c["lon"],
+                "status": st, "label": label, "color": color,
+                "data": entry.get("data", {}),
+            })
+
+    # Build BT path list with live speed/travel-time data
+    bt_group_live = live_data.get("Bluetooth", {})
+    map_bt_paths = []
+    for pid, p in all_bt_paths.items():
+        entry = bt_group_live.get(pid, {})
+        st = entry.get("status", "unknown")
+        color = STATUS_COLOR.get(st, "#6b7280")
+        map_bt_paths.append({
+            "id": pid, "name": p["name"],
+            "coords": p["coords"], "status": st, "color": color,
+            "data": entry.get("data", {}),
+        })
+
+    map_sensors_json = json.dumps(map_sensors)
+    map_bt_paths_json = json.dumps(map_bt_paths)
+    has_map_data = bool(map_sensors or map_bt_paths)
+
     run_time = _to_cyprus(latest_run["run_at"])
     total_runs_label = len(runs)
 
@@ -508,7 +546,16 @@ def generate_report() -> str:
   .dm-btn:hover {{ background: rgba(255,255,255,0.14); }}
   details[open] summary .ti-chevron-right {{ transform: rotate(90deg); }}
   details summary::-webkit-details-marker {{ display: none; }}
+  .map-toggle {{
+    font-size:11px;font-weight:500;padding:4px 12px;border-radius:6px;cursor:pointer;
+    border:0.5px solid var(--border);background:var(--surface);color:var(--muted);transition:all .15s;
+  }}
+  .map-toggle.active {{ background:var(--header-bg);color:#fff;border-color:var(--header-bg); }}
+  .leaflet-popup-content-wrapper {{ border-radius:8px!important;font-size:12px; }}
+  .leaflet-popup-content {{ margin:10px 14px; }}
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 <header>
@@ -541,6 +588,29 @@ def generate_report() -> str:
       <div class="group-cards">
         {group_cards}
       </div>
+    </div>
+  </div>
+
+  <div class="panel" id="p-map">
+    <div class="panel-header" onclick="togglePanel('p-map')">
+      <span class="panel-title">Sensor map</span>
+      <div class="panel-chevron open" id="c-p-map"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-map" style="padding:12px 20px 16px">
+      {'<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>' if not has_map_data else f"""
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+        <span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>
+        <button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,'td')">Traffic Detection</button>
+        <button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,'bt')">Bluetooth Sites</button>
+        <button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,'vms')">VMS</button>
+        <button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,'paths')">BT Paths</button>
+        <span style="flex:1"></span>
+        <button class="map-toggle active" data-filter="all" onclick="setFilter(this,'all')">All</button>
+        <button class="map-toggle" data-filter="issues" onclick="setFilter(this,'issues')">Issues only</button>
+      </div>
+      <div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary)"></div>
+      """}
     </div>
   </div>
 
@@ -632,6 +702,224 @@ window._trendChart = new Chart(document.getElementById('trendChart'), {{
   }}
 }});
 </script>
+
+{'<script>' + """
+var _sensors = """ + map_sensors_json + """;
+var _btPaths  = """ + map_bt_paths_json + """;
+var _activeFilter = 'all';
+var _activeLayers = {td:true, bt:true, vms:true, paths:true};
+
+var _map = L.map('sensorMap', {zoomControl:true}).setView([34.95, 33.15], 9);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 19
+}).addTo(_map);
+
+var _layerGroups = {td:L.layerGroup(), bt:L.layerGroup(), vms:L.layerGroup(), paths:L.layerGroup()};
+Object.values(_layerGroups).forEach(function(lg){ lg.addTo(_map); });
+
+var GROUP_LAYER   = {'Traffic Detection':'td','Bluetooth':'bt','VMS':'vms'};
+var ISSUE_STATUSES = ['malfunctioning','not_working','failing','stale','missing'];
+var STATUS_LABELS  = {
+  working:'Working', ok:'OK', no_traffic:'No traffic', no_measurement:'No data',
+  no_status:'No status', not_working:'Not working', malfunctioning:'Malfunctioning',
+  failing:'No speed / travel time', unknown:'No recent data'
+};
+
+/* ── Icon factory ───────────────────────────────────────────────── */
+var ICON_CLASS = {'Traffic Detection':'ti-traffic-cone','Bluetooth':'ti-bluetooth','VMS':'ti-road-sign'};
+var ICON_SIZE  = {'Traffic Detection':26,'Bluetooth':22,'VMS':28};
+var ICON_SHAPE = {'VMS':'6px'};   // others default to 50% (circle)
+
+function makeIcon(group, color, faded) {
+  var ic   = ICON_CLASS[group] || 'ti-circle';
+  var sz   = ICON_SIZE[group]  || 24;
+  var br   = ICON_SHAPE[group] || '50%';
+  var op   = faded ? '0.18' : '1';
+  var html = '<div style="width:'+sz+'px;height:'+sz+'px;border-radius:'+br+';'+
+             'background:'+color+';border:2.5px solid rgba(255,255,255,0.92);'+
+             'display:flex;align-items:center;justify-content:center;'+
+             'box-shadow:0 2px 7px rgba(0,0,0,0.32);font-size:'+(sz-11)+'px;'+
+             'color:white;opacity:'+op+';transition:opacity .2s">'+
+             '<i class="ti '+ic+'"></i></div>';
+  return L.divIcon({className:'', html:html,
+    iconSize:[sz,sz], iconAnchor:[sz/2,sz/2], popupAnchor:[0,-sz/2+2]});
+}
+
+/* ── Popup helpers ──────────────────────────────────────────────── */
+function popRow(label, val, color) {
+  if (val === null || val === undefined || val === '') return '';
+  var v = color ? '<span style="color:'+color+';font-weight:600">'+val+'</span>' : '<b>'+val+'</b>';
+  return '<tr><td style="color:#888;padding:2px 12px 2px 0;white-space:nowrap">'+label+'</td><td>'+v+'</td></tr>';
+}
+function fmtSpeed(v) {
+  if (v===null||v===undefined) return null;
+  return v===-1 ? '−1 km/h (fault)' : v+' km/h';
+}
+function fmtFlow(v)  { return (v===null||v===undefined) ? null : v+' veh/hr'; }
+function fmtTT(v) {
+  if (v===null||v===undefined) return null;
+  var mins=Math.floor(v/60), secs=Math.round(v%60);
+  return (mins>0?mins+'m ':'')+secs+'s';
+}
+
+/* ── Marker factory ─────────────────────────────────────────────── */
+function makeMarker(s) {
+  var m = L.marker([s.lat, s.lon], {icon: makeIcon(s.group, s.color, false)});
+  m._sensorStatus = s.status;
+  m._sensorGroup  = GROUP_LAYER[s.group] || 'td';
+  m._sensorColor  = s.color;
+  m._sensorGroup2 = s.group;
+  var d = s.data || {};
+  var dataRows = '';
+  if (s.group === 'Traffic Detection') {
+    dataRows += popRow('Speed', fmtSpeed(d.speed_kmh),
+                       d.speed_kmh===-1?'#e24b4a':(d.speed_kmh>0?'#1d9e75':null));
+    dataRows += popRow('Flow rate', fmtFlow(d.flow_veh_hr));
+  } else if (s.group === 'Bluetooth') {
+    dataRows += popRow('Speed', fmtSpeed(d.speed_kmh));
+    dataRows += popRow('Travel time', fmtTT(d.travel_time_s));
+  }
+  var rows = popRow('ID', s.id)+popRow('Group', s.group)+
+             popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
+  m.bindPopup(
+    '<div style="min-width:210px">'+
+    '<div style="font-size:13px;font-weight:700;margin-bottom:6px;border-bottom:1px solid #eee;padding-bottom:5px">'+(s.name||'Sensor '+s.id)+'</div>'+
+    '<table style="font-size:12px;border-collapse:collapse;width:100%">'+rows+'</table>'+
+    '</div>', {maxWidth:300}
+  );
+  return m;
+}
+
+/* ── Path factory ───────────────────────────────────────────────── */
+function pathStyle(status, faded) {
+  var isIssue = ISSUE_STATUSES.indexOf(status) !== -1;
+  var isOk    = status === 'ok' || status === 'working';
+  var color   = isIssue ? '#e24b4a' : (isOk ? '#1d9e75' : '#6b7280');
+  var weight  = isIssue ? 4 : (isOk ? 3 : 2);
+  var opacity = faded ? 0.04 : (isIssue ? 0.9 : (isOk ? 0.75 : 0.3));
+  return {color:color, weight:weight, opacity:opacity};
+}
+
+function makePath(p) {
+  var latlngs = p.coords.map(function(c){return [c[0],c[1]];});
+  var style   = pathStyle(p.status, false);
+  var pl = L.polyline(latlngs, style);
+  pl._pathStatus = p.status;
+  var d = p.data || {};
+  var rows = popRow('Route', p.name)+popRow('Path ID', p.id)+
+             popRow('Status', STATUS_LABELS[p.status]||p.status, style.color)+
+             popRow('Speed', fmtSpeed(d.speed_kmh))+
+             popRow('Travel time', fmtTT(d.travel_time_s));
+  pl.bindPopup(
+    '<div style="min-width:200px">'+
+    '<div style="font-size:13px;font-weight:700;margin-bottom:6px;border-bottom:1px solid #eee;padding-bottom:5px">BT Path '+p.name+'</div>'+
+    '<table style="font-size:12px;border-collapse:collapse;width:100%">'+rows+'</table>'+
+    '</div>', {maxWidth:280}
+  );
+  return pl;
+}
+
+/* ── Build layers ───────────────────────────────────────────────── */
+var _markers = [];
+_sensors.forEach(function(s) {
+  var lg = _layerGroups[GROUP_LAYER[s.group]];
+  if (!lg) return;
+  var m = makeMarker(s);
+  m.addTo(lg);
+  _markers.push(m);
+});
+
+var _paths = [];
+var _highlighted = null;
+_btPaths.forEach(function(p) {
+  var pl = makePath(p);
+  pl.addTo(_layerGroups.paths);
+  pl.on('click', function() {
+    if (_highlighted && _highlighted !== pl) {
+      _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
+      _highlighted.bringToBack();
+    }
+    _highlighted = pl;
+    pl.setStyle({color:'#facc15', weight:7, opacity:1});
+    pl.bringToFront();
+  });
+  _paths.push(pl);
+});
+
+/* ── Legend ─────────────────────────────────────────────────────── */
+var _legend = L.control({position:'bottomright'});
+_legend.onAdd = function() {
+  var d = L.DomUtil.create('div');
+  d.style.cssText = 'background:rgba(255,255,255,0.97);padding:10px 14px;border-radius:10px;'+
+    'font-size:11px;box-shadow:0 2px 10px rgba(0,0,0,0.18);line-height:1.6;min-width:168px;pointer-events:none';
+  function row(html) { return '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'+html+'</div>'; }
+  function dot(color,shape) {
+    shape = shape||'50%';
+    return '<span style="width:13px;height:13px;border-radius:'+shape+';background:'+color+
+           ';border:1.5px solid rgba(0,0,0,0.12);display:inline-block;flex-shrink:0"></span>';
+  }
+  function iconBox(ic, color, shape) {
+    shape = shape||'50%';
+    return '<span style="width:18px;height:18px;border-radius:'+shape+';background:'+color+
+           ';display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;'+
+           'box-shadow:0 1px 3px rgba(0,0,0,0.2)"><i class="ti '+ic+'" style="font-size:10px;color:white"></i></span>';
+  }
+  function line(color, w) {
+    return '<span style="display:inline-block;width:26px;height:'+w+'px;background:'+color+
+           ';border-radius:2px;flex-shrink:0"></span>';
+  }
+  d.innerHTML =
+    '<div style="font-weight:700;font-size:12px;margin-bottom:7px;color:#1a1a2e">Legend</div>'+
+    '<div style="font-weight:600;color:#6b7280;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
+    row(iconBox('ti-traffic-cone','#6b7280')+'Traffic Detection')+
+    row(iconBox('ti-bluetooth','#6b7280')+'Bluetooth Site')+
+    row(iconBox('ti-road-sign','#6b7280','6px')+'VMS Controller')+
+    row(line('#1d9e75','3')+'BT Path (OK)')+
+    row(line('#e24b4a','4')+'BT Path (issue)')+
+    row(line('#9ca3af','2')+'BT Path (no data)')+
+    '<div style="font-weight:600;color:#6b7280;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin:7px 0 4px">Status</div>'+
+    row(dot('#1d9e75')+'Working / OK')+
+    row(dot('#e24b4a')+'Issue / Fault')+
+    row(dot('#9ca3af')+'No data / No status')+
+    row(dot('#e58e0a')+'Stale / Missing');
+  return d;
+};
+_legend.addTo(_map);
+
+/* ── Visibility filter ──────────────────────────────────────────── */
+function applyVisibility() {
+  _markers.forEach(function(m) {
+    var on = _activeLayers[m._sensorGroup] &&
+             (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(m._sensorStatus) !== -1);
+    m.setIcon(makeIcon(m._sensorGroup2, m._sensorColor, !on));
+  });
+  _paths.forEach(function(p) {
+    var on = _activeLayers.paths &&
+             (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(p._pathStatus) !== -1);
+    p.setStyle(pathStyle(p._pathStatus, !on));
+  });
+}
+
+function toggleLayer(btn, key) {
+  _activeLayers[key] = !_activeLayers[key];
+  btn.classList.toggle('active', _activeLayers[key]);
+  applyVisibility();
+}
+
+function setFilter(btn, val) {
+  _activeFilter = val;
+  document.querySelectorAll('[data-filter]').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  applyVisibility();
+}
+
+_map.on('popupclose', function() {
+  if (_highlighted) {
+    _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
+    _highlighted = null;
+  }
+});
+""" + '</script>' if has_map_data else ''}
 </body></html>"""
 
     REPORT_PATH.write_text(html, encoding="utf-8")

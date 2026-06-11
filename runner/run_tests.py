@@ -28,8 +28,9 @@ from pathlib import Path
 # Make sure runner/ is on the path when called from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db import init_db, insert_run, insert_result, insert_sensor_result
+from db import init_db, insert_run, insert_result, insert_sensor_result, upsert_sensor_coords, upsert_bt_path_coords
 from tests import REGISTRY
+from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report
 
 logging.basicConfig(
@@ -75,6 +76,7 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
 
         result["status_code"] = resp.status_code
         result["response_ms"] = round(elapsed_ms, 1)
+        result["response_text"] = resp.text
 
         failures = []
 
@@ -101,6 +103,8 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
                     failures.append(f"{check_name}: {check_result['detail']}")
                 if check_result.get("sensors"):
                     result.setdefault("sensors", {}).update(check_result["sensors"])
+                if check_result.get("measurements"):
+                    result.setdefault("measurements", {}).update(check_result["measurements"])
             except Exception as e:
                 failures.append(f"{check_name} raised exception: {e}")
 
@@ -117,6 +121,7 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
         result["status"] = "error"
         result["failure_reason"] = str(e)
 
+    result.setdefault("response_text", "")
     return result
 
 
@@ -165,7 +170,25 @@ def run_all():
                 check_summary=" | ".join(r.get("check_details", [])),
             )
             for sensor_id, s_status in r.get("sensors", {}).items():
-                insert_sensor_result(run_id, run_at, group_name, sensor_id, s_status)
+                mdata = r.get("measurements", {}).get(sensor_id)
+                insert_sensor_result(run_id, run_at, group_name, sensor_id, s_status, mdata)
+
+            # Extract and store coordinates from inventory endpoints
+            ep_name = ep["name"]
+            txt = r.get("response_text", "")
+            if txt:
+                if ep_name in ("Traffic Detection Inventory", "Bluetooth Inventory"):
+                    coords = extract_measurement_site_coords(txt)
+                    if coords:
+                        upsert_sensor_coords(group_name, coords)
+                elif ep_name == "VMS Inventory":
+                    coords = extract_vms_coords(txt)
+                    if coords:
+                        upsert_sensor_coords(group_name, coords)
+                elif ep_name == "Bluetooth Paths Inventory":
+                    paths = extract_bt_path_coords(txt)
+                    if paths:
+                        upsert_bt_path_coords(paths)
 
             icon = {"pass": "✓", "fail": "✗", "error": "⚠"}.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])
