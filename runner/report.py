@@ -467,6 +467,32 @@ def generate_report() -> str:
     map_bt_paths_json = json.dumps(map_bt_paths)
     has_map_data = bool(map_sensors or map_bt_paths)
 
+    if not has_map_data:
+        map_panel_html = '<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>'
+    else:
+        map_panel_html = (
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
+            '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
+            '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
+            '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">Traffic Detection</button>'
+            '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">Bluetooth Sites</button>'
+            '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">VMS</button>'
+            '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">BT Paths</button>'
+            '<span style="flex:1"></span>'
+            '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
+            '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
+            '</div>'
+            '<div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">'
+            '<div id="mapInfoPanel" style="display:none;position:absolute;top:10px;right:10px;z-index:1000;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
+            '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee">'
+            '<span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span>'
+            '<button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button>'
+            '</div>'
+            '<div id="mapInfoBody" style="padding:10px 14px 12px"></div>'
+            '</div>'
+            '</div>'
+        )
+
     run_time = _to_cyprus(latest_run["run_at"])
     total_runs_label = len(runs)
 
@@ -598,28 +624,7 @@ def generate_report() -> str:
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
     <div class="panel-body" id="b-p-map" style="padding:12px 20px 16px">
-      {'<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>' if not has_map_data else f"""
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-        <span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>
-        <button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>
-        <button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,'td')">Traffic Detection</button>
-        <button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,'bt')">Bluetooth Sites</button>
-        <button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,'vms')">VMS</button>
-        <button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,'paths')">BT Paths</button>
-        <span style="flex:1"></span>
-        <button class="map-toggle active" data-filter="all" onclick="setFilter(this,'all')">All</button>
-        <button class="map-toggle" data-filter="issues" onclick="setFilter(this,'issues')">Issues only</button>
-      </div>
-      <div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">
-        <div id="mapInfoPanel" style="display:none;position:absolute;top:10px;right:10px;z-index:1000;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee">
-            <span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span>
-            <button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button>
-          </div>
-          <div id="mapInfoBody" style="padding:10px 14px 12px"></div>
-        </div>
-      </div>
-      """}
+      {map_panel_html}
     </div>
   </div>
 
