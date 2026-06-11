@@ -5,9 +5,20 @@ report.py - Generate a static HTML report from the SQLite history DB.
 import os
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability
+
+CYPRUS_TZ = timezone(timedelta(hours=3))  # EET/EEST — UTC+3 (summer); update to +2 in winter if needed
+
+
+def _to_cyprus(utc_iso: str) -> str:
+    """Convert a UTC ISO timestamp string to Cyprus time, formatted for display."""
+    dt = datetime.fromisoformat(utc_iso.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(CYPRUS_TZ)
+    return local.strftime("%Y-%m-%d %H:%M")
 
 REPORT_PATH = Path("reports/latest.html")
 
@@ -174,7 +185,6 @@ def generate_report() -> str:
 
     # Chart data
     chart_runs = list(reversed(runs[:30]))
-    chart_labels = json.dumps([r["run_at"][:10] + " " + r["run_at"][11:16] for r in chart_runs])
     chart_passed = json.dumps([r["passed"] for r in chart_runs])
     chart_failed = json.dumps([r["failed"] + r["errored"] for r in chart_runs])
 
@@ -282,7 +292,7 @@ def generate_report() -> str:
         pct = round(run["passed"] / total * 100)
         ok = run["failed"] == 0 and run["errored"] == 0
         bar_color = "#1d9e75" if ok else "#e24b4a"
-        ts = run["run_at"][:19].replace("T", " ")
+        ts = _to_cyprus(run["run_at"])
         history_rows += f"""
         <tr>
           <td style="color:var(--color-text-secondary);font-size:13px">{ts}</td>
@@ -296,103 +306,191 @@ def generate_report() -> str:
           </td>
         </tr>"""
 
-    run_time = latest_run["run_at"][:19].replace("T", " ")
+    run_time = _to_cyprus(latest_run["run_at"])
     total_runs_label = len(runs)
+
+    # Chart labels in Cyprus time
+    chart_labels = json.dumps([_to_cyprus(r["run_at"]) for r in chart_runs])
+
+    # Per-panel progress bar percentages
+    latest_total = latest_run["total"] or 1
+    overall_pct = round(latest_run["passed"] / latest_total * 100)
+    overall_bar_color = "#1d9e75" if overall_pct == 100 else ("#e58e0a" if overall_pct >= 50 else "#e24b4a")
+
+    trend_passed_total = sum(r["passed"] for r in chart_runs)
+    trend_total = sum((r["total"] or 1) for r in chart_runs)
+    trend_pct = round(trend_passed_total / trend_total * 100) if trend_total else 0
+    trend_bar_color = "#1d9e75" if trend_pct == 100 else ("#e58e0a" if trend_pct >= 50 else "#e24b4a")
+
+    sensor_good = sum(1 for s in all_sensors if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
+    sensor_total_count = len(all_sensors) or 1
+    sensor_pct = round(sensor_good / sensor_total_count * 100)
+    sensor_bar_color = "#1d9e75" if sensor_pct == 100 else ("#e58e0a" if sensor_pct >= 50 else "#e24b4a")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SWARCO Infrastructure Health</title>
+<title>ITS Infrastructure Health</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
     --bg: #f5f6f8; --surface: #ffffff; --border: rgba(0,0,0,0.08);
-    --text: #1a1a2e; --muted: #6b7280; --header-bg: #1a1a2e;
-    --color-background-primary: #ffffff;
-    --color-background-secondary: #f5f6f8;
-    --color-text-primary: #1a1a2e;
-    --color-text-secondary: #6b7280;
+    --text: #1a1a2e; --muted: #6b7280; --header-bg: #1a1a2e; --subsurf: #f1f0e8;
+    --color-background-primary: #ffffff; --color-background-secondary: #f5f6f8;
+    --color-text-primary: #1a1a2e; --color-text-secondary: #6b7280;
     --color-border-tertiary: rgba(0,0,0,0.08);
   }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{ --bg: #111318; --surface: #1c1f26; --border: rgba(255,255,255,0.08);
-             --text: #f0f2f5; --muted: #9ca3af; --header-bg: #0d0f14;
-             --color-background-primary: #1c1f26;
-             --color-background-secondary: #111318;
-             --color-text-primary: #f0f2f5;
-             --color-text-secondary: #9ca3af;
-             --color-border-tertiary: rgba(255,255,255,0.08); }}
+  body.dark {{
+    --bg: #111318; --surface: #1c1f26; --border: rgba(255,255,255,0.08);
+    --text: #f0f2f5; --muted: #9ca3af; --header-bg: #0d0f14; --subsurf: #1a1d24;
+    --color-background-primary: #1c1f26; --color-background-secondary: #111318;
+    --color-text-primary: #f0f2f5; --color-text-secondary: #9ca3af;
+    --color-border-tertiary: rgba(255,255,255,0.08);
   }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-          background: var(--bg); color: var(--text); min-height: 100vh; }}
-  header {{ background: var(--header-bg); color: white; padding: 24px 32px;
+          background: var(--bg); color: var(--text); min-height: 100vh; transition: background .2s, color .2s; }}
+  header {{ background: var(--header-bg); color: white; padding: 20px 28px;
             display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }}
-  header h1 {{ font-size: 1.2rem; font-weight: 500; letter-spacing: -0.01em; }}
-  header .meta {{ font-size: 12px; opacity: 0.5; }}
-  .wrap {{ max-width: 1200px; margin: 0 auto; padding: 24px 16px; }}
+  header h1 {{ font-size: 1.15rem; font-weight: 500; letter-spacing: -0.01em; }}
+  header .meta {{ font-size: 11px; opacity: 0.45; margin-top:3px; }}
+  .wrap {{ max-width: 1200px; margin: 0 auto; padding: 20px 16px; }}
   .section-label {{ font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
                     text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }}
-  .group-cards {{ display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 32px; }}
+  .group-cards {{ display: flex; gap: 16px; flex-wrap: wrap; }}
   .panel {{ background: var(--surface); border: 0.5px solid var(--border);
-            border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; }}
+            border-radius: 12px; margin-bottom: 20px; overflow: hidden; transition: background .2s, border-color .2s; }}
+  .panel-header {{ padding: 14px 20px; display: flex; align-items: center;
+                   justify-content: space-between; cursor: pointer; user-select: none; }}
+  .panel-header:hover {{ background: var(--subsurf); }}
+  .panel-title {{ font-size: 11px; font-weight: 500; letter-spacing: 0.07em;
+                  text-transform: uppercase; color: var(--muted); }}
+  .panel-chevron {{ width: 26px; height: 26px; border-radius: 6px; border: 0.5px solid var(--border);
+                    background: var(--subsurf); display: flex; align-items: center; justify-content: center;
+                    color: var(--muted); font-size: 13px; transition: transform .2s, background .2s; }}
+  .panel-chevron.open {{ transform: rotate(180deg); }}
+  .panel-bar {{ height: 3px; width: 100%; background: var(--border); }}
+  .panel-bar-fill {{ height: 3px; }}
+  .panel-body {{ padding: 16px 20px 18px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
   th {{ font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--muted); padding: 8px 12px; border-bottom: 0.5px solid var(--border); text-align: left; }}
   td {{ padding: 10px 12px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }}
   tr:last-child td {{ border-bottom: none; }}
+  .dm-btn {{ display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 5px 11px;
+             border-radius: 7px; border: 0.5px solid rgba(255,255,255,0.2);
+             background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.75);
+             cursor: pointer; transition: background .15s; }}
+  .dm-btn:hover {{ background: rgba(255,255,255,0.14); }}
 </style>
 </head>
 <body>
 <header>
   <div>
-    <h1><i class="ti ti-traffic-lights" style="font-size:18px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>SWARCO Infrastructure Health</h1>
-    <div class="meta">Last checked {run_time} UTC &nbsp;·&nbsp; {total_runs_label} runs recorded</div>
+    <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>ITS Infrastructure Health</h1>
+    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {total_runs_label} runs recorded</div>
   </div>
-  <div style="display:flex;gap:16px;font-size:12px;opacity:0.6">
-    <span><i class="ti ti-circle-check" style="color:#1d9e75;vertical-align:-1px;margin-right:4px"></i>Pass</span>
-    <span><i class="ti ti-circle-x" style="color:#e24b4a;vertical-align:-1px;margin-right:4px"></i>Fail</span>
-    <span><i class="ti ti-alert-triangle" style="color:#e58e0a;vertical-align:-1px;margin-right:4px"></i>Error</span>
+  <div style="display:flex;align-items:center;gap:18px">
+    <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
+      <span><i class="ti ti-circle-check" style="color:#1d9e75;vertical-align:-1px;margin-right:4px"></i>Pass</span>
+      <span><i class="ti ti-circle-x" style="color:#e24b4a;vertical-align:-1px;margin-right:4px"></i>Fail</span>
+      <span><i class="ti ti-alert-triangle" style="color:#e58e0a;vertical-align:-1px;margin-right:4px"></i>Error</span>
+    </div>
+    <button class="dm-btn" onclick="toggleDark()" id="dmBtn" aria-label="Toggle dark mode">
+      <i class="ti ti-moon" id="dmIcon" aria-hidden="true"></i>
+      <span id="dmLabel">Dark</span>
+    </button>
   </div>
 </header>
 
 <div class="wrap">
 
-  <div class="section-label">Infrastructure groups</div>
-  <div class="group-cards">
-    {group_cards}
-  </div>
-
-  <div class="panel">
-    <div class="section-label" style="margin-bottom:6px">Pass / fail trend — last {len(chart_runs)} runs</div>
-    <div style="position:relative;height:180px">
-      <canvas id="trendChart" role="img" aria-label="Stacked bar chart showing passed and failed test counts across recent runs"></canvas>
+  <div class="panel" id="p-groups">
+    <div class="panel-header" onclick="togglePanel('p-groups')">
+      <span class="panel-title">Infrastructure groups</span>
+      <div class="panel-chevron open" id="c-p-groups"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div style="display:flex;gap:20px;margin-top:12px;font-size:2px;color:var(--muted)">
-      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Passed</span>
-      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#e24b4a;display:inline-block"></span>Failed / errored</span>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-groups">
+      <div class="group-cards">
+        {group_cards}
+      </div>
     </div>
   </div>
 
-  <div class="panel">
-    {sensor_stability_html}
+  <div class="panel" id="p-trend">
+    <div class="panel-header" onclick="togglePanel('p-trend')">
+      <span class="panel-title">Pass / fail trend — last {len(chart_runs)} runs</span>
+      <div class="panel-chevron open" id="c-p-trend"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{trend_pct}%;background:{trend_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-trend">
+      <div style="position:relative;height:180px">
+        <canvas id="trendChart" role="img" aria-label="Stacked bar chart of passed and failed test counts across recent runs"></canvas>
+      </div>
+      <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted)">
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Passed</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#e24b4a;display:inline-block"></span>Failed / errored</span>
+      </div>
+    </div>
   </div>
 
-  <div class="panel">
-    <div class="section-label" style="margin-bottom:16px">Run history</div>
-    <table>
-      <thead><tr><th>Time (UTC)</th><th>Passed</th><th>Failed</th><th>Errored</th><th>Pass rate</th></tr></thead>
-      <tbody>{history_rows}</tbody>
-    </table>
+  <div class="panel" id="p-sensors">
+    <div class="panel-header" onclick="togglePanel('p-sensors')">
+      <span class="panel-title">Sensor stability</span>
+      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-sensors">
+      {sensor_stability_html}
+    </div>
+  </div>
+
+  <div class="panel" id="p-history">
+    <div class="panel-header" onclick="togglePanel('p-history')">
+      <span class="panel-title">Run history</span>
+      <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-history">
+      <table>
+        <thead><tr><th>Time (EET)</th><th>Passed</th><th>Failed</th><th>Errored</th><th>Pass rate</th></tr></thead>
+        <tbody>{history_rows}</tbody>
+      </table>
+    </div>
   </div>
 
 </div>
 
 <script>
-new Chart(document.getElementById('trendChart'), {{
+function togglePanel(id) {{
+  var b = document.getElementById('b-' + id);
+  var c = document.getElementById('c-' + id);
+  var open = b.style.display !== 'none';
+  b.style.display = open ? 'none' : '';
+  c.classList.toggle('open', !open);
+}}
+
+var _dark = false;
+function toggleDark() {{
+  _dark = !_dark;
+  document.body.classList.toggle('dark', _dark);
+  document.getElementById('dmIcon').className = _dark ? 'ti ti-sun' : 'ti ti-moon';
+  document.getElementById('dmLabel').textContent = _dark ? 'Light' : 'Dark';
+  var tc = '#9ca3af';
+  var gc = _dark ? 'rgba(255,255,255,0.06)' : 'rgba(128,128,128,0.1)';
+  if (window._trendChart) {{
+    window._trendChart.options.scales.x.ticks.color = tc;
+    window._trendChart.options.scales.y.ticks.color = tc;
+    window._trendChart.options.scales.y.grid.color = gc;
+    window._trendChart.update();
+  }}
+}}
+
+window._trendChart = new Chart(document.getElementById('trendChart'), {{
   type: 'bar',
   data: {{
     labels: {chart_labels},
