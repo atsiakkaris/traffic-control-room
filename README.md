@@ -27,7 +27,7 @@ Automated twice-daily API tests for SWARCO DATEX II endpoints, running on GitHub
 
 ## How It Works
 
-1. GitHub Actions triggers at **06:00 and 12:00 Cyprus time (03:00 and 09:00 UTC)**
+1. GitHub Actions triggers at **06:00 and 22:00 Cyprus time (03:00 and 19:00 UTC)**
 2. All endpoints in `endpoints.yaml` are tested — HTTP status, response time, and XML assertions
 3. Results are written to `results/history.db`
 4. `reports/latest.html` is regenerated with the full dashboard
@@ -125,8 +125,8 @@ This lets you distinguish a permanent hardware fault from a one-off hiccup.
 Runs twice daily. Edit `.github/workflows/daily_tests.yml` to change times:
 
 ```yaml
-- cron: "0 3 * * *"   # 06:00 Cyprus (UTC+3)
-- cron: "0 9 * * *"   # 12:00 Cyprus (UTC+3)
+- cron: "0 3 * * *"    # 06:00 Cyprus (UTC+3)
+- cron: "0 19 * * *"   # 22:00 Cyprus (UTC+3)
 ```
 
 Use [crontab.guru](https://crontab.guru) to build a custom schedule. Note: GitHub cron is always UTC.
