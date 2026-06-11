@@ -31,6 +31,7 @@ groups:
         max_response_ms: 5000
         checks:
           - valid_xml
+          - feed_freshness          # publicationTime must be within 15 min
           - vms_controller_status   # parses working / not-working / no-status controllers
 
   - name: Bluetooth
@@ -43,6 +44,7 @@ groups:
         max_response_ms: 5000
         checks:
           - valid_xml
+          - bt_site_count   # counts measurementSite elements → shown in report
 
       - name: Bluetooth Paths Inventory
         path: PredefinedLocationPublication
@@ -58,6 +60,7 @@ groups:
         max_response_ms: 30000
         checks:
           - valid_xml
+          - feed_freshness                  # publicationTime must be within 15 min
           - bt_paths_speed_and_traveltime   # all paths must have speed>0 and traveltime>0
 
   - name: Traffic Detection
@@ -77,4 +80,5 @@ groups:
         max_response_ms: 5000
         checks:
           - valid_xml
+          - feed_freshness        # publicationTime must be within 15 min
           - sensor_speed_status   # categorises sensors: working / malfunctioning / no-measurement

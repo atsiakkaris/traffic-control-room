@@ -6,6 +6,7 @@ Each public function takes the raw response text and returns:
 """
 
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 
 
 NS = "q1"  # the namespace prefix used in SWARCO DATEX II feeds
@@ -214,6 +215,42 @@ def sensor_speed_status(response_text: str) -> dict:
     return {"passed": passed, "detail": " | ".join(detail_parts), "sensors": sensors_map}
 
 
+def bt_site_count(response_text: str) -> dict:
+    """Count measurementSite elements in a BTMeasurementSiteTablePublication."""
+    root, err = _parse_xml(response_text)
+    if err:
+        return {"passed": False, "detail": f"Could not parse XML: {err}"}
+
+    sites = root.findall(".//{*}measurementSite")
+    count = len(sites)
+    passed = count > 0
+    detail = f"{count} Bluetooth device(s) reported by API" if passed else "No measurementSite elements found"
+    return {"passed": passed, "detail": detail, "count": count}
+
+
+# ─── Data freshness ──────────────────────────────────────────────────────────
+
+FRESHNESS_LIMIT_MINUTES = 15
+
+def feed_freshness(response_text: str) -> dict:
+    root, err = _parse_xml(response_text)
+    if err:
+        return {"passed": False, "detail": f"Could not parse XML: {err}"}
+
+    pub_el = root.find(".//{*}publicationTime")
+    if pub_el is None:
+        return {"passed": False, "detail": "No publicationTime element found in feed"}
+
+    try:
+        pub_dt = datetime.fromisoformat(pub_el.text.strip().replace("Z", "+00:00"))
+        age_min = int((datetime.now(timezone.utc) - pub_dt).total_seconds() / 60)
+        passed = age_min <= FRESHNESS_LIMIT_MINUTES
+        label = f"Feed is {age_min} min old (limit: {FRESHNESS_LIMIT_MINUTES} min)"
+        return {"passed": passed, "detail": label}
+    except Exception as e:
+        return {"passed": False, "detail": f"Could not parse publicationTime: {e}"}
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _safe_float(el):
@@ -234,8 +271,10 @@ def _extract_namespaces(text):
 # Registry: maps check name (from YAML) → function
 REGISTRY = {
     "valid_xml": valid_xml,
+    "feed_freshness": feed_freshness,
     "vms_controller_status": vms_controller_status,
     "predefined_paths_count": predefined_paths_count,
     "bt_paths_speed_and_traveltime": bt_paths_speed_and_traveltime,
+    "bt_site_count": bt_site_count,
     "sensor_speed_status": sensor_speed_status,
 }

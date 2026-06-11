@@ -162,6 +162,7 @@ def run_all():
                 expected_code=r["expected_code"],
                 response_ms=r["response_ms"],
                 failure_reason=r["failure_reason"],
+                check_summary=" | ".join(r.get("check_details", [])),
             )
             for sensor_id, s_status in r.get("sensors", {}).items():
                 insert_sensor_result(run_id, run_at, group_name, sensor_id, s_status)

@@ -39,6 +39,7 @@ def init_db():
             expected_code   INTEGER DEFAULT 200,
             response_ms     REAL,
             failure_reason  TEXT,
+            check_summary   TEXT,
             FOREIGN KEY (run_id) REFERENCES runs(run_id)
         );
 
@@ -69,15 +70,16 @@ def insert_run(run_id, run_at, totals):
 
 
 def insert_result(run_id, group_name, test_name, endpoint, method,
-                  status, status_code, expected_code, response_ms, failure_reason):
+                  status, status_code, expected_code, response_ms, failure_reason,
+                  check_summary=None):
     conn = get_connection()
     conn.execute(
         """INSERT INTO test_results
            (run_id, group_name, test_name, endpoint, method, status,
-            status_code, expected_code, response_ms, failure_reason)
-           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            status_code, expected_code, response_ms, failure_reason, check_summary)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (run_id, group_name, test_name, endpoint, method, status,
-         status_code, expected_code, response_ms, failure_reason)
+         status_code, expected_code, response_ms, failure_reason, check_summary)
     )
     conn.commit()
     conn.close()
@@ -115,6 +117,21 @@ def fetch_history_for_test(test_name, limit=30):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def fetch_sensor_statuses_for_run(run_id):
+    """Return {group_name: {status: [sensor_id, ...]}} for a specific run."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT group_name, sensor_id, status FROM sensor_results WHERE run_id = ? ORDER BY group_name, status, sensor_id",
+        (run_id,)
+    ).fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        g, sid, s = row["group_name"], row["sensor_id"], row["status"]
+        result.setdefault(g, {}).setdefault(s, []).append(sid)
+    return result
 
 
 def insert_sensor_result(run_id, run_at, group_name, sensor_id, status):

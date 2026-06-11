@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run
 
 CYPRUS_TZ = timezone(timedelta(hours=3))  # EET/EEST — UTC+3 (summer); update to +2 in winter if needed
 
@@ -102,6 +102,32 @@ STATUS_LABEL = {
 }
 
 GOOD_STATUSES = {"working", "ok"}
+
+
+def _humanize_failure(check_name, detail):
+    """Return a short, plain-English explanation of a check failure."""
+    import re
+    if check_name == "feed_freshness":
+        return detail  # already readable: "Feed is 42 min old (limit: 15 min)"
+    if check_name == "valid_xml":
+        return "Response is not valid XML — the API may be down or returning an error page"
+    if check_name == "vms_controller_status":
+        m = re.search(r"Not working: (\d+)", detail)
+        n = int(m.group(1)) if m else "?"
+        return f"{n} VMS controller(s) reported as not working"
+    if check_name == "sensor_speed_status":
+        m = re.search(r"Malfunctioning \(speed=-1\): (\d+)", detail)
+        n = int(m.group(1)) if m else "?"
+        return f"{n} traffic sensor(s) reporting speed = -1 (hardware fault)"
+    if check_name == "bt_paths_speed_and_traveltime":
+        m = re.search(r"Speed OK: (\d+)/(\d+)", detail)
+        if m:
+            failing = int(m.group(2)) - int(m.group(1))
+            return f"{failing} BT path(s) have no speed or travel time data"
+        return "Some BT paths are missing speed or travel time data"
+    if check_name == "predefined_paths_count":
+        return "No predefined BT paths found in the feed"
+    return detail
 
 
 def build_sensor_stability_html(sensors):
@@ -208,6 +234,9 @@ def generate_report() -> str:
     all_sensors = fetch_sensor_stability()
     sensor_stability_html = build_sensor_stability_html(all_sensors)
 
+    # Per-sensor statuses for the latest run (used for full ID lists in cards)
+    latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
+
     # Build group status cards
     def group_status_card(group_name, icon, results):
         all_pass = all(r["status"] == "pass" for r in results)
@@ -221,15 +250,54 @@ def generate_report() -> str:
         detail_rows = ""
         for r in results:
             dot_color = "#1d9e75" if r["status"] == "pass" else ("#e58e0a" if r["status"] == "error" else "#e24b4a")
+
+            failure_lines = ""
+            if r["status"] != "pass" and r.get("failure_reason"):
+                for part in r["failure_reason"].split(" | "):
+                    if ": " in part:
+                        cname, cdetail = part.split(": ", 1)
+                        label = _humanize_failure(cname.strip(), cdetail.strip())
+                    else:
+                        label = part  # e.g. "Expected HTTP 200, got 503"
+                    failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{label}</div>'
+
+            # For Bluetooth Inventory, show device count from check_summary
+            name_suffix = ""
+            if r["test_name"] == "Bluetooth Inventory" and r.get("check_summary"):
+                import re as _re
+                m = _re.search(r"bt_site_count: (\d+)", r["check_summary"])
+                if m:
+                    name_suffix = f' <span style="font-size:11px;color:var(--color-text-secondary)">— {m.group(1)} devices</span>'
+
             detail_rows += f"""
-            <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
-              <span style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0"></span>
-              <span style="font-size:13px;color:var(--color-text-primary);flex:1">{r['test_name']}</span>
-              <span style="font-size:12px;color:var(--color-text-secondary)">{r.get('response_ms') or '—'} ms</span>
+            <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0"></span>
+                <span style="font-size:13px;color:var(--color-text-primary);flex:1">{r['test_name']}{name_suffix}</span>
+              </div>
+              {failure_lines}
             </div>"""
 
-        # Extra detail block for failures
+        # Extra detail block — uses sensor_results DB for full untruncated ID lists
         extra = ""
+        sensor_data = latest_sensor_statuses.get(group_name, {})
+
+        def _collapsible_ids(label, color, ids):
+            if not ids:
+                return ""
+            id_list = ", ".join(ids)
+            return f"""
+            <details style="margin-top:6px">
+              <summary style="cursor:pointer;font-size:11px;color:{color};list-style:none;display:flex;align-items:center;gap:5px;user-select:none">
+                <i class="ti ti-chevron-right" style="font-size:11px;transition:transform .15s" aria-hidden="true"></i>
+                <b>{len(ids)}</b>&nbsp;{label}
+              </summary>
+              <div style="margin-top:4px;padding:6px 8px;background:var(--color-background-primary);border-radius:6px;
+                          font-family:monospace;font-size:11px;color:var(--color-text-secondary);line-height:1.8;word-break:break-all">
+                {id_list}
+              </div>
+            </details>"""
+
         for r in results:
             if r["status"] != "pass" and r.get("failure_reason"):
                 fr = r["failure_reason"]
@@ -238,6 +306,8 @@ def generate_report() -> str:
                     if d:
                         vms_total = d['working'] + d['not_working'] + d['no_status']
                         vms_pct = round(d['working'] / vms_total * 100) if vms_total else 0
+                        not_working_ids = sensor_data.get("not_working", [])
+                        no_status_ids   = sensor_data.get("no_status", [])
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                           <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">VMS Controllers</div>
@@ -247,18 +317,19 @@ def generate_report() -> str:
                             </div>
                             <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{vms_total}</span>
                           </div>
-                          <div style="display:flex;gap:16px;margin-bottom:8px">
+                          <div style="display:flex;gap:16px;margin-bottom:4px">
                             <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
                             <span style="color:#e24b4a"><b>{d['not_working']}</b> not working</span>
                             <span style="color:#888"><b>{d['no_status']}</b> no status</span>
                           </div>
-                          {"<div style='color:var(--color-text-secondary);line-height:1.6'>Not working: " + d['not_working_ids'] + "</div>" if d['not_working_ids'] else ""}
-                          {"<div style='color:var(--color-text-secondary);line-height:1.6;margin-top:4px'>No status: " + d['no_status_ids'] + "</div>" if d['no_status_ids'] else ""}
+                          {_collapsible_ids("not working", "#e24b4a", not_working_ids)}
+                          {_collapsible_ids("no status", "#888", no_status_ids)}
                         </div>"""
                 elif "bt_paths_speed_and_traveltime" in fr:
                     d = parse_bt_detail(fr)
                     if d:
                         pct = round(d['speed_ok'] / d['total'] * 100) if d['total'] else 0
+                        failing_ids = sensor_data.get("failing", [])
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                           <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">BT Paths with data</div>
@@ -268,12 +339,15 @@ def generate_report() -> str:
                             </div>
                             <span style="color:var(--color-text-primary);font-weight:500">{d['speed_ok']}/{d['total']}</span>
                           </div>
-                          <div style="color:var(--color-text-secondary);line-height:1.6">Failing: {d['failing_paths']}</div>
+                          {_collapsible_ids("failing paths", "#e24b4a", failing_ids)}
                         </div>"""
                 elif "sensor_speed_status" in fr:
                     d = parse_sensor_detail(fr)
                     if d:
                         td_pct = round(d['working'] / d['total'] * 100) if d['total'] else 0
+                        malfunctioning_ids  = sensor_data.get("malfunctioning", [])
+                        no_traffic_ids      = sensor_data.get("no_traffic", [])
+                        no_measurement_ids  = sensor_data.get("no_measurement", [])
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                           <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Sensor breakdown — {d['total']} total</div>
@@ -283,13 +357,15 @@ def generate_report() -> str:
                             </div>
                             <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{d['total']}</span>
                           </div>
-                          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+                          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px">
                             <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
                             <span style="color:#888"><b>{d['no_traffic']}</b> no traffic</span>
                             <span style="color:#e24b4a"><b>{d['malfunctioning']}</b> malfunctioning</span>
                             <span style="color:#888"><b>{d['no_measurement']}</b> no data</span>
                           </div>
-                          {"<div style='color:var(--color-text-secondary);line-height:1.6'>Malfunctioning IDs: " + d['mal_ids'] + "</div>" if d['mal_ids'] else ""}
+                          {_collapsible_ids("malfunctioning", "#e24b4a", malfunctioning_ids)}
+                          {_collapsible_ids("no traffic", "#888", no_traffic_ids)}
+                          {_collapsible_ids("no measurement data", "#888", no_measurement_ids)}
                         </div>"""
 
         return f"""
@@ -416,6 +492,8 @@ def generate_report() -> str:
              background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.75);
              cursor: pointer; transition: background .15s; }}
   .dm-btn:hover {{ background: rgba(255,255,255,0.14); }}
+  details[open] summary .ti-chevron-right {{ transform: rotate(90deg); }}
+  details summary::-webkit-details-marker {{ display: none; }}
 </style>
 </head>
 <body>
