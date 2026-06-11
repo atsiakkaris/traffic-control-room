@@ -56,6 +56,13 @@ def init_db():
             ON sensor_results (group_name, sensor_id, run_at);
     """)
     conn.commit()
+
+    # Migrate: add check_summary if the DB predates this column
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(test_results)").fetchall()]
+    if "check_summary" not in cols:
+        conn.execute("ALTER TABLE test_results ADD COLUMN check_summary TEXT")
+        conn.commit()
+
     conn.close()
 
 
