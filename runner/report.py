@@ -139,18 +139,17 @@ def build_sensor_stability_html(sensors):
             ts = _to_cyprus(h["run_at"])
             sparks += f'<span title="{ts} — {reason}" style="display:inline-block;width:6px;height:14px;border-radius:2px;background:{c};margin-right:1px"></span>'
 
-        # Last issue: most recent non-good entry
-        last_issue = next(
-            (STATUS_LABEL.get(h["status"], h["status"]) for h in reversed(history) if h["status"] not in GOOD_STATUSES),
+        # Last issue: most recent non-good entry, coloured to match the sparkline
+        last_bad = next(
+            (h for h in reversed(history) if h["status"] not in GOOD_STATUSES),
             None
         )
-        last_issue_html = (
-            f'<span style="font-size:11px;color:#e24b4a">{last_issue}</span>'
-            if last_issue and history and history[-1]["status"] not in GOOD_STATUSES
-            else f'<span style="font-size:11px;color:var(--color-text-secondary)">{last_issue}</span>'
-            if last_issue
-            else '<span style="font-size:11px;color:#1d9e75">—</span>'
-        )
+        if last_bad:
+            issue_label = STATUS_LABEL.get(last_bad["status"], last_bad["status"])
+            issue_color = STATUS_COLOR.get(last_bad["status"], "#9ca3af")
+            last_issue_html = f'<span style="font-size:11px;color:{issue_color}">{issue_label}</span>'
+        else:
+            last_issue_html = '<span style="font-size:11px;color:#1d9e75">—</span>'
 
         rows += f"""
         <tr data-group="{s['group_name']}">
@@ -237,9 +236,17 @@ def generate_report() -> str:
                 if "vms_controller_status" in fr:
                     d = parse_vms_detail(fr)
                     if d:
+                        vms_total = d['working'] + d['not_working'] + d['no_status']
+                        vms_pct = round(d['working'] / vms_total * 100) if vms_total else 0
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                           <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">VMS Controllers</div>
+                          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                            <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
+                              <div style="width:{vms_pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
+                            </div>
+                            <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{vms_total}</span>
+                          </div>
                           <div style="display:flex;gap:16px;margin-bottom:8px">
                             <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
                             <span style="color:#e24b4a"><b>{d['not_working']}</b> not working</span>
@@ -266,9 +273,16 @@ def generate_report() -> str:
                 elif "sensor_speed_status" in fr:
                     d = parse_sensor_detail(fr)
                     if d:
+                        td_pct = round(d['working'] / d['total'] * 100) if d['total'] else 0
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                           <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Sensor breakdown — {d['total']} total</div>
+                          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                            <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
+                              <div style="width:{td_pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
+                            </div>
+                            <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{d['total']}</span>
+                          </div>
                           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
                             <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
                             <span style="color:#888"><b>{d['no_traffic']}</b> no traffic</span>

@@ -144,7 +144,7 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
     passed = len(failing) == 0
     detail = (
         f"Speed OK: {speed_ok}/{total} | Travel time OK: {ttime_ok}/{total}"
-        + (f" | Failing paths: {', '.join(failing[:10])}" if failing else "")
+        + (f" | Failing paths: {', '.join(failing)}" if failing else "")
     )
     return {"passed": passed, "detail": detail, "sensors": sensors_map}
 
