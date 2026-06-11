@@ -294,7 +294,9 @@ def generate_report() -> str:
 
         # Extra detail block — uses sensor_results DB for full untruncated ID lists
         extra = ""
-        sensor_data = latest_sensor_statuses.get(group_name, {})
+        # BT path statuses are stored under "Bluetooth Paths" to avoid ID collision with BT sites
+        sensor_data_key = "Bluetooth Paths" if group_name == "Bluetooth" else group_name
+        sensor_data = latest_sensor_statuses.get(sensor_data_key, {})
 
         def _collapsible_ids(label, color, ids):
             if not ids:
@@ -449,7 +451,7 @@ def generate_report() -> str:
             })
 
     # Build BT path list with live speed/travel-time data
-    bt_group_live = live_data.get("Bluetooth", {})
+    bt_group_live = live_data.get("Bluetooth Paths", {})
     map_bt_paths = []
     for pid, p in all_bt_paths.items():
         entry = bt_group_live.get(pid, {})
@@ -775,9 +777,6 @@ function makeMarker(s) {
     dataRows += popRow('Speed', fmtSpeed(d.speed_kmh),
                        d.speed_kmh===-1?'#e24b4a':(d.speed_kmh>0?'#1d9e75':null));
     dataRows += popRow('Flow rate', fmtFlow(d.flow_veh_hr));
-  } else if (s.group === 'Bluetooth') {
-    dataRows += popRow('Speed', fmtSpeed(d.speed_kmh));
-    dataRows += popRow('Travel time', fmtTT(d.travel_time_s));
   }
   var rows = popRow('ID', s.id)+popRow('Group', s.group)+
              popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;

@@ -169,9 +169,12 @@ def run_all():
                 failure_reason=r["failure_reason"],
                 check_summary=" | ".join(r.get("check_details", [])),
             )
+            # BT path statuses are stored under "Bluetooth Paths" to avoid
+            # ID collision with BT site IDs stored under "Bluetooth"
+            sensor_group = "Bluetooth Paths" if ep["name"] == "Bluetooth Paths Live (FCD)" else group_name
             for sensor_id, s_status in r.get("sensors", {}).items():
                 mdata = r.get("measurements", {}).get(sensor_id)
-                insert_sensor_result(run_id, run_at, group_name, sensor_id, s_status, mdata)
+                insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
             # Extract and store coordinates from inventory endpoints
             ep_name = ep["name"]
