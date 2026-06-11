@@ -104,30 +104,37 @@ STATUS_LABEL = {
 GOOD_STATUSES = {"working", "ok"}
 
 
-def _humanize_failure(check_name, detail):
-    """Return a short, plain-English explanation of a check failure."""
+def _humanize_failure(check_name, full_failure_reason):
+    """Return a short, plain-English explanation of a check failure.
+    Receives the full failure_reason string so regexes can find sub-parts
+    even when the detail itself contains ' | ' delimiters.
+    """
     import re
+    fr = full_failure_reason or ""
     if check_name == "feed_freshness":
-        return detail  # already readable: "Feed is 42 min old (limit: 15 min)"
+        m = re.search(r"feed_freshness: ([^|]+)", fr)
+        return m.group(1).strip() if m else fr
     if check_name == "valid_xml":
         return "Response is not valid XML — the API may be down or returning an error page"
     if check_name == "vms_controller_status":
-        m = re.search(r"Not working: (\d+)", detail)
+        m = re.search(r"Not working: (\d+)", fr)
         n = int(m.group(1)) if m else "?"
         return f"{n} VMS controller(s) reported as not working"
     if check_name == "sensor_speed_status":
-        m = re.search(r"Malfunctioning \(speed=-1\): (\d+)", detail)
+        m = re.search(r"Malfunctioning \(speed=-1\): (\d+)", fr)
         n = int(m.group(1)) if m else "?"
         return f"{n} traffic sensor(s) reporting speed = -1 (hardware fault)"
     if check_name == "bt_paths_speed_and_traveltime":
-        m = re.search(r"Speed OK: (\d+)/(\d+)", detail)
+        m = re.search(r"Speed OK: (\d+)/(\d+)", fr)
         if m:
             failing = int(m.group(2)) - int(m.group(1))
-            return f"{failing} BT path(s) have no speed or travel time data"
+            return f"{failing} BT path(s) reporting no speed or travel time (no vehicles detected, or sensor issue)"
         return "Some BT paths are missing speed or travel time data"
     if check_name == "predefined_paths_count":
         return "No predefined BT paths found in the feed"
-    return detail
+    # fallback: extract just the detail portion after "check_name: "
+    m = re.search(re.escape(check_name) + r": ([^|]+)", fr)
+    return m.group(1).strip() if m else fr
 
 
 def build_sensor_stability_html(sensors):
@@ -253,13 +260,20 @@ def generate_report() -> str:
 
             failure_lines = ""
             if r["status"] != "pass" and r.get("failure_reason"):
-                for part in r["failure_reason"].split(" | "):
-                    if ": " in part:
-                        cname, cdetail = part.split(": ", 1)
-                        label = _humanize_failure(cname.strip(), cdetail.strip())
-                    else:
-                        label = part  # e.g. "Expected HTTP 200, got 503"
-                    failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{label}</div>'
+                import re as _re2
+                fr = r["failure_reason"]
+                # Find all check names that open a segment (e.g. "sensor_speed_status: ...")
+                check_names_found = _re2.findall(r"(?:^| \| )([a-z][a-z_]+): ", fr)
+                if check_names_found:
+                    seen = set()
+                    for cname in check_names_found:
+                        if cname not in seen:
+                            seen.add(cname)
+                            label = _humanize_failure(cname, fr)
+                            failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{label}</div>'
+                else:
+                    # Plain HTTP/timeout message with no check names
+                    failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{fr}</div>'
 
             # For Bluetooth Inventory, show device count from check_summary
             name_suffix = ""
@@ -293,7 +307,7 @@ def generate_report() -> str:
                 <b>{len(ids)}</b>&nbsp;{label}
               </summary>
               <div style="margin-top:4px;padding:6px 8px;background:var(--color-background-primary);border-radius:6px;
-                          font-family:monospace;font-size:11px;color:var(--color-text-secondary);line-height:1.8;word-break:break-all">
+                          font-family:monospace;font-size:11px;color:var(--color-text-secondary);line-height:1.8;overflow-wrap:break-word">
                 {id_list}
               </div>
             </details>"""
@@ -350,7 +364,7 @@ def generate_report() -> str:
                         no_measurement_ids  = sensor_data.get("no_measurement", [])
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Sensor breakdown — {d['total']} total</div>
+                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detections — {d['total']} total</div>
                           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
                             <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
                               <div style="width:{td_pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
@@ -620,5 +634,5 @@ window._trendChart = new Chart(document.getElementById('trendChart'), {{
 </script>
 </body></html>"""
 
-    REPORT_PATH.write_text(html)
+    REPORT_PATH.write_text(html, encoding="utf-8")
     return str(REPORT_PATH)
