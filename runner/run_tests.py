@@ -172,8 +172,9 @@ def run_all():
             # BT path statuses are stored under "Bluetooth Paths" to avoid
             # ID collision with BT site IDs stored under "Bluetooth"
             sensor_group = "Bluetooth Paths" if ep["name"] == "Bluetooth Paths Live (FCD)" else group_name
+            live_mode = os.environ.get("LIVE_MODE", "").lower() in ("1", "true", "yes")
             for sensor_id, s_status in r.get("sensors", {}).items():
-                mdata = r.get("measurements", {}).get(sensor_id)
+                mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
             # Extract and store coordinates from inventory endpoints
