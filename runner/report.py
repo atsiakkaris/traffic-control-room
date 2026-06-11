@@ -1,4 +1,4 @@
-"""
+﻿"""
 report.py - Generate a static HTML report from the SQLite history DB.
 """
 
@@ -727,7 +727,7 @@ var STATUS_LABELS  = {
   failing:'No speed / travel time', unknown:'No recent data'
 };
 
-/* ── Icon factory ───────────────────────────────────────────────── */
+/* -- Icon factory ------------------------------------------------- */
 var ICON_CLASS = {'Traffic Detection':'ti-traffic-cone','Bluetooth':'ti-bluetooth','VMS':'ti-road-sign'};
 var ICON_SIZE  = {'Traffic Detection':26,'Bluetooth':22,'VMS':28};
 var ICON_SHAPE = {'VMS':'6px'};   // others default to 50% (circle)
@@ -747,7 +747,7 @@ function makeIcon(group, color, faded) {
     iconSize:[sz,sz], iconAnchor:[sz/2,sz/2], popupAnchor:[0,-sz/2+2]});
 }
 
-/* ── Popup helpers ──────────────────────────────────────────────── */
+/* -- Popup helpers ------------------------------------------------ */
 function popRow(label, val, color) {
   if (val === null || val === undefined || val === '') return '';
   var v = color ? '<span style="color:'+color+';font-weight:600">'+val+'</span>' : '<b>'+val+'</b>';
@@ -764,7 +764,7 @@ function fmtTT(v) {
   return (mins>0?mins+'m ':'')+secs+'s';
 }
 
-/* ── Marker factory ─────────────────────────────────────────────── */
+/* -- Marker factory ----------------------------------------------- */
 function makeMarker(s) {
   var m = L.marker([s.lat, s.lon], {icon: makeIcon(s.group, s.color, false)});
   m._sensorStatus = s.status;
@@ -789,7 +789,7 @@ function makeMarker(s) {
   return m;
 }
 
-/* ── Path factory ───────────────────────────────────────────────── */
+/* -- Path factory ------------------------------------------------- */
 function pathStyle(status, faded) {
   var isIssue = ISSUE_STATUSES.indexOf(status) !== -1;
   var isOk    = status === 'ok' || status === 'working';
@@ -818,7 +818,7 @@ function makePath(p) {
   return pl;
 }
 
-/* ── Build layers ───────────────────────────────────────────────── */
+/* -- Build layers ------------------------------------------------- */
 var _markers = [];
 _sensors.forEach(function(s) {
   var lg = _layerGroups[GROUP_LAYER[s.group]];
@@ -845,7 +845,7 @@ _btPaths.forEach(function(p) {
   _paths.push(pl);
 });
 
-/* ── Legend ─────────────────────────────────────────────────────── */
+/* -- Legend ------------------------------------------------------- */
 var _legend = L.control({position:'bottomright'});
 _legend.onAdd = function() {
   var d = L.DomUtil.create('div');
@@ -885,7 +885,7 @@ _legend.onAdd = function() {
 };
 _legend.addTo(_map);
 
-/* ── Visibility filter ──────────────────────────────────────────── */
+/* -- Visibility filter -------------------------------------------- */
 function applyVisibility() {
   _markers.forEach(function(m) {
     var on = _activeLayers[m._sensorGroup] &&
