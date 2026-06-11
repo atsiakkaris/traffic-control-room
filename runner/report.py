@@ -553,8 +553,6 @@ def generate_report() -> str:
     border:0.5px solid var(--border);background:var(--surface);color:var(--muted);transition:all .15s;
   }}
   .map-toggle.active {{ background:var(--header-bg);color:#fff;border-color:var(--header-bg); }}
-  .leaflet-popup-content-wrapper {{ border-radius:8px!important;font-size:12px; }}
-  .leaflet-popup-content {{ margin:10px 14px; }}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -611,7 +609,19 @@ def generate_report() -> str:
         <button class="map-toggle active" data-filter="all" onclick="setFilter(this,'all')">All</button>
         <button class="map-toggle" data-filter="issues" onclick="setFilter(this,'issues')">Issues only</button>
       </div>
-      <div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary)"></div>
+      <div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">
+        <div id="mapInfoPanel" style="display:none;position:absolute;top:10px;right:10px;z-index:1000;
+          background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);
+          min-width:220px;max-width:280px;font-size:12px;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;
+            padding:9px 14px 7px;border-bottom:1px solid #eee">
+            <span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span>
+            <button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;
+              color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button>
+          </div>
+          <div id="mapInfoBody" style="padding:10px 14px 12px"></div>
+        </div>
+      </div>
       """}
     </div>
   </div>
@@ -780,12 +790,8 @@ function makeMarker(s) {
   }
   var rows = popRow('ID', s.id)+popRow('Group', s.group)+
              popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
-  m.bindPopup(
-    '<div style="min-width:210px">'+
-    '<div style="font-size:13px;font-weight:700;margin-bottom:6px;border-bottom:1px solid #eee;padding-bottom:5px">'+(s.name||'Sensor '+s.id)+'</div>'+
-    '<table style="font-size:12px;border-collapse:collapse;width:100%">'+rows+'</table>'+
-    '</div>', {maxWidth:300}
-  );
+  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
+  m.on('click', function() { showMapPanel(s.name||'Sensor '+s.id, bodyHtml); });
   return m;
 }
 
@@ -809,12 +815,9 @@ function makePath(p) {
              popRow('Status', STATUS_LABELS[p.status]||p.status, style.color)+
              popRow('Speed', fmtSpeed(d.speed_kmh))+
              popRow('Travel time', fmtTT(d.travel_time_s));
-  pl.bindPopup(
-    '<div style="min-width:200px">'+
-    '<div style="font-size:13px;font-weight:700;margin-bottom:6px;border-bottom:1px solid #eee;padding-bottom:5px">BT Path '+p.name+'</div>'+
-    '<table style="font-size:12px;border-collapse:collapse;width:100%">'+rows+'</table>'+
-    '</div>', {maxWidth:280}
-  );
+  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
+  pl._bodyHtml = bodyHtml;
+  pl._pathName = 'BT Path '+p.name;
   return pl;
 }
 
@@ -841,6 +844,7 @@ _btPaths.forEach(function(p) {
     _highlighted = pl;
     pl.setStyle({color:'#facc15', weight:7, opacity:1});
     pl.bringToFront();
+    showMapPanel(pl._pathName, pl._bodyHtml);
   });
   _paths.push(pl);
 });
@@ -912,12 +916,20 @@ function setFilter(btn, val) {
   applyVisibility();
 }
 
-_map.on('popupclose', function() {
+function showMapPanel(title, bodyHtml) {
+  var panel = document.getElementById('mapInfoPanel');
+  document.getElementById('mapInfoTitle').textContent = title;
+  document.getElementById('mapInfoBody').innerHTML = bodyHtml;
+  panel.style.display = '';
+}
+function closeMapPanel() {
+  document.getElementById('mapInfoPanel').style.display = 'none';
   if (_highlighted) {
     _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
+    _highlighted.bringToBack();
     _highlighted = null;
   }
-});
+}
 """ + '</script>' if has_map_data else ''}
 </body></html>"""
 
