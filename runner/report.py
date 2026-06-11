@@ -84,6 +84,8 @@ STATUS_COLOR = {
     "not_working": "#e24b4a",
     "malfunctioning": "#e24b4a",
     "failing": "#e24b4a",
+    "missing": "#e58e0a",
+    "stale": "#e58e0a",
 }
 
 STATUS_LABEL = {
@@ -91,10 +93,12 @@ STATUS_LABEL = {
     "ok": "OK",
     "no_traffic": "No traffic",
     "no_measurement": "No data",
-    "no_status": "No status",
-    "not_working": "Not working",
-    "malfunctioning": "Malfunctioning",
-    "failing": "Failing",
+    "no_status": "No status reported",
+    "not_working": "Controller not working",
+    "malfunctioning": "Speed = -1 (sensor fault)",
+    "failing": "No speed or travel time",
+    "missing": "Not present in feed",
+    "stale": "Feed data is stale",
 }
 
 GOOD_STATUSES = {"working", "ok"}
@@ -127,22 +131,35 @@ def build_sensor_stability_html(sensors):
         else:
             badge_bg, badge_color, badge_label = "#faece7", "#993c1d", "Unstable"
 
-        # Sparkline: last 40 runs as tiny squares
+        # Sparkline: last 40 runs as tiny squares with rich tooltips
         sparks = ""
         for h in history[-40:]:
             c = STATUS_COLOR.get(h["status"], "#9ca3af")
-            label = STATUS_LABEL.get(h["status"], h["status"])
-            ts = h["run_at"][:16].replace("T", " ")
-            sparks += f'<span title="{ts}: {label}" style="display:inline-block;width:6px;height:14px;border-radius:2px;background:{c};margin-right:1px"></span>'
+            reason = STATUS_LABEL.get(h["status"], h["status"])
+            ts = _to_cyprus(h["run_at"])
+            sparks += f'<span title="{ts} — {reason}" style="display:inline-block;width:6px;height:14px;border-radius:2px;background:{c};margin-right:1px"></span>'
 
-        gid = s["group_name"].replace(" ", "_")
+        # Last issue: most recent non-good entry
+        last_issue = next(
+            (STATUS_LABEL.get(h["status"], h["status"]) for h in reversed(history) if h["status"] not in GOOD_STATUSES),
+            None
+        )
+        last_issue_html = (
+            f'<span style="font-size:11px;color:#e24b4a">{last_issue}</span>'
+            if last_issue and history and history[-1]["status"] not in GOOD_STATUSES
+            else f'<span style="font-size:11px;color:var(--color-text-secondary)">{last_issue}</span>'
+            if last_issue
+            else '<span style="font-size:11px;color:#1d9e75">—</span>'
+        )
+
         rows += f"""
-        <tr data-group="{s['group_name']}" data-gid="{gid}">
+        <tr data-group="{s['group_name']}">
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{s['group_name']}</td>
           <td style="font-size:13px;color:var(--color-text-primary);font-family:monospace">{s['sensor_id']}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span></td>
-          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total} runs</td>
+          <td>{last_issue_html}</td>
+          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total}</td>
         </tr>"""
 
     return f"""
@@ -155,7 +172,7 @@ def build_sensor_stability_html(sensors):
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Status</th><th>Runs</th></tr></thead>
+      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Stability</th><th>Last issue</th><th>Runs</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -421,6 +438,17 @@ def generate_report() -> str:
     </div>
   </div>
 
+  <div class="panel" id="p-sensors">
+    <div class="panel-header" onclick="togglePanel('p-sensors')">
+      <span class="panel-title">Sensor stability</span>
+      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-sensors">
+      {sensor_stability_html}
+    </div>
+  </div>
+
   <div class="panel" id="p-trend">
     <div class="panel-header" onclick="togglePanel('p-trend')">
       <span class="panel-title">Pass / fail trend — last {len(chart_runs)} runs</span>
@@ -435,17 +463,6 @@ def generate_report() -> str:
         <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Passed</span>
         <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#e24b4a;display:inline-block"></span>Failed / errored</span>
       </div>
-    </div>
-  </div>
-
-  <div class="panel" id="p-sensors">
-    <div class="panel-header" onclick="togglePanel('p-sensors')">
-      <span class="panel-title">Sensor stability</span>
-      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
-    </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
-    <div class="panel-body" id="b-p-sensors">
-      {sensor_stability_html}
     </div>
   </div>
 
