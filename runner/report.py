@@ -802,6 +802,9 @@ function makeMarker(s) {
                        d.speed_kmh===-1?'#e24b4a':(d.speed_kmh>0?'#1d9e75':null));
     dataRows += popRow('Flow rate', fmtFlow(d.flow_veh_hr));
   }
+  if (s.group === 'VMS') {
+    dataRows += popRow('Message', d.message || null);
+  }
   var rows = popRow('ID', s.id)+popRow('Group', s.group)+
              popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';

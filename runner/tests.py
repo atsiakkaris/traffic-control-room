@@ -39,6 +39,7 @@ def vms_controller_status(response_text: str) -> dict:
     working, not_working, no_status = [], [], []
 
     sensors_map = {}
+    measurements_map = {}
     for ctrl in controllers:
         cid_el = ctrl.find("{*}vmsControllerReference")
         cid = cid_el.get("id", "unknown") if cid_el is not None else "unknown"
@@ -54,6 +55,11 @@ def vms_controller_status(response_text: str) -> dict:
             not_working.append(cid)
             sensors_map[cid] = "not_working"
 
+        # Extract text lines from the active VMS message
+        lines = [el.text.strip() for el in ctrl.findall(".//{*}textLine/{*}textLine")
+                 if el.text and el.text.strip()]
+        measurements_map[cid] = {"message": " | ".join(lines) if lines else None}
+
     detail_lines = [
         f"Working: {len(working)}",
         f"Not working: {len(not_working)}" + (f" — IDs: — {', '.join(not_working)}" if not_working else ""),
@@ -65,6 +71,7 @@ def vms_controller_status(response_text: str) -> dict:
         "passed": passed,
         "detail": " | ".join(detail_lines),
         "sensors": sensors_map,
+        "measurements": measurements_map,
     }
 
 
@@ -75,18 +82,10 @@ def predefined_paths_count(response_text: str) -> dict:
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
-    # Try wildcard namespace first, then fall back to searching all tags
     paths = root.findall(".//{*}predefinedLocation")
-
-    # Fallback: scan all elements for any tag ending in 'predefinedLocation'
     if not paths:
         paths = [el for el in root.iter() if el.tag.split("}")[-1].lower() == "predefinedlocation"]
 
-    # Second fallback: look for 'predefinedlocationreference' (used in live feed)
-    if not paths:
-        paths = [el for el in root.iter() if "predefinedlocation" in el.tag.split("}")[-1].lower()]
-
-    # Log all unique tag names to help debug if still 0
     if not paths:
         child_tags = list({el.tag.split("}")[-1] for el in root.iter()})[:20]
         return {
@@ -94,7 +93,9 @@ def predefined_paths_count(response_text: str) -> dict:
             "detail": f"No predefinedLocation elements found. Tags in response: {', '.join(child_tags)}"
         }
 
-    count = len(paths)
+    # Count unique IDs — each path appears twice in the XML (definition + reference)
+    unique_ids = {el.get("id") for el in paths if el.get("id")}
+    count = len(unique_ids) if unique_ids else len(paths) // 2
     return {
         "passed": count > 0,
         "detail": f"Total predefined paths: {count}"
