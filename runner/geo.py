@@ -20,12 +20,14 @@ def extract_measurement_site_coords(response_text):
         lat_el = site.find(".//{*}latitude")
         lon_el = site.find(".//{*}longitude")
         name_el = site.find(".//{*}measurementSiteName//{*}value")
+        code_el = site.find(".//{*}measurementSiteIdentification")
         if lat_el is not None and lon_el is not None:
             try:
                 result[sid] = {
                     "lat": float(lat_el.text),
                     "lon": float(lon_el.text),
                     "name": name_el.text if name_el is not None else sid,
+                    "site_code": code_el.text if code_el is not None else None,
                 }
             except (ValueError, TypeError):
                 pass

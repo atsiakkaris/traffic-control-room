@@ -103,6 +103,8 @@ STATUS_LABEL = {
 
 GOOD_STATUSES = {"working", "ok"}
 
+GROUP_DISPLAY = {"Traffic Detection": "Traffic Detection (SWARCO)"}
+
 
 def _humanize_failure(check_name, full_failure_reason):
     """Return a short, plain-English explanation of a check failure.
@@ -137,19 +139,46 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
-def build_sensor_stability_html(sensors):
+def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None):
     """Build the sensor stability panel HTML with a group dropdown."""
     if not sensors:
         return "<p style='color:var(--color-text-secondary);font-size:13px'>No sensor data recorded yet.</p>"
+
+    bt_path_names = bt_path_names or {}
+    all_sensor_coords = all_sensor_coords or {}
 
     groups = sorted({s["group_name"] for s in sensors})
 
     options = '<option value="all">All groups</option>'
     for g in groups:
-        options += f'<option value="{g}">{g}</option>'
+        display_g = GROUP_DISPLAY.get(g, g)
+        options += f'<option value="{g}">{display_g}</option>'
 
     rows = ""
-    for s in sorted(sensors, key=lambda x: (x["group_name"], x["sensor_id"])):
+    def _sensor_sort_key(x):
+        try:
+            return (x["group_name"], int(x["sensor_id"]))
+        except (ValueError, TypeError):
+            return (x["group_name"], x["sensor_id"])
+
+    for s in sorted(sensors, key=_sensor_sort_key):
+        # Compute human-readable display ID
+        if s["group_name"] == "Bluetooth Paths":
+            display_sensor_id = bt_path_names.get(s["sensor_id"], s["sensor_id"])
+        elif s["group_name"] == "Traffic Detection":
+            td_info = all_sensor_coords.get("Traffic Detection", {}).get(s["sensor_id"], {})
+            sc = td_info.get("site_code")
+            nm = td_info.get("name", s["sensor_id"])
+            display_sensor_id = f"{sc} ({nm})" if sc else nm
+        elif s["group_name"] == "VMS":
+            vms_info = all_sensor_coords.get("VMS", {}).get(s["sensor_id"], {})
+            nm = vms_info.get("name", "")
+            display_sensor_id = f"{nm} ({s['sensor_id']})" if nm and nm != s["sensor_id"] else s["sensor_id"]
+        else:
+            display_sensor_id = s["sensor_id"]
+
+        display_group = GROUP_DISPLAY.get(s["group_name"], s["group_name"])
+
         history = s["history"]
         total = len(history)
         good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
@@ -162,7 +191,7 @@ def build_sensor_stability_html(sensors):
         elif pct >= 70:
             badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Mostly on"
         else:
-            badge_bg, badge_color, badge_label = "#faece7", "#993c1d", "Unstable"
+            badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Unstable"
 
         # Sparkline: last 40 runs as tiny squares with rich tooltips
         sparks = ""
@@ -186,17 +215,32 @@ def build_sensor_stability_html(sensors):
 
         rows += f"""
         <tr data-group="{s['group_name']}">
-          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{s['group_name']}</td>
-          <td style="font-size:13px;color:var(--color-text-primary);font-family:monospace">{s['sensor_id']}</td>
+          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
+          <td style="font-size:12px;color:var(--color-text-primary);font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{display_sensor_id}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total}</td>
         </tr>"""
 
+    # Per-group good/total counts for dynamic bar
+    import json as _json
+    group_stats = {"all": {"good": 0, "total": 0}}
+    for s in sensors:
+        g = s["group_name"]
+        last_status = s["history"][-1]["status"] if s["history"] else "unknown"
+        is_good = last_status in GOOD_STATUSES
+        if g not in group_stats:
+            group_stats[g] = {"good": 0, "total": 0}
+        group_stats[g]["total"] += 1
+        group_stats["all"]["total"] += 1
+        if is_good:
+            group_stats[g]["good"] += 1
+            group_stats["all"]["good"] += 1
+    group_stats_json = _json.dumps(group_stats)
+
     return f"""
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
-      <div class="section-label" style="margin-bottom:0">Sensor stability</div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:16px">
       <select id="groupFilter" onchange="filterGroup(this.value)"
               style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
                      background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer">
@@ -208,10 +252,16 @@ def build_sensor_stability_html(sensors):
       <tbody>{rows}</tbody>
     </table>
     <script>
+    var _groupStats = {group_stats_json};
     function filterGroup(val) {{
       document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
         tr.style.display = (val === 'all' || tr.dataset.group === val) ? '' : 'none';
       }});
+      var stats = _groupStats[val] || _groupStats['all'];
+      var pct = stats.total > 0 ? Math.round(stats.good / stats.total * 100) : 0;
+      var color = pct >= 90 ? '#1d9e75' : (pct >= 55 ? '#e58e0a' : '#e24b4a');
+      var fill = document.getElementById('sensorBarFill');
+      if (fill) {{ fill.style.width = pct + '%'; fill.style.background = color; }}
     }}
     </script>"""
 
@@ -237,9 +287,8 @@ def generate_report() -> str:
     chart_passed = json.dumps([r["passed"] for r in chart_runs])
     chart_failed = json.dumps([r["failed"] + r["errored"] for r in chart_runs])
 
-    # Sensor stability
+    # Sensor stability (coord lookups fetched below with map data)
     all_sensors = fetch_sensor_stability()
-    sensor_stability_html = build_sensor_stability_html(all_sensors)
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
@@ -366,7 +415,7 @@ def generate_report() -> str:
                         no_measurement_ids  = sensor_data.get("no_measurement", [])
                         extra += f"""
                         <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detections — {d['total']} total</div>
+                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detection (SWARCO) — {d['total']} total</div>
                           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
                             <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
                               <div style="width:{td_pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
@@ -389,7 +438,7 @@ def generate_report() -> str:
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
             <i class="ti {icon}" style="font-size:22px;color:var(--color-text-secondary)" aria-hidden="true"></i>
             <div style="flex:1">
-              <div style="font-size:15px;font-weight:500;color:var(--color-text-primary)">{group_name}</div>
+              <div style="font-size:15px;font-weight:500;color:var(--color-text-primary)">{GROUP_DISPLAY.get(group_name, group_name)}</div>
               <div style="font-size:12px;color:var(--color-text-secondary)">{pass_count}/{len(results)} checks passing</div>
             </div>
             <span style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:4px 10px;border-radius:20px;background:{status_bg};color:{status_color}">
@@ -432,6 +481,10 @@ def generate_report() -> str:
     # Map data
     all_coords = fetch_sensor_coords()
     all_bt_paths = fetch_bt_path_coords()
+
+    # Build stability html now that coord lookups are available
+    _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
+    sensor_stability_html = build_sensor_stability_html(all_sensors, _bt_path_names, all_coords)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
     # Build sensor list for map: includes live measurements for rich popups
@@ -443,9 +496,18 @@ def generate_report() -> str:
             st = entry.get("status", "unknown")
             color = STATUS_COLOR.get(st, "#6b7280")
             label = STATUS_LABEL.get(st, "Unknown")
+            # Compute human-readable display name for popup title/body
+            if group_name_c == "Traffic Detection":
+                sc = c.get("site_code")
+                nm = c.get("name", sid)
+                display_name = f"{sc} ({nm})" if sc else nm
+            else:
+                display_name = c["name"]
             map_sensors.append({
                 "id": sid, "group": group_name_c,
-                "name": c["name"], "lat": c["lat"], "lon": c["lon"],
+                "group_display": GROUP_DISPLAY.get(group_name_c, group_name_c),
+                "name": c["name"], "display_name": display_name,
+                "lat": c["lat"], "lon": c["lon"],
                 "status": st, "label": label, "color": color,
                 "data": entry.get("data", {}),
             })
@@ -475,7 +537,7 @@ def generate_report() -> str:
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
-            '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">Traffic Detection</button>'
+            '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">Traffic Detection (SWARCO)</button>'
             '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">Bluetooth Sites</button>'
             '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">VMS</button>'
             '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">BT Paths</button>'
@@ -503,17 +565,17 @@ def generate_report() -> str:
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
     overall_pct = round(latest_run["passed"] / latest_total * 100)
-    overall_bar_color = "#1d9e75" if overall_pct == 100 else ("#e58e0a" if overall_pct >= 50 else "#e24b4a")
+    overall_bar_color = "#1d9e75" if overall_pct >= 90 else ("#e58e0a" if overall_pct >= 55 else "#e24b4a")
 
     trend_passed_total = sum(r["passed"] for r in chart_runs)
     trend_total = sum((r["total"] or 1) for r in chart_runs)
     trend_pct = round(trend_passed_total / trend_total * 100) if trend_total else 0
-    trend_bar_color = "#1d9e75" if trend_pct == 100 else ("#e58e0a" if trend_pct >= 50 else "#e24b4a")
+    trend_bar_color = "#1d9e75" if trend_pct >= 90 else ("#e58e0a" if trend_pct >= 55 else "#e24b4a")
 
     sensor_good = sum(1 for s in all_sensors if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
     sensor_total_count = len(all_sensors) or 1
     sensor_pct = round(sensor_good / sensor_total_count * 100)
-    sensor_bar_color = "#1d9e75" if sensor_pct == 100 else ("#e58e0a" if sensor_pct >= 50 else "#e24b4a")
+    sensor_bar_color = "#1d9e75" if sensor_pct >= 90 else ("#e58e0a" if sensor_pct >= 55 else "#e24b4a")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -634,7 +696,7 @@ def generate_report() -> str:
       <span class="panel-title">Sensor stability</span>
       <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
     <div class="panel-body" id="b-p-sensors">
       {sensor_stability_html}
     </div>
@@ -805,10 +867,10 @@ function makeMarker(s) {
   if (s.group === 'VMS') {
     dataRows += popRow('Message', d.message || null);
   }
-  var rows = popRow('ID', s.id)+popRow('Group', s.group)+
+  var rows = popRow('ID', s.id)+popRow('Group', s.group_display||s.group)+
              popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
-  m.on('click', function() { showMapPanel(s.name||'Sensor '+s.id, bodyHtml); });
+  m.on('click', function() { showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
   return m;
 }
 
@@ -892,7 +954,7 @@ _legend.onAdd = function() {
   }
   var body =
     '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
-    row(iconBox('ti-traffic-cone','#6b7280')+'<span style="color:#1a1a2e">Traffic Detection</span>')+
+    row(iconBox('ti-traffic-cone','#6b7280')+'<span style="color:#1a1a2e">Traffic Detection (SWARCO)</span>')+
     row(iconBox('ti-bluetooth','#6b7280')+'<span style="color:#1a1a2e">Bluetooth Site</span>')+
     row(iconBox('ti-road-sign','#6b7280','6px')+'<span style="color:#1a1a2e">VMS Controller</span>')+
     row(line('#1d9e75','3')+'<span style="color:#1a1a2e">BT Path (OK)</span>')+
