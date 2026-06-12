@@ -191,7 +191,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         elif pct >= 70:
             badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Mostly on"
         else:
-            badge_bg, badge_color, badge_label = "#faece7", "#993c1d", "Unstable"
+            badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Unstable"
 
         # Sparkline: last 40 runs as tiny squares with rich tooltips
         sparks = ""
@@ -259,7 +259,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       }});
       var stats = _groupStats[val] || _groupStats['all'];
       var pct = stats.total > 0 ? Math.round(stats.good / stats.total * 100) : 0;
-      var color = pct === 100 ? '#1d9e75' : (pct >= 50 ? '#e58e0a' : '#e24b4a');
+      var color = pct >= 90 ? '#1d9e75' : (pct >= 55 ? '#e58e0a' : '#e24b4a');
       var fill = document.getElementById('sensorBarFill');
       if (fill) {{ fill.style.width = pct + '%'; fill.style.background = color; }}
     }}
@@ -565,17 +565,17 @@ def generate_report() -> str:
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
     overall_pct = round(latest_run["passed"] / latest_total * 100)
-    overall_bar_color = "#1d9e75" if overall_pct == 100 else ("#e58e0a" if overall_pct >= 50 else "#e24b4a")
+    overall_bar_color = "#1d9e75" if overall_pct >= 90 else ("#e58e0a" if overall_pct >= 55 else "#e24b4a")
 
     trend_passed_total = sum(r["passed"] for r in chart_runs)
     trend_total = sum((r["total"] or 1) for r in chart_runs)
     trend_pct = round(trend_passed_total / trend_total * 100) if trend_total else 0
-    trend_bar_color = "#1d9e75" if trend_pct == 100 else ("#e58e0a" if trend_pct >= 50 else "#e24b4a")
+    trend_bar_color = "#1d9e75" if trend_pct >= 90 else ("#e58e0a" if trend_pct >= 55 else "#e24b4a")
 
     sensor_good = sum(1 for s in all_sensors if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
     sensor_total_count = len(all_sensors) or 1
     sensor_pct = round(sensor_good / sensor_total_count * 100)
-    sensor_bar_color = "#1d9e75" if sensor_pct == 100 else ("#e58e0a" if sensor_pct >= 50 else "#e24b4a")
+    sensor_bar_color = "#1d9e75" if sensor_pct >= 90 else ("#e58e0a" if sensor_pct >= 55 else "#e24b4a")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
