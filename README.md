@@ -20,7 +20,7 @@ Updates automatically within ~1 minute of each scheduled run.
 | **Traffic Detection** | TD Live | Sensor speed status — working / no traffic / malfunctioning / no data; average flow rate |
 | **Bluetooth** | BT Inventory | Valid XML; total device count |
 | **Bluetooth** | BT Paths Inventory | Valid XML; predefined path count |
-| **Bluetooth** | BT Paths Live (FCD) | Speed and travel time present for all 513 paths |
+| **Bluetooth** | BT Paths Live (FCD) | Speed and travel time present for all predefined paths |
 | **VMS** | VMS Inventory | Valid XML |
 | **VMS** | VMS Live Data | Working / not-working / no-status controller counts |
 
@@ -34,7 +34,7 @@ All endpoints also check: HTTP 200 status, response time within limit, and feed 
 
 **Sensor Map** — interactive Leaflet.js map of Cyprus with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
-- All 513 BT paths drawn as polylines (green = OK, red = issue, grey = no data)
+- All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data)
 - Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
 
@@ -137,6 +137,6 @@ Key tables:
 | `test_results` | One row per endpoint per run — status, HTTP code, response time, failure reason, check summary |
 | `sensor_results` | One row per sensor/path per run — status and (in LIVE_MODE) measurement data as JSON |
 | `sensor_coords` | Latest lat/lon for each sensor, populated from inventory feeds |
-| `bt_path_coords` | GML coordinates for all 513 BT paths, used to draw polylines on the map |
+| `bt_path_coords` | GML coordinates for all predefined BT paths, used to draw polylines on the map |
 
 To reset history, delete `results/history.db`. The next run creates a fresh database.

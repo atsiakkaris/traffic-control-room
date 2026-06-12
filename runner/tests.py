@@ -85,6 +85,8 @@ def predefined_paths_count(response_text: str) -> dict:
     paths = root.findall(".//{*}predefinedLocation")
     if not paths:
         paths = [el for el in root.iter() if el.tag.split("}")[-1].lower() == "predefinedlocation"]
+    if not paths:
+        paths = [el for el in root.iter() if "predefinedlocation" in el.tag.split("}")[-1].lower()]
 
     if not paths:
         child_tags = list({el.tag.split("}")[-1] for el in root.iter()})[:20]

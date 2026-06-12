@@ -61,6 +61,7 @@ def init_db():
             lat         REAL NOT NULL,
             lon         REAL NOT NULL,
             name        TEXT,
+            site_code   TEXT,
             PRIMARY KEY (sensor_id, group_name)
         );
 
@@ -89,9 +90,14 @@ def init_db():
     if "sensor_coords" not in tables:
         conn.execute("""CREATE TABLE sensor_coords (
             sensor_id TEXT NOT NULL, group_name TEXT NOT NULL,
-            lat REAL NOT NULL, lon REAL NOT NULL, name TEXT,
+            lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, site_code TEXT,
             PRIMARY KEY (sensor_id, group_name))""")
         conn.commit()
+    else:
+        sc_cols = [r[1] for r in conn.execute("PRAGMA table_info(sensor_coords)").fetchall()]
+        if "site_code" not in sc_cols:
+            conn.execute("ALTER TABLE sensor_coords ADD COLUMN site_code TEXT")
+            conn.commit()
     if "bt_path_coords" not in tables:
         conn.execute("""CREATE TABLE bt_path_coords (
             path_id TEXT PRIMARY KEY, name TEXT, coords TEXT)""")
@@ -206,15 +212,15 @@ def fetch_sensor_live_data_for_run(run_id):
 
 
 def upsert_sensor_coords(group_name, coords_dict):
-    """coords_dict: {sensor_id: {lat, lon, name}}"""
+    """coords_dict: {sensor_id: {lat, lon, name, site_code?}}"""
     conn = get_connection()
     for sid, c in coords_dict.items():
         conn.execute(
-            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name)
-               VALUES (?,?,?,?,?)
+            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code)
+               VALUES (?,?,?,?,?,?)
                ON CONFLICT(sensor_id, group_name) DO UPDATE
-               SET lat=excluded.lat, lon=excluded.lon, name=excluded.name""",
-            (sid, group_name, c["lat"], c["lon"], c.get("name", sid))
+               SET lat=excluded.lat, lon=excluded.lon, name=excluded.name, site_code=excluded.site_code""",
+            (sid, group_name, c["lat"], c["lon"], c.get("name", sid), c.get("site_code"))
         )
     conn.commit()
     conn.close()
@@ -237,16 +243,18 @@ def upsert_bt_path_coords(paths_dict):
 
 
 def fetch_sensor_coords():
-    """Return {group_name: {sensor_id: {lat, lon, name}}}"""
+    """Return {group_name: {sensor_id: {lat, lon, name, site_code}}}"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT sensor_id, group_name, lat, lon, name FROM sensor_coords"
+        "SELECT sensor_id, group_name, lat, lon, name, site_code FROM sensor_coords"
     ).fetchall()
     conn.close()
     result = {}
     for r in rows:
         result.setdefault(r["group_name"], {})[r["sensor_id"]] = {
-            "lat": r["lat"], "lon": r["lon"], "name": r["name"] or r["sensor_id"]
+            "lat": r["lat"], "lon": r["lon"],
+            "name": r["name"] or r["sensor_id"],
+            "site_code": r["site_code"],
         }
     return result
 
