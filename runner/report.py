@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from zoneinfo import ZoneInfo
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history
 
 CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
 
@@ -328,11 +328,38 @@ def generate_report() -> str:
 
     # Chart data
     chart_runs = list(reversed(runs[:30]))
-    chart_passed = json.dumps([r["passed"] for r in chart_runs])
-    chart_failed = json.dumps([r["failed"] + r["errored"] for r in chart_runs])
 
     # Sensor stability (coord lookups fetched below with map data)
     all_sensors = fetch_sensor_stability()
+
+    # Sensor health history — build per-run lookup keyed by run_id
+    raw_health = fetch_sensor_health_history(60)
+    health_by_run = {}
+    for row in raw_health:
+        rid = row["run_id"]
+        if rid not in health_by_run:
+            health_by_run[rid] = {"td": None, "vms": None, "bt": None, "feed_issues": []}
+        cs = row.get("check_summary") or ""
+        if row["test_name"] == "Traffic Detection Live":
+            health_by_run[rid]["td"] = _extract_health_pct(cs, "sensor_speed_status")
+            if row["status"] != "pass":
+                health_by_run[rid]["feed_issues"].append("Traffic Detection")
+        elif row["test_name"] == "VMS Live Data":
+            health_by_run[rid]["vms"] = _extract_health_pct(cs, "vms_controller_status")
+            if row["status"] != "pass":
+                health_by_run[rid]["feed_issues"].append("VMS")
+        elif row["test_name"] == "Bluetooth Paths Live (FCD)":
+            health_by_run[rid]["bt"] = _extract_health_pct(cs, "bt_paths_speed_and_traveltime")
+            if row["status"] != "pass":
+                health_by_run[rid]["feed_issues"].append("BT Paths")
+
+    def _pct_or_null(run_id, key):
+        v = health_by_run.get(run_id, {}).get(key)
+        return round(v, 1) if v is not None else None
+
+    chart_td  = json.dumps([_pct_or_null(r["run_id"], "td")  for r in chart_runs])
+    chart_vms = json.dumps([_pct_or_null(r["run_id"], "vms") for r in chart_runs])
+    chart_bt  = json.dumps([_pct_or_null(r["run_id"], "bt")  for r in chart_runs])
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
@@ -361,7 +388,7 @@ def generate_report() -> str:
         elif sensor_degraded:
             status_color = "#e58e0a"
             status_bg    = "#faeeda"
-            status_label = f"Degraded ({round(min_health_pct)}%)"
+            status_label = f"Deteriorated ({round(min_health_pct)}%)"
             status_icon  = "ti-alert-triangle"
         else:
             status_color = "#1d9e75"
@@ -555,25 +582,41 @@ def generate_report() -> str:
         icon = group_icons.get(gname, "ti-device-analytics")
         group_cards += group_status_card(gname, icon, gresults)
 
-    # Run history rows
+    def _hcell(pct):
+        if pct is None:
+            return '<td style="padding:9px 14px;color:var(--color-text-secondary);font-size:12px">—</td>'
+        color = _health_color(pct)
+        bg    = "#e1f5ee" if pct >= 90 else ("#faeeda" if pct >= HEALTH_WARNING_PCT else "#fcebeb")
+        tc    = "#0f6e56" if pct >= 90 else ("#854f0b" if pct >= HEALTH_WARNING_PCT else "#a32d2d")
+        bw    = round(pct)
+        return (f'<td style="padding:9px 14px">'
+                f'<span style="font-size:11px;font-weight:500;padding:2px 7px;border-radius:20px;background:{bg};color:{tc}">{round(pct)}%</span>'
+                f'<div style="display:inline-block;vertical-align:middle;margin-left:6px;width:52px;height:4px;'
+                f'background:var(--color-border-tertiary);border-radius:2px">'
+                f'<div style="width:{bw}%;height:4px;border-radius:2px;background:{color}"></div></div></td>')
+
     history_rows = ""
     for run in runs[:20]:
-        total = run["total"] or 1
-        pct = round(run["passed"] / total * 100)
-        ok = run["failed"] == 0 and run["errored"] == 0
-        bar_color = "#1d9e75" if ok else "#e24b4a"
+        h = health_by_run.get(run["run_id"], {})
         ts = _to_cyprus(run["run_at"])
+        issues = h.get("feed_issues", [])
+        if issues:
+            feed_cell = (f'<td style="padding:9px 14px"><span style="font-size:11px;font-weight:500;padding:2px 7px;'
+                         f'border-radius:20px;background:#fcebeb;color:#a32d2d">'
+                         f'<i class="ti ti-alert-triangle" style="font-size:11px;vertical-align:-1px" aria-hidden="true"></i>'
+                         f' {", ".join(issues)}</span></td>')
+        else:
+            feed_cell = ('<td style="padding:9px 14px"><span style="font-size:11px;font-weight:500;padding:2px 7px;'
+                         'border-radius:20px;background:#e1f5ee;color:#0f6e56">'
+                         '<i class="ti ti-circle-check" style="font-size:11px;vertical-align:-1px" aria-hidden="true"></i>'
+                         ' All up</span></td>')
         history_rows += f"""
         <tr>
-          <td style="color:var(--color-text-secondary);font-size:13px">{ts}</td>
-          <td style="font-weight:500;color:{'#1d9e75' if ok else '#e24b4a'}">{run['passed']}/{total}</td>
-          <td style="color:{'#e24b4a' if run['failed'] > 0 else 'var(--color-text-secondary)'}">{run['failed']}</td>
-          <td style="color:{'#e58e0a' if run['errored'] > 0 else 'var(--color-text-secondary)'}">{run['errored']}</td>
-          <td>
-            <div style="background:var(--color-border-tertiary);border-radius:3px;height:6px;width:100px">
-              <div style="background:{bar_color};height:6px;border-radius:3px;width:{pct}%"></div>
-            </div>
-          </td>
+          <td style="color:var(--color-text-secondary);font-size:13px;padding:9px 14px">{ts}</td>
+          {_hcell(h.get("td"))}
+          {_hcell(h.get("vms"))}
+          {_hcell(h.get("bt"))}
+          {feed_cell}
         </tr>"""
 
     # Map data
@@ -665,10 +708,15 @@ def generate_report() -> str:
     overall_pct = round(latest_run["passed"] / latest_total * 100)
     overall_bar_color = "#1d9e75" if overall_pct >= 90 else ("#e58e0a" if overall_pct >= 55 else "#e24b4a")
 
-    trend_passed_total = sum(r["passed"] for r in chart_runs)
-    trend_total = sum((r["total"] or 1) for r in chart_runs)
-    trend_pct = round(trend_passed_total / trend_total * 100) if trend_total else 0
-    trend_bar_color = "#1d9e75" if trend_pct >= 90 else ("#e58e0a" if trend_pct >= 55 else "#e24b4a")
+    health_vals = [v for r in chart_runs for k in ("td", "vms", "bt")
+                   for v in [health_by_run.get(r["run_id"], {}).get(k)] if v is not None]
+    trend_pct = round(sum(health_vals) / len(health_vals)) if health_vals else 0
+    trend_bar_color = _health_color(trend_pct)
+
+    latest_h = health_by_run.get(latest_run["run_id"], {})
+    latest_hvals = [v for k in ("td", "vms", "bt") for v in [latest_h.get(k)] if v is not None]
+    history_pct = round(sum(latest_hvals) / len(latest_hvals)) if latest_hvals else overall_pct
+    history_bar_color = _health_color(history_pct)
 
     sensor_good = sum(1 for s in all_sensors if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
     sensor_total_count = len(all_sensors) or 1
@@ -802,17 +850,18 @@ def generate_report() -> str:
 
   <div class="panel" id="p-trend">
     <div class="panel-header" onclick="togglePanel('p-trend')">
-      <span class="panel-title">Pass / fail trend — last {len(chart_runs)} runs</span>
+      <span class="panel-title">Sensor health trend — last {len(chart_runs)} runs</span>
       <div class="panel-chevron open" id="c-p-trend"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{trend_pct}%;background:{trend_bar_color}"></div></div>
     <div class="panel-body" id="b-p-trend">
       <div style="position:relative;height:180px">
-        <canvas id="trendChart" role="img" aria-label="Stacked bar chart of passed and failed test counts across recent runs"></canvas>
+        <canvas id="trendChart" role="img" aria-label="Line chart of sensor health percentages across recent runs"></canvas>
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted)">
-        <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Passed</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;border-radius:2px;background:#e24b4a;display:inline-block"></span>Failed / errored</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Traffic Detection</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#378add;display:inline-block"></span>VMS</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#e58e0a;display:inline-block"></span>BT Paths</span>
       </div>
     </div>
   </div>
@@ -822,10 +871,10 @@ def generate_report() -> str:
       <span class="panel-title">Run history</span>
       <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
+    <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
     <div class="panel-body" id="b-p-history">
       <table>
-        <thead><tr><th>Time (EET)</th><th>Passed</th><th>Failed</th><th>Errored</th><th>Pass rate</th></tr></thead>
+        <thead><tr><th>Time (EET)</th><th>Traffic Detection</th><th>VMS</th><th>BT Paths</th><th>Feed</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
@@ -862,20 +911,21 @@ function toggleDark() {{
 }}
 
 window._trendChart = new Chart(document.getElementById('trendChart'), {{
-  type: 'bar',
+  type: 'line',
   data: {{
     labels: {chart_labels},
     datasets: [
-      {{ label: 'Passed', data: {chart_passed}, backgroundColor: '#1d9e75' }},
-      {{ label: 'Failed/Error', data: {chart_failed}, backgroundColor: '#e24b4a' }}
+      {{ label: 'Traffic Detection', data: {chart_td},  borderColor: '#1d9e75', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }},
+      {{ label: 'VMS',               data: {chart_vms}, borderColor: '#378add', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }},
+      {{ label: 'BT Paths',          data: {chart_bt},  borderColor: '#e58e0a', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }}
     ]
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
     plugins: {{ legend: {{ display: false }} }},
     scales: {{
-      x: {{ stacked: true, ticks: {{ font: {{ size: 11 }}, color: '#9ca3af', maxRotation: 45, autoSkip: true, maxTicksLimit: 15 }} }},
-      y: {{ stacked: true, beginAtZero: true, ticks: {{ stepSize: 1, font: {{ size: 11 }}, color: '#9ca3af' }}, grid: {{ color: 'rgba(128,128,128,0.1)' }} }}
+      x: {{ ticks: {{ font: {{ size: 11 }}, color: '#9ca3af', maxRotation: 45, autoSkip: true, maxTicksLimit: 15 }} }},
+      y: {{ min: 0, max: 100, ticks: {{ stepSize: 20, font: {{ size: 11 }}, color: '#9ca3af', callback: function(v) {{ return v + '%' }} }}, grid: {{ color: 'rgba(128,128,128,0.1)' }} }}
     }}
   }}
 }});

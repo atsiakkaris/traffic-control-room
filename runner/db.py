@@ -273,6 +273,22 @@ def fetch_bt_path_coords():
     }
 
 
+def fetch_sensor_health_history(limit=30):
+    """Return per-run health data for sensor check endpoints, newest-first.
+    One row per sensor endpoint per run (up to limit runs × 3 endpoints)."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
+        FROM runs r
+        JOIN test_results tr ON tr.run_id = r.run_id
+        WHERE tr.test_name IN ('Traffic Detection Live', 'VMS Live Data', 'Bluetooth Paths Live (FCD)')
+        ORDER BY r.run_at DESC
+        LIMIT ?
+    """, (limit * 3,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def fetch_sensor_stability():
     """Return per-sensor history: [{group_name, sensor_id, history: [{run_at, status}]}]"""
     conn = get_connection()
