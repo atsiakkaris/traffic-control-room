@@ -23,15 +23,15 @@ def _to_cyprus(utc_iso: str) -> str:
 REPORT_PATH = Path("reports/latest.html")
 
 
-def parse_vms_detail(failure_reason):
-    if not failure_reason or "vms_controller_status" not in failure_reason:
+def parse_vms_detail(text):
+    if not text or "vms_controller_status" not in text:
         return None
     import re
-    working = re.search(r"Working: (\d+)", failure_reason)
-    not_working = re.search(r"Not working: (\d+)", failure_reason)
-    no_status = re.search(r"No status: (\d+)", failure_reason)
-    ids_match = re.search(r"Not working: \d+ — ([\d ,\(\)a-zA-Z]+?)(?:\||\Z)", failure_reason)
-    ns_ids_match = re.search(r"No status: \d+ — ([\d ,]+?)(?:\||\Z)", failure_reason)
+    working = re.search(r"Working: (\d+)", text)
+    not_working = re.search(r"Not working: (\d+)", text)
+    no_status = re.search(r"No status: (\d+)", text)
+    ids_match = re.search(r"Not working: \d+ — ([\d ,\(\)a-zA-Z]+?)(?:\||\Z)", text)
+    ns_ids_match = re.search(r"No status: \d+ — ([\d ,]+?)(?:\||\Z)", text)
     return {
         "working": int(working.group(1)) if working else 0,
         "not_working": int(not_working.group(1)) if not_working else 0,
@@ -41,12 +41,12 @@ def parse_vms_detail(failure_reason):
     }
 
 
-def parse_bt_detail(failure_reason):
-    if not failure_reason or "bt_paths_speed_and_traveltime" not in failure_reason:
+def parse_bt_detail(text):
+    if not text or "bt_paths_speed_and_traveltime" not in text:
         return None
     import re
-    speed_ok = re.search(r"Speed OK: (\d+)/(\d+)", failure_reason)
-    failing = re.search(r"Failing paths: (.+?)$", failure_reason)
+    speed_ok = re.search(r"Speed OK: (\d+)/(\d+)", text)
+    failing = re.search(r"Failing paths: (.+?)$", text)
     return {
         "speed_ok": int(speed_ok.group(1)) if speed_ok else 0,
         "total": int(speed_ok.group(2)) if speed_ok else 0,
@@ -54,16 +54,16 @@ def parse_bt_detail(failure_reason):
     }
 
 
-def parse_sensor_detail(failure_reason):
-    if not failure_reason or "sensor_speed_status" not in failure_reason:
+def parse_sensor_detail(text):
+    if not text or "sensor_speed_status" not in text:
         return None
     import re
-    working = re.search(r"Working: (\d+)/(\d+)", failure_reason)
-    no_traffic = re.search(r"No traffic \(speed=0\): (\d+)", failure_reason)
-    malfunction = re.search(r"Malfunctioning \(speed=-1\): (\d+)", failure_reason)
-    no_meas = re.search(r"No measurement: (\d+)", failure_reason)
-    mal_ids = re.search(r"Malfunctioning \(speed=-1\): \d+ — ([\d ,]+?)(?:\||\Z)", failure_reason)
-    avg_flow = re.search(r"Avg flow rate: ([\d.]+)", failure_reason)
+    working = re.search(r"Working: (\d+)/(\d+)", text)
+    no_traffic = re.search(r"No traffic \(speed=0\): (\d+)", text)
+    malfunction = re.search(r"Malfunctioning \(speed=-1\): (\d+)", text)
+    no_meas = re.search(r"No measurement: (\d+)", text)
+    mal_ids = re.search(r"Malfunctioning \(speed=-1\): \d+ — ([\d ,]+?)(?:\||\Z)", text)
+    avg_flow = re.search(r"Avg flow rate: ([\d.]+)", text)
     return {
         "working": int(working.group(1)) if working else 0,
         "total": int(working.group(2)) if working else 0,
@@ -104,6 +104,38 @@ STATUS_LABEL = {
 GOOD_STATUSES = {"working", "ok"}
 
 GROUP_DISPLAY = {"Traffic Detection": "Traffic Detection (SWARCO)"}
+
+SENSOR_CHECKS = {"sensor_speed_status", "vms_controller_status", "bt_paths_speed_and_traveltime"}
+HEALTH_WARNING_PCT = 80
+
+
+def _extract_health_pct(check_summary, check_name):
+    """Extract a 0-100 health percentage from a check_summary string for a given sensor check."""
+    import re
+    if not check_summary or check_name not in check_summary:
+        return None
+    if check_name == "sensor_speed_status":
+        m = re.search(r"Working: (\d+)/(\d+)", check_summary)
+        if m and int(m.group(2)) > 0:
+            return int(m.group(1)) / int(m.group(2)) * 100
+    elif check_name == "vms_controller_status":
+        w  = re.search(r"Working: (\d+)", check_summary)
+        nw = re.search(r"Not working: (\d+)", check_summary)
+        ns = re.search(r"No status: (\d+)", check_summary)
+        if w:
+            total = int(w.group(1)) + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
+            return int(w.group(1)) / total * 100 if total else None
+    elif check_name == "bt_paths_speed_and_traveltime":
+        m = re.search(r"Speed OK: (\d+)/(\d+)", check_summary)
+        if m and int(m.group(2)) > 0:
+            return int(m.group(1)) / int(m.group(2)) * 100
+    return None
+
+
+def _health_color(pct):
+    if pct is None:
+        return "#9ca3af"
+    return "#1d9e75" if pct >= 90 else ("#e58e0a" if pct >= HEALTH_WARNING_PCT else "#e24b4a")
 
 
 def _humanize_failure(check_name, full_failure_reason):
@@ -201,7 +233,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
             ts = _to_cyprus(h["run_at"])
             sparks += f'<span title="{ts} — {reason}" style="display:inline-block;width:6px;height:14px;border-radius:2px;background:{c};margin-right:1px"></span>'
 
-        # Last issue: most recent non-good entry, coloured to match the sparkline
+        # Last issue: most recent non-good entry
         last_bad = next(
             (h for h in reversed(history) if h["status"] not in GOOD_STATUSES),
             None
@@ -213,6 +245,16 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         else:
             last_issue_html = '<span style="font-size:11px;color:#1d9e75">—</span>'
 
+        # Last seen working: most recent good entry
+        last_good = next(
+            (h for h in reversed(history) if h["status"] in GOOD_STATUSES),
+            None
+        )
+        if last_good:
+            last_good_html = f'<span style="font-size:11px;color:var(--color-text-secondary)">{_to_cyprus(last_good["run_at"])}</span>'
+        else:
+            last_good_html = '<span style="font-size:11px;color:#e24b4a">Never</span>'
+
         rows += f"""
         <tr data-group="{s['group_name']}">
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
@@ -220,6 +262,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td style="white-space:nowrap">{sparks}</td>
           <td><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span></td>
           <td>{last_issue_html}</td>
+          <td>{last_good_html}</td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total}</td>
         </tr>"""
 
@@ -248,7 +291,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Stability</th><th>Last issue</th><th>Runs</th></tr></thead>
+      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>Runs</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -297,40 +340,93 @@ def generate_report() -> str:
     def group_status_card(group_name, icon, results):
         all_pass = all(r["status"] == "pass" for r in results)
         any_error = any(r["status"] == "error" for r in results)
-        status_color = "#1d9e75" if all_pass else ("#e58e0a" if any_error else "#e24b4a")
-        status_bg = "#e1f5ee" if all_pass else ("#faeeda" if any_error else "#fcebeb")
-        status_label = "Operational" if all_pass else ("Degraded" if any_error else "Issues detected")
-        status_icon = "ti-circle-check" if all_pass else ("ti-alert-triangle" if any_error else "ti-circle-x")
+
+        # Compute minimum sensor health across all endpoints in this group
+        min_health_pct = None
+        for r in results:
+            cs = r.get("check_summary", "") or ""
+            for cn in SENSOR_CHECKS:
+                pct = _extract_health_pct(cs, cn)
+                if pct is not None:
+                    min_health_pct = pct if min_health_pct is None else min(min_health_pct, pct)
+
+        sensor_degraded = min_health_pct is not None and min_health_pct < HEALTH_WARNING_PCT
+
+        if not all_pass:
+            status_color = "#e58e0a" if any_error else "#e24b4a"
+            status_bg    = "#faeeda" if any_error else "#fcebeb"
+            status_label = "Degraded" if any_error else "Feed issue"
+            status_icon  = "ti-alert-triangle" if any_error else "ti-circle-x"
+        elif sensor_degraded:
+            status_color = "#e58e0a"
+            status_bg    = "#faeeda"
+            status_label = f"Degraded ({round(min_health_pct)}%)"
+            status_icon  = "ti-alert-triangle"
+        else:
+            status_color = "#1d9e75"
+            status_bg    = "#e1f5ee"
+            status_label = "Operational" + (f" ({round(min_health_pct)}%)" if min_health_pct is not None else "")
+            status_icon  = "ti-circle-check"
+
         pass_count = sum(1 for r in results if r["status"] == "pass")
 
         detail_rows = ""
         for r in results:
-            dot_color = "#1d9e75" if r["status"] == "pass" else ("#e58e0a" if r["status"] == "error" else "#e24b4a")
+            cs = r.get("check_summary", "") or ""
 
+            # Dot color: feed failure = red/amber; sensor check = health-based; otherwise green
+            if r["status"] != "pass":
+                dot_color = "#e58e0a" if r["status"] == "error" else "#e24b4a"
+            else:
+                h_pct = None
+                for cn in SENSOR_CHECKS:
+                    h_pct = _extract_health_pct(cs, cn)
+                    if h_pct is not None:
+                        break
+                dot_color = _health_color(h_pct) if h_pct is not None else "#1d9e75"
+
+            # Failure lines: only for non-passing feed-level checks (sensor checks excluded)
             failure_lines = ""
             if r["status"] != "pass" and r.get("failure_reason"):
                 import re as _re2
                 fr = r["failure_reason"]
-                # Find all check names that open a segment (e.g. "sensor_speed_status: ...")
                 check_names_found = _re2.findall(r"(?:^| \| )([a-z][a-z_]+): ", fr)
-                if check_names_found:
+                feed_checks = [cn for cn in check_names_found if cn not in SENSOR_CHECKS]
+                if feed_checks:
                     seen = set()
-                    for cname in check_names_found:
+                    for cname in feed_checks:
                         if cname not in seen:
                             seen.add(cname)
                             label = _humanize_failure(cname, fr)
                             failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{label}</div>'
                 else:
-                    # Plain HTTP/timeout message with no check names
                     failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{fr}</div>'
 
-            # For Bluetooth Inventory, show device count from check_summary
+            # Name suffix: device count for BT Inventory; health fraction for sensor checks
             name_suffix = ""
-            if r["test_name"] == "Bluetooth Inventory" and r.get("check_summary"):
-                import re as _re
-                m = _re.search(r"bt_site_count: (\d+)", r["check_summary"])
+            import re as _re
+            if r["test_name"] == "Bluetooth Inventory" and cs:
+                m = _re.search(r"bt_site_count: (\d+)", cs)
                 if m:
                     name_suffix = f' <span style="font-size:11px;color:var(--color-text-secondary)">— {m.group(1)} devices</span>'
+            elif "sensor_speed_status" in cs:
+                m = _re.search(r"Working: (\d+)/(\d+)", cs)
+                if m:
+                    pct = int(m.group(1)) / int(m.group(2)) * 100
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} working</span>'
+            elif "vms_controller_status" in cs:
+                w = _re.search(r"Working: (\d+)", cs)
+                nw = _re.search(r"Not working: (\d+)", cs)
+                ns = _re.search(r"No status: (\d+)", cs)
+                if w:
+                    total = int(w.group(1)) + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
+                    pct = int(w.group(1)) / total * 100 if total else 0
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {w.group(1)}/{total} working</span>'
+            elif "bt_paths_speed_and_traveltime" in cs:
+                m = _re.search(r"Speed OK: (\d+)/(\d+)", cs)
+                if m:
+                    pct = int(m.group(1)) / int(m.group(2)) * 100
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} with data</span>'
 
             detail_rows += f"""
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
@@ -341,9 +437,8 @@ def generate_report() -> str:
               {failure_lines}
             </div>"""
 
-        # Extra detail block — uses sensor_results DB for full untruncated ID lists
+        # Extra detail block — always shown for sensor checks; uses sensor_results DB for full ID lists
         extra = ""
-        # BT path statuses are stored under "Bluetooth Paths" to avoid ID collision with BT sites
         sensor_data_key = "Bluetooth Paths" if group_name == "Bluetooth" else group_name
         sensor_data = latest_sensor_statuses.get(sensor_data_key, {})
 
@@ -364,74 +459,76 @@ def generate_report() -> str:
             </details>"""
 
         for r in results:
-            if r["status"] != "pass" and r.get("failure_reason"):
-                fr = r["failure_reason"]
-                if "vms_controller_status" in fr:
-                    d = parse_vms_detail(fr)
-                    if d:
-                        vms_total = d['working'] + d['not_working'] + d['no_status']
-                        vms_pct = round(d['working'] / vms_total * 100) if vms_total else 0
-                        not_working_ids = sensor_data.get("not_working", [])
-                        no_status_ids   = sensor_data.get("no_status", [])
-                        extra += f"""
-                        <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">VMS Controllers</div>
-                          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-                            <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
-                              <div style="width:{vms_pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
-                            </div>
-                            <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{vms_total}</span>
-                          </div>
-                          <div style="display:flex;gap:16px;margin-bottom:4px">
-                            <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
-                            <span style="color:#e24b4a"><b>{d['not_working']}</b> not working</span>
-                            <span style="color:#888"><b>{d['no_status']}</b> no status</span>
-                          </div>
-                          {_collapsible_ids("not working", "#e24b4a", not_working_ids)}
-                          {_collapsible_ids("no status", "#888", no_status_ids)}
-                        </div>"""
-                elif "bt_paths_speed_and_traveltime" in fr:
-                    d = parse_bt_detail(fr)
-                    if d:
-                        pct = round(d['speed_ok'] / d['total'] * 100) if d['total'] else 0
-                        failing_ids = sensor_data.get("failing", [])
-                        extra += f"""
-                        <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">BT Paths with data</div>
-                          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-                            <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
-                              <div style="width:{pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
-                            </div>
-                            <span style="color:var(--color-text-primary);font-weight:500">{d['speed_ok']}/{d['total']}</span>
-                          </div>
-                          {_collapsible_ids("failing paths", "#e24b4a", failing_ids)}
-                        </div>"""
-                elif "sensor_speed_status" in fr:
-                    d = parse_sensor_detail(fr)
-                    if d:
-                        td_pct = round(d['working'] / d['total'] * 100) if d['total'] else 0
-                        malfunctioning_ids  = sensor_data.get("malfunctioning", [])
-                        no_traffic_ids      = sensor_data.get("no_traffic", [])
-                        no_measurement_ids  = sensor_data.get("no_measurement", [])
-                        extra += f"""
-                        <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                          <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detection (SWARCO) — {d['total']} total</div>
-                          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-                            <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
-                              <div style="width:{td_pct}%;height:6px;background:#1d9e75;border-radius:3px"></div>
-                            </div>
-                            <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{d['total']}</span>
-                          </div>
-                          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px">
-                            <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
-                            <span style="color:#888"><b>{d['no_traffic']}</b> no traffic</span>
-                            <span style="color:#e24b4a"><b>{d['malfunctioning']}</b> malfunctioning</span>
-                            <span style="color:#888"><b>{d['no_measurement']}</b> no data</span>
-                          </div>
-                          {_collapsible_ids("malfunctioning", "#e24b4a", malfunctioning_ids)}
-                          {_collapsible_ids("no traffic", "#888", no_traffic_ids)}
-                          {_collapsible_ids("no measurement data", "#888", no_measurement_ids)}
-                        </div>"""
+            cs = r.get("check_summary", "") or ""
+            if "vms_controller_status" in cs:
+                d = parse_vms_detail(cs)
+                if d:
+                    vms_total = d['working'] + d['not_working'] + d['no_status']
+                    vms_pct = round(d['working'] / vms_total * 100) if vms_total else 0
+                    bar_color = _health_color(vms_pct)
+                    not_working_ids = sensor_data.get("not_working", [])
+                    no_status_ids   = sensor_data.get("no_status", [])
+                    extra += f"""
+                    <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
+                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">VMS Controllers</div>
+                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                        <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
+                          <div style="width:{vms_pct}%;height:6px;background:{bar_color};border-radius:3px"></div>
+                        </div>
+                        <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{vms_total}</span>
+                      </div>
+                      <div style="display:flex;gap:16px;margin-bottom:4px">
+                        <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
+                        <span style="color:#e24b4a"><b>{d['not_working']}</b> not working</span>
+                        <span style="color:#888"><b>{d['no_status']}</b> no status</span>
+                      </div>
+                      {_collapsible_ids("not working", "#e24b4a", not_working_ids)}
+                      {_collapsible_ids("no status", "#888", no_status_ids)}
+                    </div>"""
+            elif "bt_paths_speed_and_traveltime" in cs:
+                d = parse_bt_detail(cs)
+                if d:
+                    pct = round(d['speed_ok'] / d['total'] * 100) if d['total'] else 0
+                    bar_color = _health_color(pct)
+                    failing_ids = sensor_data.get("failing", [])
+                    extra += f"""
+                    <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
+                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">BT Paths with data</div>
+                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+                        <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
+                          <div style="width:{pct}%;height:6px;background:{bar_color};border-radius:3px"></div>
+                        </div>
+                        <span style="color:var(--color-text-primary);font-weight:500">{d['speed_ok']}/{d['total']}</span>
+                      </div>
+                      {_collapsible_ids("failing paths", "#e24b4a", failing_ids)}
+                    </div>"""
+            elif "sensor_speed_status" in cs:
+                d = parse_sensor_detail(cs)
+                if d:
+                    td_pct = round(d['working'] / d['total'] * 100) if d['total'] else 0
+                    bar_color = _health_color(td_pct)
+                    malfunctioning_ids = sensor_data.get("malfunctioning", [])
+                    no_traffic_ids     = sensor_data.get("no_traffic", [])
+                    no_measurement_ids = sensor_data.get("no_measurement", [])
+                    extra += f"""
+                    <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
+                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detection (SWARCO) — {d['total']} total</div>
+                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                        <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
+                          <div style="width:{td_pct}%;height:6px;background:{bar_color};border-radius:3px"></div>
+                        </div>
+                        <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{d['total']}</span>
+                      </div>
+                      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+                        <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
+                        <span style="color:#888"><b>{d['no_traffic']}</b> no traffic</span>
+                        <span style="color:#e24b4a"><b>{d['malfunctioning']}</b> malfunctioning</span>
+                        <span style="color:#888"><b>{d['no_measurement']}</b> no data</span>
+                      </div>
+                      {_collapsible_ids("malfunctioning", "#e24b4a", malfunctioning_ids)}
+                      {_collapsible_ids("no traffic", "#888", no_traffic_ids)}
+                      {_collapsible_ids("no measurement data", "#888", no_measurement_ids)}
+                    </div>"""
 
         return f"""
         <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:12px;padding:20px;flex:1;min-width:260px">

@@ -66,9 +66,8 @@ def vms_controller_status(response_text: str) -> dict:
         f"No status: {len(no_status)}" + (f" — {', '.join(no_status)}" if no_status else ""),
     ]
 
-    passed = len(not_working) == 0
     return {
-        "passed": passed,
+        "passed": True,  # feed delivered data; health shown separately in dashboard
         "detail": " | ".join(detail_lines),
         "sensors": sensors_map,
         "measurements": measurements_map,
@@ -155,12 +154,11 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
             "travel_time_s": round(ttime, 0) if ttime is not None else None,
         }
 
-    passed = len(failing) == 0
     detail = (
         f"Speed OK: {speed_ok}/{total} | Travel time OK: {ttime_ok}/{total}"
         + (f" | Failing paths: {', '.join(failing)}" if failing else "")
     )
-    return {"passed": passed, "detail": detail, "sensors": sensors_map, "measurements": measurements_map}
+    return {"passed": True, "detail": detail, "sensors": sensors_map, "measurements": measurements_map}
 
 
 # ─── Traffic Detection ────────────────────────────────────────────────────────
@@ -222,7 +220,6 @@ def sensor_speed_status(response_text: str) -> dict:
     total = len(sensors)
     avg_flow = round(total_flow / flow_count, 1) if flow_count > 0 else 0
 
-    passed = len(malfunctioning) == 0
     detail_parts = [
         f"Working: {len(working)}/{total}",
         f"No traffic (speed=0): {len(no_traffic)}",
@@ -230,7 +227,7 @@ def sensor_speed_status(response_text: str) -> dict:
         f"No measurement: {len(no_measurement)}",
         f"Avg flow rate: {avg_flow} veh/hr ({flow_count} sensors reporting)",
     ]
-    return {"passed": passed, "detail": " | ".join(detail_parts), "sensors": sensors_map, "measurements": measurements_map}
+    return {"passed": True, "detail": " | ".join(detail_parts), "sensors": sensors_map, "measurements": measurements_map}
 
 
 def bt_site_count(response_text: str) -> dict:
@@ -248,9 +245,9 @@ def bt_site_count(response_text: str) -> dict:
 
 # ─── Data freshness ──────────────────────────────────────────────────────────
 
-FRESHNESS_LIMIT_MINUTES = 15
+DEFAULT_FRESHNESS_MINUTES = 5
 
-def feed_freshness(response_text: str) -> dict:
+def feed_freshness(response_text: str, freshness_minutes: int = DEFAULT_FRESHNESS_MINUTES) -> dict:
     root, err = _parse_xml(response_text)
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
@@ -262,8 +259,8 @@ def feed_freshness(response_text: str) -> dict:
     try:
         pub_dt = datetime.fromisoformat(pub_el.text.strip().replace("Z", "+00:00"))
         age_min = int((datetime.now(timezone.utc) - pub_dt).total_seconds() / 60)
-        passed = age_min <= FRESHNESS_LIMIT_MINUTES
-        label = f"Feed is {age_min} min old (limit: {FRESHNESS_LIMIT_MINUTES} min)"
+        passed = age_min <= freshness_minutes
+        label = f"Feed is {age_min} min old (limit: {freshness_minutes} min)"
         return {"passed": passed, "detail": label}
     except Exception as e:
         return {"passed": False, "detail": f"Could not parse publicationTime: {e}"}

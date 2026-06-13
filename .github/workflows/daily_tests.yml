@@ -2,8 +2,8 @@ name: Daily API Tests
 
 on:
   schedule:
-    - cron: "0 5 * * *"   # 02:00 timezone: Cyprus
-    - cron: "0 22 * * *"   # 22:15 timezone: Cyprus
+    - cron: "0 4 * * *"    # 07:00 EEST (UTC+3, summer) — adjust to "0 5" in winter (UTC+2)
+    - cron: "0 16 * * *"   # 19:00 EEST (UTC+3, summer) — adjust to "0 17" in winter (UTC+2)
   workflow_dispatch:
 
 jobs:
