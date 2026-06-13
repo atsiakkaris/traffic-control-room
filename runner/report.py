@@ -5,11 +5,12 @@ report.py - Generate a static HTML report from the SQLite history DB.
 import os
 import json
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
+from zoneinfo import ZoneInfo
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run
 
-CYPRUS_TZ = timezone(timedelta(hours=3))  # EET/EEST — UTC+3 (summer); update to +2 in winter if needed
+CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
 
 
 def _to_cyprus(utc_iso: str) -> str:
