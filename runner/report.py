@@ -596,7 +596,7 @@ def generate_report() -> str:
                 f'<div style="width:{bw}%;height:4px;border-radius:2px;background:{color}"></div></div></td>')
 
     history_rows = ""
-    for run in runs[:20]:
+    for run in runs[:15]:
         h = health_by_run.get(run["run_id"], {})
         ts = _to_cyprus(run["run_at"])
         issues = h.get("feed_issues", [])
@@ -868,7 +868,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-history">
     <div class="panel-header" onclick="togglePanel('p-history')">
-      <span class="panel-title">Run history</span>
+      <span class="panel-title">Run history — last 15 runs</span>
       <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
