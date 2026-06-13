@@ -16,21 +16,32 @@ Updates automatically within ~1 minute of each scheduled run.
 
 | Group | Endpoint | What is checked |
 |---|---|---|
-| **Traffic Detection** | TD Inventory | Valid XML |
-| **Traffic Detection** | TD Live | Sensor speed status — working / no traffic / malfunctioning / no data; average flow rate |
-| **Bluetooth** | BT Inventory | Valid XML; total device count |
-| **Bluetooth** | BT Paths Inventory | Valid XML; predefined path count |
-| **Bluetooth** | BT Paths Live (FCD) | Speed and travel time present for all predefined paths |
-| **VMS** | VMS Inventory | Valid XML |
-| **VMS** | VMS Live Data | Working / not-working / no-status controller counts |
+| **Traffic Detection** | [TD Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/TrafficMeasurementSiteTablePublication) | Valid XML |
+| **Traffic Detection** | [TD Live](https://www.traffic4cyprus.org.cy/swarco3/api/Data/MeasuredDataPublication) | Feed freshness; sensor speed status (working / no traffic / malfunctioning / no data); average flow rate |
+| **Bluetooth** | [BT Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/BTMeasurementSiteTablePublication) | Valid XML; total device count |
+| **Bluetooth** | [BT Paths Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationPublication) | Valid XML; predefined path count |
+| **Bluetooth** | [BT Paths Live (FCD)](https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationDataPublication) | Feed freshness; speed and travel time per path |
+| **VMS** | [VMS Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsTablePublication) | Valid XML |
+| **VMS** | [VMS Live Data](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsPublication) | Feed freshness; working / not-working / no-status controller counts |
 
-All endpoints also check: HTTP 200 status, response time within limit, and feed freshness (data ≤ 15 min old where applicable).
+All live endpoints also check: HTTP 200 status, response time within limit, and feed freshness (data ≤ 5 min old).
+
+---
+
+## Health Model
+
+The monitor uses a two-tier health model:
+
+- **Feed health** (binary) — did the API respond with valid, fresh XML? If not, the group is marked as a feed issue regardless of sensor counts.
+- **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 80 %, red < 80 %.
+
+This means a group is never falsely marked "failed" just because some sensors are malfunctioning — the feed being up/down is tracked separately from individual sensor health.
 
 ---
 
 ## Dashboard Panels
 
-**Infrastructure Groups** — one card per group showing current pass/fail with a detailed breakdown of each check and collapsible lists of failing sensor/controller IDs.
+**Infrastructure Groups** — one card per group showing feed status and sensor health %, with a breakdown of each check and collapsible sensor counts.
 
 **Sensor Map** — interactive Leaflet.js map of Cyprus with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
@@ -38,11 +49,11 @@ All endpoints also check: HTTP 200 status, response time within limit, and feed 
 - Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
 
-**Sensor Stability** — per-sensor history table with sparklines (last 40 runs), stability badge, and last known issue. Filter by group.
+**Sensor Stability** — per-sensor history table with sparklines (last 40 runs), stability badge, and last-seen-working timestamp. Filter by group.
 
-**Pass/Fail Trend** — stacked bar chart across the last 30 runs.
+**Sensor Health Trend** — 3-line chart showing Traffic Detection, VMS, and BT Paths health % across the last 30 runs.
 
-**Run History** — pass/fail counts and pass rate for the last 20 runs.
+**Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and BT Paths across the last 20 runs.
 
 ---
 
@@ -52,8 +63,10 @@ Runs twice daily:
 
 | Cron (UTC) | Cyprus time |
 |---|---|
-| `0 3 * * *` | 06:00 EET |
-| `0 19 * * *` | 22:00 EET |
+| `0 4 * * *` | 07:00 EEST (summer, UTC+3) |
+| `0 16 * * *` | 19:00 EEST (summer, UTC+3) |
+
+> **DST note:** Cyprus switches between EEST (UTC+3, ~late March–late October) and EET (UTC+2, winter). When clocks go back, adjust the cron times by 1 hour (e.g. `0 5` and `0 17`).
 
 Edit `.github/workflows/daily_tests.yml` to change. Use [crontab.guru](https://crontab.guru) to build a custom schedule.
 
@@ -76,36 +89,14 @@ Edit `.github/workflows/daily_tests.yml` to change. Use [crontab.guru](https://c
 │   └── latest.html             ← Generated dashboard (auto-committed after each run)
 ├── .github/workflows/
 │   └── daily_tests.yml         ← GitHub Actions schedule
-├── run.ps1                     ← Local run script (loads .env automatically)
+├── run.ps1                     ← Local run script (PowerShell, loads .env automatically)
+├── run.bat                     ← Local run script (double-click alternative, no execution policy needed)
 └── requirements.txt
 ```
 
 ---
 
 
-## GitHub Setup
-
-### Secrets required
-
-Go to **Settings → Secrets and variables → Actions → Repository secrets**:
-
-| Secret | Description |
-|---|---|
-| `BASE_URL` | Base URL of the DATEX II host |
-| `SWARCO` | API path segment (e.g. `swarco3/api/Data/`) |
-| `GMAIL_USER` | Gmail address for outgoing notification emails |
-| `GMAIL_APP_PW` | Gmail App Password (16-char — not your account password) |
-| `NOTIFY_EMAIL` | Recipient address for the daily email summary |
-
-### Workflow permissions
-
-Go to **Settings → Actions → General → Workflow permissions** and enable **Read and write permissions** — required for the bot to commit `history.db` and `latest.html` back to the repo.
-
-### GitHub Pages
-
-Go to **Settings → Pages**, set source to **Deploy from a branch**, branch `main`, folder `/ (root)`.
-
----
 
 ## Adding Endpoints
 
@@ -138,5 +129,3 @@ Key tables:
 | `sensor_results` | One row per sensor/path per run — status and (in LIVE_MODE) measurement data as JSON |
 | `sensor_coords` | Latest lat/lon for each sensor, populated from inventory feeds |
 | `bt_path_coords` | GML coordinates for all predefined BT paths, used to draw polylines on the map |
-
-To reset history, delete `results/history.db`. The next run creates a fresh database.
