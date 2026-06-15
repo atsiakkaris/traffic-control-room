@@ -1,9 +1,12 @@
 name: Daily API Tests
 
 on:
-  schedule:
-    - cron: "0 4 * * *"    # 07:00 EEST (UTC+3, summer) — adjust to "0 5" in winter (UTC+2)
-    - cron: "0 16 * * *"   # 19:00 EEST (UTC+3, summer) — adjust to "0 17" in winter (UTC+2)
+  # Schedule last updated: 2026-06-15, 11:55am
+  # Runs at: 07:00, 15:00, 23:00 EEST
+  schedule: # EEST is (UTC+3, summer)
+    - cron: "0 4 * * *"
+    - cron: "0 12 * * *"
+    - cron: "0 20 * * *"
   workflow_dispatch:
 
 jobs:
