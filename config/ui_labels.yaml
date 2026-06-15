@@ -1,0 +1,34 @@
+# UI Labels — edit these to rename things in the report without touching Python code.
+
+# ── Page title (shown in browser tab and header) ─────────────────────────────
+page_title: "ITS Infrastructure Health"
+
+# ── Panel headings ────────────────────────────────────────────────────────────
+panels:
+  groups:       "Infrastructure groups"
+  map:          "Sensor map"
+  health_trend: "Sensor health trend"
+  stability:    "Sensor stability"
+  history:      "Run history"
+
+# ── Run history table column headers ─────────────────────────────────────────
+history_columns:
+  time:         "Time (EET)"
+  td:           "Traffic Detection"
+  vms:          "VMS"
+  bt:           "BT Paths"
+  api_response: "API response"
+
+# ── Group display names (DB name on left, label shown in UI on right) ─────────
+# The DB names must stay exactly as-is — only change the values on the right.
+group_display:
+  Traffic Detection: "Traffic Detection (SWARCO)"
+  Bluetooth:         "Bluetooth"
+  VMS:               "VMS"
+
+# ── Map layer toggle button labels ────────────────────────────────────────────
+map_layers:
+  td:    "Traffic Detection (SWARCO)"
+  bt:    "Bluetooth Sites"
+  vms:   "VMS"
+  paths: "BT Paths"

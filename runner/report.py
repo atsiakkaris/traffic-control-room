@@ -4,6 +4,7 @@ report.py - Generate a static HTML report from the SQLite history DB.
 
 import os
 import json
+import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -11,6 +12,16 @@ from zoneinfo import ZoneInfo
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history
 
 CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
+
+# Load UI labels from config — falls back to defaults if file is missing
+_LABELS_PATH = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
+try:
+    _UI = yaml.safe_load(_LABELS_PATH.read_text(encoding="utf-8"))
+except Exception:
+    _UI = {}
+
+def _lbl(section, key, default=""):
+    return (_UI.get(section) or {}).get(key, default)
 
 
 def _to_cyprus(utc_iso: str) -> str:
@@ -104,7 +115,7 @@ STATUS_LABEL = {
 
 GOOD_STATUSES = {"working", "ok"}
 
-GROUP_DISPLAY = {"Traffic Detection": "Traffic Detection (SWARCO)"}
+GROUP_DISPLAY = _UI.get("group_display") or {"Traffic Detection": "Traffic Detection (SWARCO)"}
 
 SENSOR_CHECKS = {"sensor_speed_status", "vms_controller_status", "bt_paths_speed_and_traveltime"}
 HEALTH_WARNING_PCT = 80
@@ -678,10 +689,10 @@ def generate_report() -> str:
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
-            '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">Traffic Detection (SWARCO)</button>'
-            '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">Bluetooth Sites</button>'
-            '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">VMS</button>'
-            '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">BT Paths</button>'
+            '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">' + _lbl('map_layers','td','Traffic Detection (SWARCO)') + '</button>'
+            '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">' + _lbl('map_layers','bt','Bluetooth Sites') + '</button>'
+            '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">' + _lbl('map_layers','vms','VMS') + '</button>'
+            '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">' + _lbl('map_layers','paths','BT Paths') + '</button>'
             '<span style="flex:1"></span>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
             '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
@@ -728,7 +739,7 @@ def generate_report() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ITS Infrastructure Health</title>
+<title>{_UI.get('page_title', 'ITS Infrastructure Health')}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
@@ -795,7 +806,7 @@ def generate_report() -> str:
 <body>
 <header>
   <div>
-    <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>ITS Infrastructure Health</h1>
+    <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
     <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {total_runs_label} runs recorded</div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
@@ -815,7 +826,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-groups">
     <div class="panel-header" onclick="togglePanel('p-groups')">
-      <span class="panel-title">Infrastructure groups</span>
+      <span class="panel-title">{_lbl('panels', 'groups', 'Infrastructure groups')}</span>
       <div class="panel-chevron open" id="c-p-groups"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
@@ -828,7 +839,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-map">
     <div class="panel-header" onclick="togglePanel('p-map')">
-      <span class="panel-title">Sensor map</span>
+      <span class="panel-title">{_lbl('panels', 'map', 'Sensor map')}</span>
       <div class="panel-chevron open" id="c-p-map"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
@@ -839,7 +850,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-trend">
     <div class="panel-header" onclick="togglePanel('p-trend')">
-      <span class="panel-title">Sensor health trend — last {len(chart_runs)} runs</span>
+      <span class="panel-title">{_lbl('panels', 'health_trend', 'Sensor health trend')} — last {len(chart_runs)} runs</span>
       <div class="panel-chevron open" id="c-p-trend"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{trend_pct}%;background:{trend_bar_color}"></div></div>
@@ -857,7 +868,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-sensors">
     <div class="panel-header" onclick="togglePanel('p-sensors')">
-      <span class="panel-title">Sensor stability</span>
+      <span class="panel-title">{_lbl('panels', 'stability', 'Sensor stability')}</span>
       <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
@@ -868,13 +879,13 @@ def generate_report() -> str:
 
   <div class="panel" id="p-history">
     <div class="panel-header" onclick="togglePanel('p-history')">
-      <span class="panel-title">Run history — last 20 runs</span>
+      <span class="panel-title">{_lbl('panels', 'history', 'Run history')} — last 20 runs</span>
       <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
     <div class="panel-body" id="b-p-history">
       <table>
-        <thead><tr><th>Time (EET)</th><th>Traffic Detection</th><th>VMS</th><th>BT Paths</th><th>API response</th></tr></thead>
+        <thead><tr><th>{_lbl('history_columns','time','Time (EET)')}</th><th>{_lbl('history_columns','td','Traffic Detection')}</th><th>{_lbl('history_columns','vms','VMS')}</th><th>{_lbl('history_columns','bt','BT Paths')}</th><th>{_lbl('history_columns','api_response','API response')}</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
