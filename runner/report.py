@@ -837,17 +837,6 @@ def generate_report() -> str:
     </div>
   </div>
 
-  <div class="panel" id="p-sensors">
-    <div class="panel-header" onclick="togglePanel('p-sensors')">
-      <span class="panel-title">Sensor stability</span>
-      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
-    </div>
-    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
-    <div class="panel-body" id="b-p-sensors">
-      {sensor_stability_html}
-    </div>
-  </div>
-
   <div class="panel" id="p-trend">
     <div class="panel-header" onclick="togglePanel('p-trend')">
       <span class="panel-title">Sensor health trend — last {len(chart_runs)} runs</span>
@@ -866,6 +855,17 @@ def generate_report() -> str:
     </div>
   </div>
 
+  <div class="panel" id="p-sensors">
+    <div class="panel-header" onclick="togglePanel('p-sensors')">
+      <span class="panel-title">Sensor stability</span>
+      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-sensors">
+      {sensor_stability_html}
+    </div>
+  </div>
+
   <div class="panel" id="p-history">
     <div class="panel-header" onclick="togglePanel('p-history')">
       <span class="panel-title">Run history — last 20 runs</span>
@@ -874,7 +874,7 @@ def generate_report() -> str:
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
     <div class="panel-body" id="b-p-history">
       <table>
-        <thead><tr><th>Time (EET)</th><th>Traffic Detection</th><th>VMS</th><th>BT Paths</th><th>Feed</th></tr></thead>
+        <thead><tr><th>Time (EET)</th><th>Traffic Detection</th><th>VMS</th><th>BT Paths</th><th>API response</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
