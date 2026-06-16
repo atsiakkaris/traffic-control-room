@@ -49,9 +49,9 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
 
-**Sensor Stability** — per-sensor history table with sparklines (last 40 runs), stability badge, and last-seen-working timestamp. Filter by group.
-
 **Sensor Health Trend** — 3-line chart showing Traffic Detection, VMS, and BT Paths health % across the last 30 runs.
+
+**Sensor Stability** — per-sensor history table with sparklines (last 40 runs), stability badge, and last-seen-working timestamp. Filter by group.
 
 **Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and BT Paths across the last 20 runs.
 
@@ -59,16 +59,9 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Schedule
 
-Runs twice daily:
+Runs three times daily. Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
 
-| Cron (UTC) | Cyprus time |
-|---|---|
-| `0 4 * * *` | 07:00 EEST (summer, UTC+3) |
-| `0 16 * * *` | 19:00 EEST (summer, UTC+3) |
-
-> **DST note:** Cyprus switches between EEST (UTC+3, ~late March–late October) and EET (UTC+2, winter). When clocks go back, adjust the cron times by 1 hour (e.g. `0 5` and `0 17`).
-
-Edit `.github/workflows/daily_tests.yml` to change. Use [crontab.guru](https://crontab.guru) to build a custom schedule.
+> Timestamps in the dashboard are displayed in Cyprus local time (EEST/EET) and adjust automatically for DST.
 
 ---
 
@@ -76,7 +69,8 @@ Edit `.github/workflows/daily_tests.yml` to change. Use [crontab.guru](https://c
 
 ```
 ├── config/
-│   └── endpoints.yaml          ← Endpoint definitions and checks
+│   ├── endpoints.yaml          ← Endpoint definitions and checks
+│   └── ui_labels.yaml          ← UI label overrides (rename panels, columns, groups without touching code)
 ├── runner/
 │   ├── run_tests.py            ← Entry point
 │   ├── tests.py                ← XML assertion logic per check type

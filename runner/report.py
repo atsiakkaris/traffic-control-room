@@ -104,9 +104,9 @@ STATUS_LABEL = {
     "working": "Working",
     "ok": "OK",
     "no_traffic": "No traffic",
-    "no_measurement": "No data",
+    "no_measurement": "No measurement",
     "no_status": "No status reported",
-    "not_working": "Controller not working",
+    "not_working": "VMS not working",
     "malfunctioning": "Speed = -1 (sensor fault)",
     "failing": "No speed or travel time",
     "missing": "Not present in feed",
@@ -229,13 +229,13 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         pct = round(good / total * 100) if total else 0
 
         if pct == 100:
-            badge_bg, badge_color, badge_label = "#e1f5ee", "#0f6e56", "Always on"
+            badge_bg, badge_color, badge_label, badge_tip = "#e1f5ee", "#0f6e56", "Always on", "100% of runs good"
         elif pct == 0:
-            badge_bg, badge_color, badge_label = "#fcebeb", "#a32d2d", "Always off"
+            badge_bg, badge_color, badge_label, badge_tip = "#fcebeb", "#a32d2d", "Always off", "0% of runs good"
         elif pct >= 70:
-            badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Mostly on"
+            badge_bg, badge_color, badge_label, badge_tip = "#faeeda", "#854f0b", "Mostly on", "70–99% of runs good"
         else:
-            badge_bg, badge_color, badge_label = "#faeeda", "#854f0b", "Unstable"
+            badge_bg, badge_color, badge_label, badge_tip = "#faeeda", "#854f0b", "Unstable", "1–69% of runs good"
 
         # Sparkline: last 40 runs as tiny squares with rich tooltips
         sparks = ""
@@ -272,7 +272,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;color:var(--color-text-primary);font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{display_sensor_id}</td>
           <td style="white-space:nowrap">{sparks}</td>
-          <td><span style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color}">{badge_label}</span></td>
+          <td><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total}</td>
