@@ -33,7 +33,7 @@ All live endpoints also check: HTTP 200 status, response time within limit, and 
 The monitor uses a two-tier health model:
 
 - **Feed health** (binary) — did the API respond with valid, fresh XML? If not, the group is marked as a feed issue regardless of sensor counts.
-- **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 80 %, red < 80 %.
+- **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 55 %, red < 55 %.
 
 This means a group is never falsely marked "failed" just because some sensors are malfunctioning — the feed being up/down is tracked separately from individual sensor health.
 
@@ -45,13 +45,20 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 **Sensor Map** — interactive Leaflet.js map of Cyprus with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
+- Marker clustering at country zoom (expands at zoom 13+); toggle clustering on/off with the **Cluster** button
 - All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data)
 - Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
+- **View on map** button on each group card isolates that group and flies to its bounds
+- **Historical playback** bar — scrub or step through the last 20 runs to see how sensor statuses changed over time
 
 **Sensor Health Trend** — 3-line chart showing Traffic Detection, VMS, and BT Paths health % across the last 30 runs.
 
-**Sensor Stability** — per-sensor history table with sparklines (last 40 runs), stability badge, and last-seen-working timestamp. Filter by group.
+**Sensor Stability** — per-sensor history table with sparklines (last 20 runs), stability badge, and timestamps for first seen / last working / last issue.
+- Live search input to filter by sensor name or ID
+- Group dropdown filter
+- **Export CSV** button downloads the currently visible rows
+- Sensor IDs with known coordinates are clickable — clicking flies the map to that sensor and opens its info popup
 
 **Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and BT Paths across the last 20 runs.
 
