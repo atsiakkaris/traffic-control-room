@@ -223,6 +223,12 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 
         display_group = GROUP_DISPLAY.get(s["group_name"], s["group_name"])
 
+        # Resolve coords for map-link (TD, BT sites, VMS only — BT Paths are polylines)
+        coord_info = {}
+        if s["group_name"] in ("Traffic Detection", "Bluetooth", "VMS"):
+            coord_info = (all_sensor_coords or {}).get(s["group_name"], {}).get(s["sensor_id"], {})
+        has_coords = bool(coord_info.get("lat") and coord_info.get("lon"))
+
         history = s["history"]
         total = len(history)
         good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
@@ -239,7 +245,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 
         # Sparkline: last 40 runs as tiny squares with rich tooltips
         sparks = ""
-        for h in history[-40:]:
+        for h in history[-20:]:
             c = STATUS_COLOR.get(h["status"], "#9ca3af")
             reason = STATUS_LABEL.get(h["status"], h["status"])
             ts = _to_cyprus(h["run_at"])
@@ -270,16 +276,28 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         # First seen: earliest recorded run for this sensor
         first_seen_html = f'<span style="font-size:11px;color:var(--color-text-secondary)">{_to_cyprus(history[0]["run_at"])}</span>'
 
+        if has_coords:
+            lat_v = coord_info["lat"]
+            lon_v = coord_info["lon"]
+            sid_cell = (
+                f'<span onclick="flyToSensor(this)" '
+                f'data-lat="{lat_v}" data-lon="{lon_v}" '
+                f'data-sid="{s["sensor_id"]}" data-mapgroup="{s["group_name"]}" '
+                f'title="Show on map" style="cursor:pointer;text-decoration:underline dotted;'
+                f'text-underline-offset:3px;color:var(--color-text-primary)">{display_sensor_id}</span>'
+            )
+        else:
+            sid_cell = display_sensor_id
+
         rows += f"""
-        <tr data-group="{s['group_name']}">
+        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}">
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
-          <td style="font-size:12px;color:var(--color-text-primary);font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{display_sensor_id}</td>
+          <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
           <td>{first_seen_html}</td>
-          <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total}</td>
         </tr>"""
 
     # Per-group good/total counts for dynamic bar
@@ -299,28 +317,68 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     group_stats_json = _json.dumps(group_stats)
 
     return f"""
-    <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:16px">
-      <select id="groupFilter" onchange="filterGroup(this.value)"
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      <input id="stabilitySearch" type="text" placeholder="Search sensors…"
+             oninput="_applyStabilityFilters()"
+             style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
+                    background:var(--color-background-primary);color:var(--color-text-primary);min-width:180px;flex:1"/>
+      <select id="groupFilter" onchange="_applyStabilityFilters()"
               style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
                      background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer">
         {options}
       </select>
+      <button onclick="exportStabilityCSV()"
+              style="font-size:13px;padding:5px 12px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
+                     background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer;white-space:nowrap">
+        ↓ Export CSV
+      </button>
     </div>
     <table id="sensorTable">
-      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th><th>Runs</th></tr></thead>
+      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
     var _groupStats = {group_stats_json};
-    function filterGroup(val) {{
+    function _applyStabilityFilters() {{
+      var group  = document.getElementById('groupFilter').value;
+      var search = (document.getElementById('stabilitySearch').value || '').toLowerCase().trim();
+      var goodCount = 0, totalCount = 0;
       document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
-        tr.style.display = (val === 'all' || tr.dataset.group === val) ? '' : 'none';
+        var groupMatch  = group === 'all' || tr.dataset.group === group;
+        var searchMatch = !search || (tr.dataset.display || '').indexOf(search) !== -1;
+        var visible = groupMatch && searchMatch;
+        tr.style.display = visible ? '' : 'none';
       }});
-      var stats = _groupStats[val] || _groupStats['all'];
+      // update progress bar using group stats (search doesn't affect bar)
+      var stats = _groupStats[group] || _groupStats['all'];
       var pct = stats.total > 0 ? Math.round(stats.good / stats.total * 100) : 0;
       var color = pct >= 90 ? '#1d9e75' : (pct >= 55 ? '#e58e0a' : '#e24b4a');
       var fill = document.getElementById('sensorBarFill');
       if (fill) {{ fill.style.width = pct + '%'; fill.style.background = color; }}
+    }}
+    // keep old name as alias for dynamic bar (called from group card dropdown)
+    function filterGroup(val) {{
+      document.getElementById('groupFilter').value = val;
+      _applyStabilityFilters();
+    }}
+    function exportStabilityCSV() {{
+      var headers = ['Group','Sensor ID','Stability','Last issue','Last working','First seen'];
+      var lines = [headers.map(function(h){{return '"'+h+'"';}}).join(',')];
+      document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
+        if (tr.style.display === 'none') return;
+        var cells = tr.querySelectorAll('td');
+        var vals = [0,1,3,4,5,6].map(function(i) {{
+          return '"' + (cells[i] ? cells[i].textContent.trim().replace(/"/g,'""') : '') + '"';
+        }});
+        lines.push(vals.join(','));
+      }});
+      var blob = new Blob([lines.join('\\n')], {{type:'text/csv'}});
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'sensor_stability.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }}
     </script>"""
 
@@ -1344,6 +1402,36 @@ function togglePlay() {
 
 // Initialise slider at latest run
 if (_history.length) { _updatePlayUI(); }
+
+/* -- Fly to sensor (called from stability panel) ------------------ */
+function flyToSensor(el) {
+  var lat = parseFloat(el.dataset.lat);
+  var lon = parseFloat(el.dataset.lon);
+  var sid = el.dataset.sid;
+  var grp = el.dataset.mapgroup;
+  var key = GROUP_LAYER[grp];
+  // ensure the layer is visible
+  if (key && !_activeLayers[key]) {
+    _activeLayers[key] = true;
+    var layerBtn = document.querySelector('[data-layer="'+key+'"]');
+    if (layerBtn) layerBtn.classList.add('active');
+    applyVisibility();
+  }
+  // open map panel if collapsed, then scroll to it
+  var mapBody = document.getElementById('b-p-map');
+  var mapPanel = document.getElementById('p-map');
+  if (mapBody && mapBody.style.display === 'none') {
+    if (mapPanel) mapPanel.querySelector('.panel-header').click();
+  }
+  if (mapPanel) mapPanel.scrollIntoView({behavior:'smooth', block:'start'});
+  // fly and open popup after animation
+  _map.flyTo([lat, lon], 15, {duration:0.8});
+  setTimeout(function() {
+    _markers.forEach(function(m) {
+      if (m._sensorId === sid) m.fire('click');
+    });
+  }, 900);
+}
 
 /* -- Info panel --------------------------------------------------- */
 function showMapPanel(title, bodyHtml) {
