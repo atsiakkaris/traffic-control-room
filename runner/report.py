@@ -691,6 +691,12 @@ def generate_report() -> str:
             "data": entry.get("data", {}),
         })
 
+    # HOTFIX: VMS B4 (sensor_id 69) has lon=3.001... in source data instead of 33.001...
+    # Remove this block once the upstream feed is corrected.
+    for ms in map_sensors:
+        if ms["group"] == "VMS" and ms["id"] == "69":
+            ms["lon"] = 33.0010455
+
     map_sensors_json  = json.dumps(map_sensors)
     map_bt_paths_json = json.dumps(map_bt_paths)
 
