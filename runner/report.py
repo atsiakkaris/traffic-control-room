@@ -267,6 +267,9 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         else:
             last_good_html = '<span style="font-size:11px;color:#e24b4a">Never</span>'
 
+        # First seen: earliest recorded run for this sensor
+        first_seen_html = f'<span style="font-size:11px;color:var(--color-text-secondary)">{_to_cyprus(history[0]["run_at"])}</span>'
+
         rows += f"""
         <tr data-group="{s['group_name']}">
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
@@ -275,6 +278,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
+          <td>{first_seen_html}</td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{good}/{total}</td>
         </tr>"""
 
@@ -303,7 +307,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>Runs</th></tr></thead>
+      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 40 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th><th>Runs</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -374,6 +378,7 @@ def generate_report() -> str:
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
+
 
     # Build group status cards
     def group_status_card(group_name, icon, results):
@@ -569,6 +574,14 @@ def generate_report() -> str:
                       {_collapsible_ids("no measurement data", "#888", no_measurement_ids)}
                     </div>"""
 
+        layer_key = {"Traffic Detection": "td", "Bluetooth": "bt", "VMS": "vms"}.get(group_name, "")
+        map_btn = (
+            f'<div style="margin-top:12px;border-top:0.5px solid var(--color-border-tertiary);padding-top:10px">'
+            f'<button onclick="focusMapLayer(\'{layer_key}\')" '
+            f'style="font-size:11px;font-weight:500;color:var(--text);background:none;border:none;'
+            f'cursor:pointer;padding:0;display:flex;align-items:center;gap:4px">'
+            f'<i class="ti ti-map-pin" style="font-size:12px"></i>View on map</button></div>'
+        ) if layer_key else ""
         return f"""
         <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:12px;padding:20px;flex:1;min-width:260px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
@@ -585,6 +598,7 @@ def generate_report() -> str:
             {detail_rows}
           </div>
           {extra}
+          {map_btn}
         </div>"""
 
     group_icons = {"VMS": "ti-road-sign", "Bluetooth": "ti-bluetooth", "Traffic Detection": "ti-traffic-cone"}
@@ -677,10 +691,22 @@ def generate_report() -> str:
             "data": entry.get("data", {}),
         })
 
-    map_sensors_json = json.dumps(map_sensors)
+    map_sensors_json  = json.dumps(map_sensors)
     map_bt_paths_json = json.dumps(map_bt_paths)
+
+    # Build per-run sensor status history for map playback (last 20 runs)
+    _run_timeline: dict = {}
+    for s in all_sensors:
+        for h in s["history"]:
+            rat = h["run_at"]
+            if rat not in _run_timeline:
+                _run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
+            _run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
+    _runs_sorted = sorted(_run_timeline.values(), key=lambda r: r["run_at"])
+    history_playback_json = json.dumps(_runs_sorted[-20:])
+
     has_map_data = bool(map_sensors or map_bt_paths)
-    map_script_html = _build_map_script(map_sensors_json, map_bt_paths_json) if has_map_data else ""
+    map_script_html = _build_map_script(map_sensors_json, map_bt_paths_json, history_playback_json) if has_map_data else ""
 
     if not has_map_data:
         map_panel_html = '<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>'
@@ -696,6 +722,14 @@ def generate_report() -> str:
             '<span style="flex:1"></span>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
             '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
+            '</div>'
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:7px 10px;'
+            'background:var(--surface);border:0.5px solid var(--border);border-radius:8px">'
+            '<button onclick="stepRun(-1)" title="Previous run" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:2px 5px;line-height:1">&#9664;</button>'
+            '<button id="playBtn" onclick="togglePlay()" title="Play / Pause" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:2px 5px;line-height:1">&#9654;</button>'
+            '<button onclick="stepRun(1)" title="Next run" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:2px 5px;line-height:1">&#9654;&#9654;</button>'
+            '<input type="range" id="playSlider" min="0" value="0" style="flex:1;accent-color:var(--header-bg)" oninput="setRun(+this.value)">'
+            '<span id="playTimestamp" style="font-size:11px;color:var(--muted);min-width:150px;text-align:right;white-space:nowrap"></span>'
             '</div>'
             '<div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">'
             '<div id="mapInfoPanel" style="display:none;position:absolute;top:10px;right:10px;z-index:1000;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
@@ -802,6 +836,9 @@ def generate_report() -> str:
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 </head>
 <body>
 <header>
@@ -949,22 +986,38 @@ window._trendChart = new Chart(document.getElementById('trendChart'), {{
     return str(REPORT_PATH)
 
 
-def _build_map_script(map_sensors_json, map_bt_paths_json):
+def _build_map_script(map_sensors_json, map_bt_paths_json, history_json):
     return """<script>
-var _sensors = """ + map_sensors_json + """;
+var _sensors  = """ + map_sensors_json + """;
 var _btPaths  = """ + map_bt_paths_json + """;
+var _history  = """ + history_json + """;
+var _playIdx  = _history.length - 1;
+var _playTimer = null;
 var _activeFilter = 'all';
 var _activeLayers = {td:true, bt:true, vms:true, paths:true};
+
+var STATUS_COLOR_MAP = {
+  working:'#1d9e75', ok:'#1d9e75', no_traffic:'#1d9e75',
+  malfunctioning:'#e24b4a', not_working:'#e24b4a', failing:'#e24b4a',
+  stale:'#e58e0a', missing:'#e58e0a',
+  no_measurement:'#6b7280', no_status:'#6b7280', unknown:'#6b7280'
+};
 
 var _map = L.map('sensorMap', {zoomControl:true}).setView([34.95, 33.15], 9);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors', maxZoom: 19
 }).addTo(_map);
 
-var _layerGroups = {td:L.layerGroup(), bt:L.layerGroup(), vms:L.layerGroup(), paths:L.layerGroup()};
+var _clusterOpts = {showCoverageOnHover:false, maxClusterRadius:50, disableClusteringAtZoom:13, chunkedLoading:true};
+var _layerGroups = {
+  td:    L.markerClusterGroup(_clusterOpts),
+  bt:    L.markerClusterGroup(_clusterOpts),
+  vms:   L.markerClusterGroup(_clusterOpts),
+  paths: L.layerGroup()
+};
 Object.values(_layerGroups).forEach(function(lg){ lg.addTo(_map); });
 
-var GROUP_LAYER   = {'Traffic Detection':'td','Bluetooth':'bt','VMS':'vms'};
+var GROUP_LAYER    = {'Traffic Detection':'td','Bluetooth':'bt','VMS':'vms'};
 var ISSUE_STATUSES = ['malfunctioning','not_working','failing','stale','missing'];
 var STATUS_LABELS  = {
   working:'Working', ok:'OK', no_traffic:'No traffic', no_measurement:'No data',
@@ -975,18 +1028,17 @@ var STATUS_LABELS  = {
 /* -- Icon factory ------------------------------------------------- */
 var ICON_CLASS = {'Traffic Detection':'ti-traffic-cone','Bluetooth':'ti-bluetooth','VMS':'ti-road-sign'};
 var ICON_SIZE  = {'Traffic Detection':26,'Bluetooth':22,'VMS':28};
-var ICON_SHAPE = {'VMS':'6px'};   // others default to 50% (circle)
+var ICON_SHAPE = {'VMS':'6px'};
 
-function makeIcon(group, color, faded) {
-  var ic   = ICON_CLASS[group] || 'ti-circle';
-  var sz   = ICON_SIZE[group]  || 24;
-  var br   = ICON_SHAPE[group] || '50%';
-  var op   = faded ? '0.18' : '1';
+function makeIcon(group, color) {
+  var ic  = ICON_CLASS[group] || 'ti-circle';
+  var sz  = ICON_SIZE[group]  || 24;
+  var br  = ICON_SHAPE[group] || '50%';
   var html = '<div style="width:'+sz+'px;height:'+sz+'px;border-radius:'+br+';'+
              'background:'+color+';border:2.5px solid rgba(255,255,255,0.92);'+
              'display:flex;align-items:center;justify-content:center;'+
              'box-shadow:0 2px 7px rgba(0,0,0,0.32);font-size:'+(sz-11)+'px;'+
-             'color:white;opacity:'+op+';transition:opacity .2s">'+
+             'color:white">'+
              '<i class="ti '+ic+'"></i></div>';
   return L.divIcon({className:'', html:html,
     iconSize:[sz,sz], iconAnchor:[sz/2,sz/2], popupAnchor:[0,-sz/2+2]});
@@ -1000,7 +1052,7 @@ function popRow(label, val, color) {
 }
 function fmtSpeed(v) {
   if (v===null||v===undefined) return null;
-  return v===-1 ? '−1 km/h (fault)' : v+' km/h';
+  return v===-1 ? '\\u22121 km/h (fault)' : v+' km/h';
 }
 function fmtFlow(v)  { return (v===null||v===undefined) ? null : v+' veh/hr'; }
 function fmtTT(v) {
@@ -1010,8 +1062,11 @@ function fmtTT(v) {
 }
 
 /* -- Marker factory ----------------------------------------------- */
+var _markersByGroup = {td:[], bt:[], vms:[]};
+
 function makeMarker(s) {
-  var m = L.marker([s.lat, s.lon], {icon: makeIcon(s.group, s.color, false)});
+  var m = L.marker([s.lat, s.lon], {icon: makeIcon(s.group, s.color)});
+  m._sensorId     = s.id;
   m._sensorStatus = s.status;
   m._sensorGroup  = GROUP_LAYER[s.group] || 'td';
   m._sensorColor  = s.color;
@@ -1047,6 +1102,7 @@ function makePath(p) {
   var latlngs = p.coords.map(function(c){return [c[0],c[1]];});
   var style   = pathStyle(p.status, false);
   var pl = L.polyline(latlngs, style);
+  pl._pathId     = p.id;
   pl._pathStatus = p.status;
   var d = p.data || {};
   var rows = popRow('Route', p.name)+popRow('Path ID', p.id)+
@@ -1062,11 +1118,14 @@ function makePath(p) {
 /* -- Build layers ------------------------------------------------- */
 var _markers = [];
 _sensors.forEach(function(s) {
-  var lg = _layerGroups[GROUP_LAYER[s.group]];
-  if (!lg) return;
+  var key = GROUP_LAYER[s.group];
+  if (!key) return;
   var m = makeMarker(s);
-  m.addTo(lg);
+  _markersByGroup[key].push(m);
   _markers.push(m);
+});
+['td','bt','vms'].forEach(function(key) {
+  _markersByGroup[key].forEach(function(m){ _layerGroups[key].addLayer(m); });
 });
 
 var _paths = [];
@@ -1144,10 +1203,17 @@ _legend.addTo(_map);
 
 /* -- Visibility filter -------------------------------------------- */
 function applyVisibility() {
-  _markers.forEach(function(m) {
-    var on = _activeLayers[m._sensorGroup] &&
-             (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(m._sensorStatus) !== -1);
-    m.setIcon(makeIcon(m._sensorGroup2, m._sensorColor, !on));
+  ['td','bt','vms'].forEach(function(key) {
+    var lg = _layerGroups[key];
+    lg.clearLayers();
+    if (!_activeLayers[key]) return;
+    _markersByGroup[key].forEach(function(m) {
+      var visible = _activeFilter === 'all' || ISSUE_STATUSES.indexOf(m._sensorStatus) !== -1;
+      if (visible) {
+        m.setIcon(makeIcon(m._sensorGroup2, m._sensorColor));
+        lg.addLayer(m);
+      }
+    });
   });
   _paths.forEach(function(p) {
     var on = _activeLayers.paths &&
@@ -1185,6 +1251,75 @@ function setFilter(btn, val) {
   applyVisibility();
 }
 
+/* -- Focus layer (called from group cards) ------------------------ */
+function focusMapLayer(key) {
+  Object.keys(_activeLayers).forEach(function(k){ _activeLayers[k] = (k === key); });
+  document.querySelectorAll('[data-layer]').forEach(function(b){
+    b.classList.toggle('active', b.dataset.layer === key);
+  });
+  var showAllBtn = document.getElementById('btn-showall');
+  if (showAllBtn) showAllBtn.classList.remove('active');
+  applyVisibility();
+  var mapPanel = document.getElementById('p-map');
+  if (mapPanel) mapPanel.scrollIntoView({behavior:'smooth', block:'start'});
+  var pts = _markersByGroup[key] || [];
+  if (pts.length) {
+    var bounds = L.latLngBounds(pts.map(function(m){ return m.getLatLng(); }));
+    _map.flyToBounds(bounds, {padding:[40,40], maxZoom:12, duration:0.8});
+  }
+}
+
+/* -- Historical playback ----------------------------------------- */
+function _updatePlayUI() {
+  if (!_history.length) return;
+  var slider  = document.getElementById('playSlider');
+  var label   = document.getElementById('playTimestamp');
+  var playBtn = document.getElementById('playBtn');
+  if (slider) { slider.max = _history.length - 1; slider.value = _playIdx; }
+  var run    = _history[_playIdx];
+  var isLive = _playIdx === _history.length - 1;
+  if (label) label.textContent = (isLive ? '\\u25cf Live \\u00b7 ' : 'Run ' + (_playIdx+1) + '/' + _history.length + ' \\u00b7 ') + (run.run_at || '');
+  if (playBtn) playBtn.innerHTML = _playTimer ? '&#9646;&#9646;' : '&#9654;';
+}
+
+function setRun(idx) {
+  _playIdx = Math.max(0, Math.min(+idx, _history.length - 1));
+  var statuses = (_history[_playIdx] || {}).statuses || {};
+  _markers.forEach(function(m) {
+    var st = statuses[m._sensorId] || 'unknown';
+    m._sensorStatus = st;
+    m._sensorColor  = STATUS_COLOR_MAP[st] || '#6b7280';
+  });
+  _paths.forEach(function(p) {
+    var st = statuses[p._pathId] || 'unknown';
+    p._pathStatus = st;
+  });
+  applyVisibility();
+  _updatePlayUI();
+}
+
+function stepRun(delta) { setRun(_playIdx + delta); }
+
+function togglePlay() {
+  if (_playTimer) {
+    clearInterval(_playTimer); _playTimer = null;
+    _updatePlayUI();
+    return;
+  }
+  if (_playIdx >= _history.length - 1) setRun(0);
+  _playTimer = setInterval(function() {
+    if (_playIdx >= _history.length - 1) {
+      clearInterval(_playTimer); _playTimer = null; _updatePlayUI(); return;
+    }
+    setRun(_playIdx + 1);
+  }, 900);
+  _updatePlayUI();
+}
+
+// Initialise slider at latest run
+if (_history.length) { _updatePlayUI(); }
+
+/* -- Info panel --------------------------------------------------- */
 function showMapPanel(title, bodyHtml) {
   var panel = document.getElementById('mapInfoPanel');
   document.getElementById('mapInfoTitle').textContent = title;

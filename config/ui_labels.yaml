@@ -7,7 +7,7 @@ page_title: "ITS Infrastructure Health"
 panels:
   groups:       "Infrastructure groups"
   map:          "Sensor map"
-  health_trend: "Sensor health trend"
+  health_trend: "Sensors health trend"
   stability:    "Sensor stability"
   history:      "Run history"
 
