@@ -726,6 +726,7 @@ def generate_report() -> str:
             '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">' + _lbl('map_layers','vms','VMS') + '</button>'
             '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">' + _lbl('map_layers','paths','BT Paths') + '</button>'
             '<span style="flex:1"></span>'
+            '<button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
             '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
             '</div>'
@@ -1015,6 +1016,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(_map);
 
 var _clusterOpts = {showCoverageOnHover:false, maxClusterRadius:50, disableClusteringAtZoom:13, chunkedLoading:true};
+var _clustered = true;
 var _layerGroups = {
   td:    L.markerClusterGroup(_clusterOpts),
   bt:    L.markerClusterGroup(_clusterOpts),
@@ -1257,6 +1259,24 @@ function setFilter(btn, val) {
   applyVisibility();
 }
 
+/* -- Cluster toggle ----------------------------------------------- */
+function _rebuildPointLayers() {
+  ['td','bt','vms'].forEach(function(key) {
+    _map.removeLayer(_layerGroups[key]);
+    _layerGroups[key] = _clustered
+      ? L.markerClusterGroup(_clusterOpts)
+      : L.layerGroup();
+    _map.addLayer(_layerGroups[key]);
+  });
+  applyVisibility();
+}
+
+function toggleClustering(btn) {
+  _clustered = !_clustered;
+  btn.classList.toggle('active', _clustered);
+  _rebuildPointLayers();
+}
+
 /* -- Focus layer (called from group cards) ------------------------ */
 function focusMapLayer(key) {
   Object.keys(_activeLayers).forEach(function(k){ _activeLayers[k] = (k === key); });
@@ -1284,7 +1304,7 @@ function _updatePlayUI() {
   if (slider) { slider.max = _history.length - 1; slider.value = _playIdx; }
   var run    = _history[_playIdx];
   var isLive = _playIdx === _history.length - 1;
-  if (label) label.textContent = (isLive ? '\\u25cf Live \\u00b7 ' : 'Run ' + (_playIdx+1) + '/' + _history.length + ' \\u00b7 ') + (run.run_at || '');
+  if (label) label.textContent = (isLive ? 'Last run \\u00b7 ' : 'Run ' + (_playIdx+1) + '/' + _history.length + ' \\u00b7 ') + (run.run_at || '');
   if (playBtn) playBtn.innerHTML = _playTimer ? '&#9646;&#9646;' : '&#9654;';
 }
 
