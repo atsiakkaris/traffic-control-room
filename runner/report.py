@@ -183,13 +183,14 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
-def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null"):
+def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null", bt_path_coords=None):
     """Build the sensor stability panel HTML with a group dropdown."""
     if not sensors:
         return "<p style='color:var(--color-text-secondary);font-size:13px'>No sensor data recorded yet.</p>"
 
     bt_path_names = bt_path_names or {}
     all_sensor_coords = all_sensor_coords or {}
+    bt_path_coords = bt_path_coords or {}
 
     groups = sorted({s["group_name"] for s in sensors})
 
@@ -223,11 +224,15 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 
         display_group = GROUP_DISPLAY.get(s["group_name"], s["group_name"])
 
-        # Resolve coords for map-link (TD, BT sites, VMS only — BT Paths are polylines)
+        # Resolve coords for map-link
         coord_info = {}
+        bt_path_line = None
         if s["group_name"] in ("Traffic Detection", "Bluetooth", "VMS"):
             coord_info = (all_sensor_coords or {}).get(s["group_name"], {}).get(s["sensor_id"], {})
+        elif s["group_name"] == "Bluetooth Paths":
+            bt_path_line = bt_path_coords.get(s["sensor_id"])
         has_coords = bool(coord_info.get("lat") and coord_info.get("lon"))
+        has_bt_path = bool(bt_path_line and bt_path_line.get("coords"))
 
         history = s["history"]
         total = len(history)
@@ -283,6 +288,13 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
                 f'<span onclick="event.stopPropagation();flyToSensor(this)" '
                 f'data-lat="{lat_v}" data-lon="{lon_v}" '
                 f'data-sid="{s["sensor_id"]}" data-mapgroup="{s["group_name"]}" '
+                f'title="Show on map" style="cursor:pointer;margin-left:5px;opacity:0.5;font-size:10px">&#x1F4CD;</span>'
+            )
+            sid_cell = f'{display_sensor_id}{map_icon}'
+        elif has_bt_path:
+            map_icon = (
+                f'<span onclick="event.stopPropagation();flyToBtPath(this)" '
+                f'data-pathid="{s["sensor_id"]}" '
                 f'title="Show on map" style="cursor:pointer;margin-left:5px;opacity:0.5;font-size:10px">&#x1F4CD;</span>'
             )
             sid_cell = f'{display_sensor_id}{map_icon}'
@@ -851,7 +863,7 @@ def generate_report() -> str:
 
     # Build stability html now that coord lookups are available
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
-    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json)
+    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
     # Build sensor list for map: includes live measurements for rich popups
@@ -1568,6 +1580,32 @@ function flyToSensor(el) {
       if (m._sensorId === sid) m.fire('click');
     });
   }, 900);
+}
+
+/* -- Fly to BT path (called from stability panel) ---------------- */
+function flyToBtPath(el) {
+  var pid = el.dataset.pathid;
+  // ensure BT paths layer is visible
+  if (!_activeLayers['bt']) {
+    _activeLayers['bt'] = true;
+    var layerBtn = document.querySelector('[data-layer="bt"]');
+    if (layerBtn) layerBtn.classList.add('active');
+    applyVisibility();
+  }
+  // open map panel if collapsed, then scroll to it
+  var mapBody = document.getElementById('b-p-map');
+  var mapPanel = document.getElementById('p-map');
+  if (mapBody && mapBody.style.display === 'none') {
+    if (mapPanel) mapPanel.querySelector('.panel-header').click();
+  }
+  if (mapPanel) mapPanel.scrollIntoView({behavior:'smooth', block:'start'});
+  // find the polyline and fly to its bounds
+  var target = null;
+  _paths.forEach(function(p) { if (p._pathId === pid) target = p; });
+  if (target) {
+    _map.flyToBounds(target.getBounds(), {padding:[40,40], maxZoom:14, duration:0.8});
+    setTimeout(function() { target.fire('click'); }, 900);
+  }
 }
 
 /* -- Info panel --------------------------------------------------- */
