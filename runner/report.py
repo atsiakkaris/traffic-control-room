@@ -310,7 +310,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
-          <td><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
+          <td style="white-space:nowrap"><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
           <td>{first_seen_html}</td>
@@ -1075,7 +1075,7 @@ def generate_report() -> str:
 
 <div class="wrap">
 <div style="display:flex;gap:20px;align-items:flex-start">
-<div style="flex:0 0 55%;min-width:0">
+<div style="flex:0 0 60%;min-width:0">
 
   <div class="panel" id="p-groups">
     <div class="panel-header" onclick="togglePanel('p-groups')">
@@ -1134,7 +1134,7 @@ def generate_report() -> str:
   </div>
 
 </div><!-- end left column -->
-<div style="flex:0 0 45%;min-width:0;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto">
+<div style="flex:0 0 40%;min-width:0;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto">
 
   <div class="panel" id="p-sensors">
     <div class="panel-header" onclick="togglePanel('p-sensors')">
