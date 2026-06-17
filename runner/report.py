@@ -310,7 +310,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
-          <td><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
+          <td style="white-space:nowrap"><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
           <td>{first_seen_html}</td>
@@ -1012,7 +1012,7 @@ def generate_report() -> str:
             display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }}
   header h1 {{ font-size: 1.15rem; font-weight: 500; letter-spacing: -0.01em; }}
   header .meta {{ font-size: 11px; opacity: 0.45; margin-top:3px; }}
-  .wrap {{ max-width: 1200px; margin: 0 auto; padding: 20px 16px; }}
+  .wrap {{ max-width: 100%; margin: 0 auto; padding: 20px 32px; }}
   .section-label {{ font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
                     text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }}
   .group-cards {{ display: flex; gap: 16px; flex-wrap: wrap; }}
@@ -1074,6 +1074,8 @@ def generate_report() -> str:
 </header>
 
 <div class="wrap">
+<div style="display:flex;gap:20px;align-items:flex-start">
+<div style="flex:0 0 60%;min-width:0">
 
   <div class="panel" id="p-groups">
     <div class="panel-header" onclick="togglePanel('p-groups')">
@@ -1117,17 +1119,6 @@ def generate_report() -> str:
     </div>
   </div>
 
-  <div class="panel" id="p-sensors">
-    <div class="panel-header" onclick="togglePanel('p-sensors')">
-      <span class="panel-title">{_lbl('panels', 'stability', 'Sensor stability')}</span>
-      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
-    </div>
-    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
-    <div class="panel-body" id="b-p-sensors">
-      {sensor_stability_html}
-    </div>
-  </div>
-
   <div class="panel" id="p-history">
     <div class="panel-header" onclick="togglePanel('p-history')">
       <span class="panel-title">{_lbl('panels', 'history', 'Run history')} — last 20 runs</span>
@@ -1142,7 +1133,23 @@ def generate_report() -> str:
     </div>
   </div>
 
-</div>
+</div><!-- end left column -->
+<div style="flex:0 0 40%;min-width:0;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto">
+
+  <div class="panel" id="p-sensors">
+    <div class="panel-header" onclick="togglePanel('p-sensors')">
+      <span class="panel-title">{_lbl('panels', 'stability', 'Sensor stability')}</span>
+      <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-body" id="b-p-sensors">
+      {sensor_stability_html}
+    </div>
+  </div>
+
+</div><!-- end right column -->
+</div><!-- end flex row -->
+</div><!-- end wrap -->
 
 <script>
 function togglePanel(id) {{
