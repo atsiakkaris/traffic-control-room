@@ -183,7 +183,7 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
-def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None):
+def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null"):
     """Build the sensor stability panel HTML with a group dropdown."""
     if not sensors:
         return "<p style='color:var(--color-text-secondary);font-size:13px'>No sensor data recorded yet.</p>"
@@ -279,18 +279,22 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         if has_coords:
             lat_v = coord_info["lat"]
             lon_v = coord_info["lon"]
-            sid_cell = (
-                f'<span onclick="flyToSensor(this)" '
+            map_icon = (
+                f'<span onclick="event.stopPropagation();flyToSensor(this)" '
                 f'data-lat="{lat_v}" data-lon="{lon_v}" '
                 f'data-sid="{s["sensor_id"]}" data-mapgroup="{s["group_name"]}" '
-                f'title="Show on map" style="cursor:pointer;text-decoration:underline dotted;'
-                f'text-underline-offset:3px;color:var(--color-text-primary)">{display_sensor_id}</span>'
+                f'title="Show on map" style="cursor:pointer;margin-left:5px;opacity:0.5;font-size:10px">&#x1F4CD;</span>'
             )
+            sid_cell = f'{display_sensor_id}{map_icon}'
         else:
             sid_cell = display_sensor_id
 
+        # Composite key avoids ID collisions when multiple groups share a sensor_id (e.g. TD and BT both have id "1")
+        composite_id = f"{s['group_name']}|{s['sensor_id']}"
+        safe_sid = composite_id.replace("'", "\\'")
         rows += f"""
-        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}">
+        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
+          <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
@@ -298,6 +302,22 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
           <td>{first_seen_html}</td>
+        </tr>
+        <tr id="trend-{composite_id}" style="display:none">
+          <td colspan="9" style="padding:0">
+            <div style="padding:14px 16px;background:var(--color-background-secondary);border-bottom:0.5px solid var(--color-border-tertiary)">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+                <span style="font-size:12px;font-weight:500">Daily health % — {display_sensor_id or s['sensor_id']}</span>
+                <div style="display:flex;gap:6px">
+                  <button id="btn7-{composite_id}" onclick="event.stopPropagation();_setTrendWindow('{safe_sid}',7)"
+                    style="font-size:11px;padding:3px 10px;border-radius:6px;border:0.5px solid var(--color-border-tertiary);background:var(--header-bg);color:#fff;cursor:pointer">7 days</button>
+                  <button id="btn30-{composite_id}" onclick="event.stopPropagation();_setTrendWindow('{safe_sid}',30)"
+                    style="font-size:11px;padding:3px 10px;border-radius:6px;border:0.5px solid var(--color-border-tertiary);background:var(--color-background-primary);color:var(--color-text-secondary);cursor:pointer">30 days</button>
+                </div>
+              </div>
+              <div style="position:relative;height:110px"><canvas id="chart-{composite_id}" role="img" aria-label="Daily health percentage for {display_sensor_id or s['sensor_id']}"></canvas></div>
+            </div>
+          </td>
         </tr>"""
 
     # Per-group good/total counts for dynamic bar
@@ -334,7 +354,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </button>
     </div>
     <table id="sensorTable">
-      <thead><tr><th>Group</th><th>Sensor ID</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
+      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -342,12 +362,18 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     function _applyStabilityFilters() {{
       var group  = document.getElementById('groupFilter').value;
       var search = (document.getElementById('stabilitySearch').value || '').toLowerCase().trim();
-      var goodCount = 0, totalCount = 0;
       document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
+        if (!tr.dataset.group) return;  // skip trend rows — they follow their parent
         var groupMatch  = group === 'all' || tr.dataset.group === group;
         var searchMatch = !search || (tr.dataset.display || '').indexOf(search) !== -1;
         var visible = groupMatch && searchMatch;
         tr.style.display = visible ? '' : 'none';
+        // also hide the associated trend row if sensor row is hidden
+        var sid = tr.getAttribute('onclick') && tr.getAttribute('onclick').match(/'([^']+)'/);
+        if (sid) {{
+          var trow = document.getElementById('trend-' + sid[1]);
+          if (trow && !visible) trow.style.display = 'none';
+        }}
       }});
       // update progress bar using group stats (search doesn't affect bar)
       var stats = _groupStats[group] || _groupStats['all'];
@@ -361,6 +387,83 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       document.getElementById('groupFilter').value = val;
       _applyStabilityFilters();
     }}
+    var _trendData   = {trend_data_json};
+    var _dayLabels30 = {day_labels_json};
+    var _openTrend   = null;
+    var _trendChart  = null;
+
+    function _toggleTrend(sid, row) {{
+      var trow = document.getElementById('trend-' + sid);
+      var chev = document.getElementById('chev-' + sid);
+      if (!trow) return;
+      var opening = trow.style.display === 'none';
+      if (_openTrend && _openTrend !== sid) {{
+        var prev = document.getElementById('trend-' + _openTrend);
+        var prevChev = document.getElementById('chev-' + _openTrend);
+        if (prev) prev.style.display = 'none';
+        if (prevChev) prevChev.style.transform = '';
+        if (_trendChart) {{ _trendChart.destroy(); _trendChart = null; }}
+      }}
+      if (opening) {{
+        trow.style.display = '';
+        if (chev) chev.style.transform = 'rotate(90deg)';
+        _openTrend = sid;
+        _buildTrendChart(sid, 7);
+        setTimeout(function() {{ trow.scrollIntoView({{behavior:'smooth', block:'nearest'}}); }}, 30);
+      }} else {{
+        trow.style.display = 'none';
+        if (chev) chev.style.transform = '';
+        if (_trendChart) {{ _trendChart.destroy(); _trendChart = null; }}
+        _openTrend = null;
+      }}
+    }}
+
+    function _setTrendWindow(sid, days) {{
+      var btn7  = document.getElementById('btn7-'  + sid);
+      var btn30 = document.getElementById('btn30-' + sid);
+      var activeStyle  = 'font-size:11px;padding:3px 10px;border-radius:6px;border:0.5px solid var(--color-border-tertiary);background:var(--header-bg);color:#fff;cursor:pointer';
+      var inactiveStyle = 'font-size:11px;padding:3px 10px;border-radius:6px;border:0.5px solid var(--color-border-tertiary);background:var(--color-background-primary);color:var(--color-text-secondary);cursor:pointer';
+      if (btn7)  btn7.style.cssText  = days === 7  ? activeStyle : inactiveStyle;
+      if (btn30) btn30.style.cssText = days === 30 ? activeStyle : inactiveStyle;
+      _buildTrendChart(sid, days);
+    }}
+
+    function _buildTrendChart(sid, days) {{
+      var allData = (_trendData && _trendData[sid]) || [];
+      var data    = allData.slice(allData.length - days);
+      var labels  = _dayLabels30.slice(_dayLabels30.length - days);
+      var colors  = data.map(function(v) {{
+        if (v === null || v === undefined) return '#d1d5db';
+        return v >= 90 ? '#1d9e75' : (v >= 55 ? '#e58e0a' : '#e24b4a');
+      }});
+      var ctx = document.getElementById('chart-' + sid);
+      if (!ctx) return;
+      if (_trendChart) {{ _trendChart.destroy(); _trendChart = null; }}
+      _trendChart = new Chart(ctx, {{
+        type: 'bar',
+        data: {{
+          labels: labels,
+          datasets: [{{
+            data: data,
+            backgroundColor: colors,
+            borderRadius: 3,
+            borderSkipped: false,
+          }}]
+        }},
+        options: {{
+          responsive: true, maintainAspectRatio: false,
+          plugins: {{
+            legend: {{ display: false }},
+            tooltip: {{ callbacks: {{ label: function(c) {{ return c.parsed.y !== null ? c.parsed.y + '% healthy' : 'No data'; }} }} }}
+          }},
+          scales: {{
+            y: {{ min: 0, max: 100, ticks: {{ callback: function(v) {{ return v + '%'; }}, font: {{ size: 10 }} }}, grid: {{ color: 'rgba(128,128,128,0.1)' }} }},
+            x: {{ ticks: {{ font: {{ size: 10 }}, maxRotation: 45 }}, grid: {{ display: false }} }}
+          }}
+        }}
+      }});
+    }}
+
     function exportStabilityCSV() {{
       var headers = ['Group','Sensor ID','Stability','Last issue','Last working','First seen'];
       var lines = [headers.map(function(h){{return '"'+h+'"';}}).join(',')];
@@ -706,9 +809,40 @@ def generate_report() -> str:
     all_coords = fetch_sensor_coords()
     all_bt_paths = fetch_bt_path_coords()
 
+    # Build per-sensor daily health % for last 30 days (for trend charts)
+    from datetime import timedelta
+    _today = datetime.now(timezone.utc).date()
+    _days30 = [(_today - timedelta(days=i)) for i in range(29, -1, -1)]
+    _day_labels = [d.strftime("%d/%m") for d in _days30]
+
+    _daily: dict = {}
+    for s in all_sensors:
+        key = f"{s['group_name']}|{s['sensor_id']}"
+        _daily[key] = {}
+        for h in s["history"]:
+            day = h["run_at"][:10]
+            if day not in _daily[key]:
+                _daily[key][day] = {"good": 0, "total": 0}
+            _daily[key][day]["total"] += 1
+            if h["status"] in GOOD_STATUSES:
+                _daily[key][day]["good"] += 1
+
+    _trend_data: dict = {}
+    for s in all_sensors:
+        key = f"{s['group_name']}|{s['sensor_id']}"
+        row = []
+        for d in _days30:
+            stats = _daily.get(key, {}).get(d.isoformat(), {})
+            t = stats.get("total", 0)
+            row.append(round(stats.get("good", 0) / t * 100) if t else None)
+        _trend_data[key] = row
+
+    trend_data_json  = json.dumps(_trend_data)
+    day_labels_json  = json.dumps(_day_labels)
+
     # Build stability html now that coord lookups are available
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
-    sensor_stability_html = build_sensor_stability_html(all_sensors, _bt_path_names, all_coords)
+    sensor_stability_html = build_sensor_stability_html(all_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
     # Build sensor list for map: includes live measurements for rich popups

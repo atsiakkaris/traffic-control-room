@@ -66,7 +66,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Schedule
 
-Runs every hour (24 times daily). Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
+Runs every 2 hours (12 times daily). Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
 
 > Timestamps in the dashboard are displayed in Cyprus local time (EEST/EET) and adjust automatically for DST.
 
