@@ -840,9 +840,18 @@ def generate_report() -> str:
     trend_data_json  = json.dumps(_trend_data)
     day_labels_json  = json.dumps(_day_labels)
 
+    # Build set of active sensor keys from coord tables (which already filter active=1)
+    _active_keys = set()
+    for grp, sensors_dict in all_coords.items():
+        for sid in sensors_dict:
+            _active_keys.add((grp, sid))
+    for pid in all_bt_paths:
+        _active_keys.add(("Bluetooth Paths", pid))
+    active_sensors = [s for s in all_sensors if (s["group_name"], s["sensor_id"]) in _active_keys]
+
     # Build stability html now that coord lookups are available
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
-    sensor_stability_html = build_sensor_stability_html(all_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json)
+    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
     # Build sensor list for map: includes live measurements for rich popups

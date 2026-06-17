@@ -28,7 +28,7 @@ from pathlib import Path
 # Make sure runner/ is on the path when called from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db import init_db, insert_run, insert_result, insert_sensor_result, upsert_sensor_coords, upsert_bt_path_coords
+from db import init_db, insert_run, insert_result, insert_sensor_result, upsert_sensor_coords, upsert_bt_path_coords, retire_missing_sensors, retire_missing_bt_paths
 from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report
@@ -185,14 +185,17 @@ def run_all():
                     coords = extract_measurement_site_coords(txt)
                     if coords:
                         upsert_sensor_coords(group_name, coords)
+                        retire_missing_sensors(group_name, set(coords.keys()))
                 elif ep_name == "VMS Inventory":
                     coords = extract_vms_coords(txt)
                     if coords:
                         upsert_sensor_coords(group_name, coords)
+                        retire_missing_sensors(group_name, set(coords.keys()))
                 elif ep_name == "Bluetooth Paths Inventory":
                     paths = extract_bt_path_coords(txt)
                     if paths:
                         upsert_bt_path_coords(paths)
+                        retire_missing_bt_paths(set(paths.keys()))
 
             icon = {"pass": "✓", "fail": "✗", "error": "⚠"}.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])

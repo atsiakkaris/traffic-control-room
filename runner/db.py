@@ -62,13 +62,15 @@ def init_db():
             lon         REAL NOT NULL,
             name        TEXT,
             site_code   TEXT,
+            active      INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (sensor_id, group_name)
         );
 
         CREATE TABLE IF NOT EXISTS bt_path_coords (
             path_id TEXT PRIMARY KEY,
             name    TEXT,
-            coords  TEXT
+            coords  TEXT,
+            active  INTEGER NOT NULL DEFAULT 1
         );
     """)
     conn.commit()
@@ -100,7 +102,18 @@ def init_db():
             conn.commit()
     if "bt_path_coords" not in tables:
         conn.execute("""CREATE TABLE bt_path_coords (
-            path_id TEXT PRIMARY KEY, name TEXT, coords TEXT)""")
+            path_id TEXT PRIMARY KEY, name TEXT, coords TEXT,
+            active INTEGER NOT NULL DEFAULT 1)""")
+        conn.commit()
+
+    # Migrate: add active column to sensor_coords and bt_path_coords
+    sc_cols = [r[1] for r in conn.execute("PRAGMA table_info(sensor_coords)").fetchall()]
+    if "active" not in sc_cols:
+        conn.execute("ALTER TABLE sensor_coords ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
+    bt_cols = [r[1] for r in conn.execute("PRAGMA table_info(bt_path_coords)").fetchall()]
+    if "active" not in bt_cols:
+        conn.execute("ALTER TABLE bt_path_coords ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         conn.commit()
 
     conn.close()
@@ -216,12 +229,28 @@ def upsert_sensor_coords(group_name, coords_dict):
     conn = get_connection()
     for sid, c in coords_dict.items():
         conn.execute(
-            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code, active)
+               VALUES (?,?,?,?,?,?,1)
                ON CONFLICT(sensor_id, group_name) DO UPDATE
-               SET lat=excluded.lat, lon=excluded.lon, name=excluded.name, site_code=excluded.site_code""",
+               SET lat=excluded.lat, lon=excluded.lon, name=excluded.name,
+                   site_code=excluded.site_code, active=1""",
             (sid, group_name, c["lat"], c["lon"], c.get("name", sid), c.get("site_code"))
         )
+    conn.commit()
+    conn.close()
+
+
+def retire_missing_sensors(group_name, active_ids):
+    """Mark sensors in group_name as inactive if their ID is not in active_ids."""
+    conn = get_connection()
+    if active_ids:
+        placeholders = ",".join("?" * len(active_ids))
+        conn.execute(
+            f"UPDATE sensor_coords SET active=0 WHERE group_name=? AND sensor_id NOT IN ({placeholders})",
+            [group_name] + list(active_ids)
+        )
+    else:
+        conn.execute("UPDATE sensor_coords SET active=0 WHERE group_name=?", (group_name,))
     conn.commit()
     conn.close()
 
@@ -232,21 +261,36 @@ def upsert_bt_path_coords(paths_dict):
     conn = get_connection()
     for pid, p in paths_dict.items():
         conn.execute(
-            """INSERT INTO bt_path_coords (path_id, name, coords)
-               VALUES (?,?,?)
+            """INSERT INTO bt_path_coords (path_id, name, coords, active)
+               VALUES (?,?,?,1)
                ON CONFLICT(path_id) DO UPDATE
-               SET name=excluded.name, coords=excluded.coords""",
+               SET name=excluded.name, coords=excluded.coords, active=1""",
             (pid, p["name"], json.dumps(p["coords"]))
         )
     conn.commit()
     conn.close()
 
 
+def retire_missing_bt_paths(active_ids):
+    """Mark BT paths as inactive if their ID is not in active_ids."""
+    conn = get_connection()
+    if active_ids:
+        placeholders = ",".join("?" * len(active_ids))
+        conn.execute(
+            f"UPDATE bt_path_coords SET active=0 WHERE path_id NOT IN ({placeholders})",
+            list(active_ids)
+        )
+    else:
+        conn.execute("UPDATE bt_path_coords SET active=0")
+    conn.commit()
+    conn.close()
+
+
 def fetch_sensor_coords():
-    """Return {group_name: {sensor_id: {lat, lon, name, site_code}}}"""
+    """Return {group_name: {sensor_id: {lat, lon, name, site_code}}} — active sensors only."""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT sensor_id, group_name, lat, lon, name, site_code FROM sensor_coords"
+        "SELECT sensor_id, group_name, lat, lon, name, site_code FROM sensor_coords WHERE active=1"
     ).fetchall()
     conn.close()
     result = {}
@@ -260,11 +304,11 @@ def fetch_sensor_coords():
 
 
 def fetch_bt_path_coords():
-    """Return {path_id: {name, coords: [[lat,lon],...]}}"""
+    """Return {path_id: {name, coords: [[lat,lon],...]}} — active paths only."""
     import json
     conn = get_connection()
     rows = conn.execute(
-        "SELECT path_id, name, coords FROM bt_path_coords"
+        "SELECT path_id, name, coords FROM bt_path_coords WHERE active=1"
     ).fetchall()
     conn.close()
     return {
