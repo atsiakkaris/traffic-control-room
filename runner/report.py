@@ -387,10 +387,10 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       document.getElementById('groupFilter').value = val;
       _applyStabilityFilters();
     }}
-    var _trendData   = {trend_data_json};
-    var _dayLabels30 = {day_labels_json};
-    var _openTrend   = null;
-    var _trendChart  = null;
+    var _trendData      = {trend_data_json};
+    var _dayLabels30    = {day_labels_json};
+    var _openTrend      = null;
+    var _sensorBarChart = null;
 
     function _toggleTrend(sid, row) {{
       var trow = document.getElementById('trend-' + sid);
@@ -402,7 +402,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         var prevChev = document.getElementById('chev-' + _openTrend);
         if (prev) prev.style.display = 'none';
         if (prevChev) prevChev.style.transform = '';
-        if (_trendChart) {{ _trendChart.destroy(); _trendChart = null; }}
+        if (_sensorBarChart) {{ _sensorBarChart.destroy(); _sensorBarChart = null; }}
       }}
       if (opening) {{
         trow.style.display = '';
@@ -413,7 +413,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       }} else {{
         trow.style.display = 'none';
         if (chev) chev.style.transform = '';
-        if (_trendChart) {{ _trendChart.destroy(); _trendChart = null; }}
+        if (_sensorBarChart) {{ _sensorBarChart.destroy(); _sensorBarChart = null; }}
         _openTrend = null;
       }}
     }}
@@ -438,8 +438,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       }});
       var ctx = document.getElementById('chart-' + sid);
       if (!ctx) return;
-      if (_trendChart) {{ _trendChart.destroy(); _trendChart = null; }}
-      _trendChart = new Chart(ctx, {{
+      if (_sensorBarChart) {{ _sensorBarChart.destroy(); _sensorBarChart = null; }}
+      _sensorBarChart = new Chart(ctx, {{
         type: 'bar',
         data: {{
           labels: labels,
@@ -1152,15 +1152,15 @@ function toggleDark() {{
   document.getElementById('dmLabel').textContent = _dark ? 'Light' : 'Dark';
   var tc = '#9ca3af';
   var gc = _dark ? 'rgba(255,255,255,0.06)' : 'rgba(128,128,128,0.1)';
-  if (window._trendChart) {{
-    window._trendChart.options.scales.x.ticks.color = tc;
-    window._trendChart.options.scales.y.ticks.color = tc;
-    window._trendChart.options.scales.y.grid.color = gc;
-    window._trendChart.update();
+  if (window._healthTrendChart) {{
+    window._healthTrendChart.options.scales.x.ticks.color = tc;
+    window._healthTrendChart.options.scales.y.ticks.color = tc;
+    window._healthTrendChart.options.scales.y.grid.color = gc;
+    window._healthTrendChart.update();
   }}
 }}
 
-window._trendChart = new Chart(document.getElementById('trendChart'), {{
+window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
   type: 'line',
   data: {{
     labels: {chart_labels},
