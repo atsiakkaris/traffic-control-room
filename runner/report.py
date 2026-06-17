@@ -1053,6 +1053,7 @@ def generate_report() -> str:
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
 </head>
 <body>
 <header>
@@ -1225,6 +1226,7 @@ var STATUS_COLOR_MAP = {
 };
 
 var _map = L.map('sensorMap', {zoomControl:true}).setView([34.95, 33.15], 9);
+_map.on('click', function() { closeMapPanel(); });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors', maxZoom: 19
 }).addTo(_map);
@@ -1235,7 +1237,8 @@ var _layerGroups = {
   td:    L.markerClusterGroup(_clusterOpts),
   bt:    L.markerClusterGroup(_clusterOpts),
   vms:   L.markerClusterGroup(_clusterOpts),
-  paths: L.layerGroup()
+  paths: L.layerGroup(),
+  arrows: L.layerGroup()
 };
 Object.values(_layerGroups).forEach(function(lg){ lg.addTo(_map); });
 
@@ -1306,7 +1309,7 @@ function makeMarker(s) {
   var rows = popRow('ID', s.id)+popRow('Group', s.group_display||s.group)+
              popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
-  m.on('click', function() { showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
+  m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
   return m;
 }
 
@@ -1334,6 +1337,16 @@ function makePath(p) {
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
   pl._bodyHtml = bodyHtml;
   pl._pathName = 'BT Path '+p.name;
+  // direction arrows along the path
+  pl._decorator = L.polylineDecorator(pl, {
+    patterns: [{
+      offset: 20, repeat: 80,
+      symbol: L.Symbol.arrowHead({
+        pixelSize: 9, headAngle: 40,
+        pathOptions: {color: '#555', fillOpacity: 0.7, weight: 0, fillColor: '#555', interactive: false}
+      })
+    }]
+  });
   return pl;
 }
 
@@ -1355,7 +1368,9 @@ var _highlighted = null;
 _btPaths.forEach(function(p) {
   var pl = makePath(p);
   pl.addTo(_layerGroups.paths);
-  pl.on('click', function() {
+  pl._decorator.addTo(_layerGroups.arrows);
+  pl.on('click', function(e) {
+    L.DomEvent.stopPropagation(e);
     if (_highlighted && _highlighted !== pl) {
       _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
       _highlighted.bringToBack();
@@ -1437,11 +1452,17 @@ function applyVisibility() {
       }
     });
   });
+  var pathsOn = _activeLayers.paths;
   _paths.forEach(function(p) {
-    var on = _activeLayers.paths &&
+    var on = pathsOn &&
              (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(p._pathStatus) !== -1);
     p.setStyle(pathStyle(p._pathStatus, !on));
   });
+  if (pathsOn) {
+    if (!_map.hasLayer(_layerGroups.arrows)) _map.addLayer(_layerGroups.arrows);
+  } else {
+    if (_map.hasLayer(_layerGroups.arrows)) _map.removeLayer(_layerGroups.arrows);
+  }
 }
 
 function _syncShowAll() {
