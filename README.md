@@ -46,7 +46,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 **Sensor Map** — interactive Leaflet.js map with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
 - Marker clustering at country zoom (expands at zoom 13+); toggle clustering on/off with the **Cluster** button
-- All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data)
+- All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data), with directional arrows showing the direction of travel
 - Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
 - **View on map** button on each group card isolates that group and flies to its bounds
@@ -58,15 +58,20 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - Live search input to filter by sensor name or ID
 - Group dropdown filter
 - **Export CSV** button downloads the currently visible rows
-- Sensor IDs are clickable — clicking points that sensor to the map and opens its info popup
+- 📍 icon on each row — click to fly the map to that sensor or BT path and open its popup
+- Expandable per-sensor daily health % trend chart (last 7 / 14 / 30 days)
 
 **Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and BT Paths across the last 20 runs.
+
+> The dashboard uses a **two-column layout** (60/40): the left column holds Infrastructure Groups, Sensor Map, Health Trend, and Run History; the right column holds the Sensor Stability panel and stays sticky while you scroll.
 
 ---
 
 ## Schedule
 
-Runs every 2 hours (12 times daily). Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
+Tests run every 2 hours (12 times daily). Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
+
+A **weekly digest email** is sent every Monday at 08:00 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging always-off sensors, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. Requires `GMAIL_USER`, `GMAIL_APP_PW`, and `NOTIFY_EMAIL` set as GitHub Secrets.
 
 > Timestamps in the dashboard are displayed in Cyprus local time (EEST/EET) and adjust automatically for DST.
 
@@ -83,15 +88,18 @@ Runs every 2 hours (12 times daily). Edit `.github/workflows/daily_tests.yml` to
 │   ├── tests.py                ← XML assertion logic per check type
 │   ├── db.py                   ← SQLite helpers (schema, queries, migrations)
 │   ├── geo.py                  ← Coordinate extraction from DATEX II inventory feeds
-│   └── report.py               ← HTML dashboard generator
+│   ├── report.py               ← HTML dashboard generator
+│   └── digest.py               ← Weekly digest email builder and sender
 ├── results/
 │   └── history.db              ← SQLite DB (auto-committed after each run)
 ├── reports/
 │   └── latest.html             ← Generated dashboard (auto-committed after each run)
 ├── .github/workflows/
-│   └── daily_tests.yml         ← GitHub Actions schedule
+│   ├── daily_tests.yml         ← GitHub Actions schedule (every 2 hours)
+│   └── weekly_digest.yml       ← Weekly digest email (Mondays 08:00 EEST)
 ├── run.ps1                     ← Local run script (PowerShell, loads .env automatically)
 ├── run.bat                     ← Local run script (double-click alternative, no execution policy needed)
+├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
 └── requirements.txt
 ```
 
