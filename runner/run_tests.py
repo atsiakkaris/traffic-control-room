@@ -18,11 +18,8 @@ import uuid
 import time
 import yaml
 import httpx
-import smtplib
 import logging
 from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
 # Make sure runner/ is on the path when called from repo root
@@ -217,77 +214,9 @@ def run_all():
     report_path = generate_report()
     log.info("Report written to %s", report_path)
 
-    # Send email (disabled — uncomment to re-enable)
-    # send_email(run_id, run_at, totals, all_results, report_path)
-
     # Exit non-zero if any failures (makes GitHub Actions mark the run red)
     if totals["failed"] > 0 or totals["errored"] > 0:
         sys.exit(1)
-
-
-def send_email(run_id, run_at, totals, results, report_path):
-    gmail_user = os.environ.get("GMAIL_USER", "")
-    gmail_pw = os.environ.get("GMAIL_APP_PW", "")
-    recipient = os.environ.get("NOTIFY_EMAIL", gmail_user)
-
-    if not gmail_user or not gmail_pw:
-        log.warning("GMAIL_USER / GMAIL_APP_PW not set — skipping email.")
-        return
-
-    all_passed = totals["failed"] == 0 and totals["errored"] == 0
-    subject = (
-        f"✅ SWARCO API Tests — All {totals['total']} passed"
-        if all_passed
-        else f"❌ SWARCO API Tests — {totals['failed']} failed, {totals['errored']} errored"
-    )
-
-    # Build HTML email body
-    rows = ""
-    for r in results:
-        colour = {"pass": "#d4edda", "fail": "#f8d7da", "error": "#fff3cd"}.get(r["status"], "#fff")
-        icon = {"pass": "✅", "fail": "❌", "error": "⚠️"}.get(r["status"], "")
-        rows += f"""
-        <tr style="background:{colour}">
-            <td>{r['group']}</td>
-            <td>{r['name']}</td>
-            <td>{icon} {r['status'].upper()}</td>
-            <td>{r.get('status_code','—')}</td>
-            <td>{r.get('response_ms','—')} ms</td>
-            <td style="font-size:12px;color:#555">{r.get('failure_reason') or ''}</td>
-        </tr>"""
-
-    html = f"""
-    <html><body style="font-family:sans-serif;font-size:14px">
-    <h2>SWARCO API Test Report</h2>
-    <p><b>Run:</b> {run_at}<br>
-       <b>Passed:</b> {totals['passed']} &nbsp;
-       <b>Failed:</b> {totals['failed']} &nbsp;
-       <b>Errored:</b> {totals['errored']} &nbsp;
-       <b>Total:</b> {totals['total']}</p>
-    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%">
-        <tr style="background:#343a40;color:white">
-            <th>Group</th><th>Test</th><th>Result</th>
-            <th>HTTP</th><th>Time</th><th>Reason</th>
-        </tr>
-        {rows}
-    </table>
-    <p style="color:#888;font-size:12px">Full historical report available in the repository under reports/latest.html</p>
-    </body></html>
-    """
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = gmail_user
-    msg["To"] = recipient
-    msg.attach(MIMEText(html, "html"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(gmail_user, gmail_pw)
-            server.sendmail(gmail_user, recipient, msg.as_string())
-        log.info("Email sent to %s", recipient)
-    except Exception as e:
-        log.error("Failed to send email: %s", e)
 
 
 if __name__ == "__main__":
