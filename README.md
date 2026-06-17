@@ -1,14 +1,14 @@
 # ITS Infrastructure Health Monitor
 
-Automated health monitoring for Cyprus SWARCO DATEX II traffic infrastructure. Tests run twice daily via GitHub Actions, results are stored in SQLite, and a live HTML dashboard is published to GitHub Pages after every run.
+Automated health monitoring for Cyprus traffic infrastructure. Tests run hourly via GitHub Actions, results are stored in SQLite, and a live HTML dashboard is published to GitHub Pages after every run.
 
 ---
 
 ## Live Dashboard
 
-**[View the latest report →](https://atsiakkaris.github.io/traffic-control-room/reports/latest.html)**
+**[View the latest report here→](https://atsiakkaris.github.io/traffic-control-room/reports/latest.html)**
 
-Updates automatically within ~1 minute of each scheduled run.
+It updates automatically within ~1 minute of each scheduled run.
 
 ---
 
@@ -43,7 +43,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 **Infrastructure Groups** — one card per group showing feed status and sensor health %, with a breakdown of each check and collapsible sensor counts.
 
-**Sensor Map** — interactive Leaflet.js map of Cyprus with:
+**Sensor Map** — interactive Leaflet.js map with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
 - Marker clustering at country zoom (expands at zoom 13+); toggle clustering on/off with the **Cluster** button
 - All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data)
@@ -58,7 +58,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - Live search input to filter by sensor name or ID
 - Group dropdown filter
 - **Export CSV** button downloads the currently visible rows
-- Sensor IDs with known coordinates are clickable — clicking flies the map to that sensor and opens its info popup
+- Sensor IDs are clickable — clicking points that sensor to the map and opens its info popup
 
 **Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and BT Paths across the last 20 runs.
 
@@ -66,7 +66,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Schedule
 
-Runs three times daily. Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
+Runs every hour (24 times daily). Edit `.github/workflows/daily_tests.yml` to change the schedule. Use [crontab.guru](https://crontab.guru) to build a custom expression.
 
 > Timestamps in the dashboard are displayed in Cyprus local time (EEST/EET) and adjust automatically for DST.
 

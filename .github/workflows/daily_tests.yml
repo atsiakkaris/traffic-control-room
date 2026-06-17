@@ -1,12 +1,10 @@
 name: Daily API Tests
 
 on:
-  # Schedule last updated: 2026-06-15, 11:55am
-  # Runs at: 07:00, 15:00, 23:00 EEST
+  # Schedule last updated: 2026-06-17
+  # Runs every hour (24x/day) — EEST is UTC+3 (summer)
   schedule: # EEST is (UTC+3, summer)
-    - cron: "0 4 * * *"
-    - cron: "0 12 * * *"
-    - cron: "0 20 * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
