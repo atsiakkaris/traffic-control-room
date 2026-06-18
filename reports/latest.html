@@ -46,6 +46,13 @@
   .panel-bar { height: 3px; width: 100%; background: var(--border); }
   .panel-bar-fill { height: 3px; }
   .panel-body { padding: 16px 20px 18px; }
+  .col-layout { display:flex; gap:20px; align-items:flex-start; }
+  .col-left   { flex:0 0 60%; min-width:0; }
+  .col-right  { flex:0 0 40%; min-width:0; position:sticky; top:20px; max-height:calc(100vh - 40px); overflow-y:auto; }
+  @media (max-width: 900px) {
+    .col-layout { flex-direction:column; }
+    .col-left, .col-right { flex:none; width:100%; max-height:none; position:static; }
+  }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--muted); padding: 8px 12px; border-bottom: 0.5px solid var(--border); text-align: left; }
@@ -91,8 +98,8 @@
 </header>
 
 <div class="wrap">
-<div style="display:flex;gap:20px;align-items:flex-start">
-<div style="flex:0 0 60%;min-width:0">
+<div class="col-layout">
+<div class="col-left">
 
   <details style="margin-bottom:16px;background:var(--color-background-secondary);border-radius:10px;border:0.5px solid var(--color-border-tertiary);padding:12px 16px;font-size:13px">
     <summary style="cursor:pointer;font-weight:600;color:var(--color-text-primary);list-style:none;display:flex;align-items:center;gap:6px">
@@ -138,10 +145,13 @@
 
   <div class="panel" id="p-groups">
     <div class="panel-header" onclick="togglePanel('p-groups')">
-      <span class="panel-title">Infrastructure groups</span>
+      <div>
+        <span class="panel-title">System Overview</span>
+        <div style="font-size:11px;color:var(--color-text-secondary);margin-top:2px">Feed and sensor health per group — updated each run</div>
+      </div>
       <div class="panel-chevron open" id="c-p-groups"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:100%;background:#1d9e75"></div></div>
+    <div class="panel-bar" title="Overall pass rate from the latest run: 100% of checks passed" style="cursor:help"><div class="panel-bar-fill" style="width:100%;background:#1d9e75"></div></div>
     <div class="panel-body" id="b-p-groups">
       <div class="group-cards">
         
@@ -163,6 +173,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#1d9e75;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">Bluetooth Inventory <span style="font-size:11px;color:var(--color-text-secondary)">— 56 devices</span></span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks for a valid response and reports the total device count.</div>
               
             </div>
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
@@ -170,6 +181,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#1d9e75;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">Bluetooth Paths Inventory</span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks for a valid response and counts the paths.</div>
               
             </div>
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
@@ -177,6 +189,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#e58e0a;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">Bluetooth Paths Live (FCD) <span style="font-size:11px;color:#e58e0a">— 425/514 with data</span></span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks feed freshness and whether each path is reporting speed and travel time.</div>
               
             </div>
           </div>
@@ -221,6 +234,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#1d9e75;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">Traffic Detection Inventory</span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks for a valid response.</div>
               
             </div>
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
@@ -228,6 +242,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#e24b4a;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">Traffic Detection Live <span style="font-size:11px;color:#e24b4a">— 16/104 working</span></span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks feed freshness and reports the status of each sensor (working, no traffic, malfunctioning, or no data).</div>
               
             </div>
           </div>
@@ -290,6 +305,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#1d9e75;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">VMS Inventory</span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks for a valid response.</div>
               
             </div>
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
@@ -297,6 +313,7 @@
                 <span style="width:8px;height:8px;border-radius:50%;background:#e24b4a;flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">VMS Live Data <span style="font-size:11px;color:#e24b4a">— 3/44 working</span></span>
               </div>
+              <div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">Checks feed freshness and reports how many controllers are working, not working, or not sending any status.</div>
               
             </div>
           </div>
@@ -348,7 +365,7 @@
       <span class="panel-title">Sensor map</span>
       <div class="panel-chevron open" id="c-p-map"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:67%;background:#e58e0a"></div></div>
+    <div class="panel-bar" title="67% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" style="width:67%;background:#e58e0a"></div></div>
     <div class="panel-body" id="b-p-map" style="padding:12px 20px 16px">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center"><span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span><button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button><button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,'bt')">Bluetooth Sensors</button><button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,'paths')">Bluetooth Paths</button><button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,'td')">Traffic Detection (SWARCO)</button><button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,'vms')">VMS</button><span style="flex:1"></span><button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button><button class="map-toggle active" data-filter="all" onclick="setFilter(this,'all')">All</button><button class="map-toggle" data-filter="issues" onclick="setFilter(this,'issues')">Issues only</button></div><div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:7px 10px;background:var(--surface);border:0.5px solid var(--border);border-radius:8px"><button onclick="stepRun(-1)" title="Previous run" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:2px 5px;line-height:1">&#9664;</button><button id="playBtn" onclick="togglePlay()" title="Play / Pause" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:2px 5px;line-height:1">&#9654;</button><button onclick="stepRun(1)" title="Next run" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--muted);padding:2px 5px;line-height:1">&#9654;&#9654;</button><input type="range" id="playSlider" min="0" value="0" style="flex:1;accent-color:var(--header-bg)" oninput="setRun(+this.value)"><span id="playTimestamp" style="font-size:11px;color:var(--muted);min-width:150px;text-align:right;white-space:nowrap"></span></div><div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative"><div id="mapInfoPanel" style="display:none;position:absolute;top:10px;right:10px;z-index:1000;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden"><div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee"><span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span><button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button></div><div id="mapInfoBody" style="padding:10px 14px 12px"></div></div></div>
     </div>
@@ -359,7 +376,7 @@
       <span class="panel-title">Sensors health trend — last 30 runs</span>
       <div class="panel-chevron open" id="c-p-trend"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:31%;background:#e24b4a"></div></div>
+    <div class="panel-bar" title="Average health across all recent runs (sensors combined): 31%" style="cursor:help"><div class="panel-bar-fill" style="width:31%;background:#e24b4a"></div></div>
     <div class="panel-body" id="b-p-trend">
       <div style="position:relative;height:180px">
         <canvas id="trendChart" role="img" aria-label="Line chart of sensor health percentages across recent runs"></canvas>
@@ -377,7 +394,7 @@
       <span class="panel-title">Run history — last 20 runs</span>
       <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:35%;background:#e24b4a"></div></div>
+    <div class="panel-bar" title="Average health across all sensors in the last run: 35%" style="cursor:help"><div class="panel-bar-fill" style="width:35%;background:#e24b4a"></div></div>
     <div class="panel-body" id="b-p-history">
       <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 12px">
         Each row is one automated test run. The percentage columns show how many sensors in that group
@@ -532,14 +549,14 @@
   </div>
 
 </div><!-- end left column -->
-<div style="flex:0 0 40%;min-width:0;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto">
+<div class="col-right">
 
   <div class="panel" id="p-sensors">
     <div class="panel-header" onclick="togglePanel('p-sensors')">
       <span class="panel-title">Sensor stability</span>
       <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:67%;background:#e58e0a"></div></div>
+    <div class="panel-bar" id="sensorBarWrap" title="67% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" id="sensorBarFill" style="width:67%;background:#e58e0a"></div></div>
     <div class="panel-body" id="b-p-sensors">
       
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
@@ -18014,6 +18031,8 @@
       var color = pct >= 90 ? '#1d9e75' : (pct >= 55 ? '#e58e0a' : '#e24b4a');
       var fill = document.getElementById('sensorBarFill');
       if (fill) { fill.style.width = pct + '%'; fill.style.background = color; }
+      var wrap = document.getElementById('sensorBarWrap');
+      if (wrap) { wrap.title = pct + '% of sensors had a good status in the last run'; }
     }
     // keep old name as alias for dynamic bar (called from group card dropdown)
     function filterGroup(val) {

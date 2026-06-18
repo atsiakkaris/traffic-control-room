@@ -5,7 +5,7 @@ page_title: "ITS Infrastructure Health"
 
 # ── Panel headings ────────────────────────────────────────────────────────────
 panels:
-  groups:       "Infrastructure groups"
+  groups:       "System Overview"
   map:          "Sensor map"
   health_trend: "Sensors health trend"
   stability:    "Sensor stability"

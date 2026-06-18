@@ -128,6 +128,16 @@ STATUS_TOOLTIP = {
 
 GOOD_STATUSES = {"working", "ok"}
 
+CHECK_DESCRIPTION = {
+    "Bluetooth Inventory":        "Checks for a valid response and reports the total device count.",
+    "Bluetooth Paths Inventory":  "Checks for a valid response and counts the paths.",
+    "Bluetooth Paths Live (FCD)": "Checks feed freshness and whether each path is reporting speed and travel time.",
+    "Traffic Detection Inventory":"Checks for a valid response.",
+    "Traffic Detection Live":     "Checks feed freshness and reports the status of each sensor (working, no traffic, malfunctioning, or no data).",
+    "VMS Inventory":              "Checks for a valid response.",
+    "VMS Live Data":              "Checks feed freshness and reports how many controllers are working, not working, or not sending any status.",
+}
+
 GROUP_DISPLAY = _UI.get("group_display") or {"Traffic Detection": "Traffic Detection (SWARCO)"}
 
 SENSOR_CHECKS = {"sensor_speed_status", "vms_controller_status", "bt_paths_speed_and_traveltime"}
@@ -433,6 +443,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       var color = pct >= 90 ? '#1d9e75' : (pct >= 55 ? '#e58e0a' : '#e24b4a');
       var fill = document.getElementById('sensorBarFill');
       if (fill) {{ fill.style.width = pct + '%'; fill.style.background = color; }}
+      var wrap = document.getElementById('sensorBarWrap');
+      if (wrap) {{ wrap.title = pct + '% of sensors had a good status in the last run'; }}
     }}
     // keep old name as alias for dynamic bar (called from group card dropdown)
     function filterGroup(val) {{
@@ -665,12 +677,15 @@ def generate_report() -> str:
                     pct = int(m.group(1)) / int(m.group(2)) * 100
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} with data</span>'
 
+            check_desc = CHECK_DESCRIPTION.get(r['test_name'], '')
+            check_desc_html = f'<div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">{check_desc}</div>' if check_desc else ''
             detail_rows += f"""
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
               <div style="display:flex;align-items:center;gap:8px">
                 <span style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">{r['test_name']}{name_suffix}</span>
               </div>
+              {check_desc_html}
               {failure_lines}
             </div>"""
 
@@ -1050,6 +1065,13 @@ def generate_report() -> str:
   .panel-bar {{ height: 3px; width: 100%; background: var(--border); }}
   .panel-bar-fill {{ height: 3px; }}
   .panel-body {{ padding: 16px 20px 18px; }}
+  .col-layout {{ display:flex; gap:20px; align-items:flex-start; }}
+  .col-left   {{ flex:0 0 60%; min-width:0; }}
+  .col-right  {{ flex:0 0 40%; min-width:0; position:sticky; top:20px; max-height:calc(100vh - 40px); overflow-y:auto; }}
+  @media (max-width: 900px) {{
+    .col-layout {{ flex-direction:column; }}
+    .col-left, .col-right {{ flex:none; width:100%; max-height:none; position:static; }}
+  }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
   th {{ font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--muted); padding: 8px 12px; border-bottom: 0.5px solid var(--border); text-align: left; }}
@@ -1095,8 +1117,8 @@ def generate_report() -> str:
 </header>
 
 <div class="wrap">
-<div style="display:flex;gap:20px;align-items:flex-start">
-<div style="flex:0 0 60%;min-width:0">
+<div class="col-layout">
+<div class="col-left">
 
   <details style="margin-bottom:16px;background:var(--color-background-secondary);border-radius:10px;border:0.5px solid var(--color-border-tertiary);padding:12px 16px;font-size:13px">
     <summary style="cursor:pointer;font-weight:600;color:var(--color-text-primary);list-style:none;display:flex;align-items:center;gap:6px">
@@ -1142,10 +1164,13 @@ def generate_report() -> str:
 
   <div class="panel" id="p-groups">
     <div class="panel-header" onclick="togglePanel('p-groups')">
-      <span class="panel-title">{_lbl('panels', 'groups', 'Infrastructure groups')}</span>
+      <div>
+        <span class="panel-title">{_lbl('panels', 'groups', 'System Overview')}</span>
+        <div style="font-size:11px;color:var(--color-text-secondary);margin-top:2px">Feed and sensor health per group — updated each run</div>
+      </div>
       <div class="panel-chevron open" id="c-p-groups"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
+    <div class="panel-bar" title="Overall pass rate from the latest run: {overall_pct}% of checks passed" style="cursor:help"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
     <div class="panel-body" id="b-p-groups">
       <div class="group-cards">
         {group_cards}
@@ -1158,7 +1183,7 @@ def generate_report() -> str:
       <span class="panel-title">{_lbl('panels', 'map', 'Sensor map')}</span>
       <div class="panel-chevron open" id="c-p-map"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-bar" title="{sensor_pct}% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
     <div class="panel-body" id="b-p-map" style="padding:12px 20px 16px">
       {map_panel_html}
     </div>
@@ -1169,7 +1194,7 @@ def generate_report() -> str:
       <span class="panel-title">{_lbl('panels', 'health_trend', 'Sensor health trend')} — last {len(chart_runs)} runs</span>
       <div class="panel-chevron open" id="c-p-trend"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{trend_pct}%;background:{trend_bar_color}"></div></div>
+    <div class="panel-bar" title="Average health across all recent runs (sensors combined): {trend_pct}%" style="cursor:help"><div class="panel-bar-fill" style="width:{trend_pct}%;background:{trend_bar_color}"></div></div>
     <div class="panel-body" id="b-p-trend">
       <div style="position:relative;height:180px">
         <canvas id="trendChart" role="img" aria-label="Line chart of sensor health percentages across recent runs"></canvas>
@@ -1187,7 +1212,7 @@ def generate_report() -> str:
       <span class="panel-title">{_lbl('panels', 'history', 'Run history')} — last 20 runs</span>
       <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
+    <div class="panel-bar" title="Average health across all sensors in the last run: {history_pct}%" style="cursor:help"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
     <div class="panel-body" id="b-p-history">
       <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 12px">
         Each row is one automated test run. The percentage columns show how many sensors in that group
@@ -1202,14 +1227,14 @@ def generate_report() -> str:
   </div>
 
 </div><!-- end left column -->
-<div style="flex:0 0 40%;min-width:0;position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto">
+<div class="col-right">
 
   <div class="panel" id="p-sensors">
     <div class="panel-header" onclick="togglePanel('p-sensors')">
       <span class="panel-title">{_lbl('panels', 'stability', 'Sensor stability')}</span>
       <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
+    <div class="panel-bar" id="sensorBarWrap" title="{sensor_pct}% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
     <div class="panel-body" id="b-p-sensors">
       {sensor_stability_html}
     </div>
