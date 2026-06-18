@@ -52,7 +52,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Dashboard Panels
 
-**Infrastructure Groups** — one card per group showing feed status and sensor health %, with a breakdown of each check and collapsible sensor counts.
+**System Overview** — one card per group showing feed status and sensor health %, with a breakdown of each check. Each check includes a short description of what it tests. A colour-coded bar shows the overall pass rate for the latest run.
 
 **Sensor Map** — interactive Leaflet.js map with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
@@ -68,13 +68,13 @@ This means a group is never falsely marked "failed" just because some sensors ar
 **Sensor Stability** — per-sensor history table with sparklines (last 20 runs), stability badge, and timestamps for first seen / last working / last issue.
 - Live search input to filter by sensor name or ID
 - Group dropdown filter
-- **Export CSV** button downloads the currently visible rows
+- Sort dropdown — Default, Worst first, or Best first
 - 📍 icon on each row — click to fly the map to that sensor or BT path and open its popup
 - Expandable per-sensor daily health % trend chart (last 7 / 14 / 30 days)
 
-**Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and BT Paths across the last 20 runs.
+**Run History** — per-run feed status and sensor health % for Traffic Detection, VMS, and Bluetooth Paths across the last 20 runs.
 
-> The dashboard uses a **two-column layout** (60/40): the left column holds Infrastructure Groups, Sensor Map, Health Trend, and Run History; the right column holds the Sensor Stability panel and stays sticky while you scroll.
+> The dashboard uses a **two-column layout** (60/40): the left column holds System Overview, Sensor Map, Health Trend, and Run History; the right column holds the Sensor Stability panel and stays sticky while you scroll. On narrow screens (below 900px) the columns stack vertically.
 
 ---
 
