@@ -134,6 +134,24 @@ def build_digest():
     active = active_sensors | active_bt
     retired = fetch_retired_this_week()
 
+    # derive approximate check frequency from this week's run counts
+    this_week_totals = []
+    for key, days_data in daily.items():
+        week_total = sum(days_data.get(d, {}).get("total", 0)
+                        for d in [(week_start + timedelta(days=i)).isoformat() for i in range(7)])
+        if week_total > 0:
+            this_week_totals.append(week_total)
+    if this_week_totals:
+        avg_runs = sum(this_week_totals) / len(this_week_totals)
+        runs_per_day = avg_runs / 7
+        if runs_per_day >= 1:
+            hours_between = round(24 / runs_per_day)
+            check_freq = f"every {hours_between} hour{'s' if hours_between != 1 else ''}"
+        else:
+            check_freq = "daily"
+    else:
+        check_freq = "periodically"
+
     this_week_days = [(week_start      + timedelta(days=i)).isoformat() for i in range(7)]
     prev_week_days = [(prev_week_start + timedelta(days=i)).isoformat() for i in range(7)]
 
@@ -178,23 +196,35 @@ def build_digest():
     )
 
     non_bt_stats   = [s for s in sensor_stats if s["group"] != "Bluetooth Paths"]
-    total_sensors  = len(non_bt_stats)
-    healthy_count  = sum(1 for s in non_bt_stats if s["this_pct"] is not None and s["this_pct"] >= 90)
-    unstable_count = sum(1 for s in non_bt_stats if s["this_pct"] is not None and 0 < s["this_pct"] < 90)
-    offline_count  = sum(1 for s in non_bt_stats if s["this_pct"] is not None and s["this_pct"] == 0)
+    bt_stats       = [s for s in sensor_stats if s["group"] == "Bluetooth Paths"]
+
+    def _counts(stats):
+        return {
+            "total":    len(stats),
+            "healthy":  sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] >= 90),
+            "unstable": sum(1 for s in stats if s["this_pct"] is not None and 0 < s["this_pct"] < 90),
+            "offline":  sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 0),
+        }
+
+    # per-group breakdown (non-BT), preserving natural order
+    group_names = []
+    for s in non_bt_stats:
+        if s["group"] not in group_names:
+            group_names.append(s["group"])
+    groups = {g: _counts([s for s in non_bt_stats if s["group"] == g]) for g in group_names}
 
     return {
-        "week_start": week_start.strftime("%d %b %Y"),
-        "week_end":   today.strftime("%d %b %Y"),
-        "total":      total_sensors,
-        "healthy":    healthy_count,
-        "unstable":   unstable_count,
-        "offline":    offline_count,
-        "always_off": always_off,
-        "persistent": persistent,
-        "degraded":   degraded,
-        "recovered":  recovered,
-        "retired":    retired,
+        "week_start":  week_start.strftime("%d %b %Y"),
+        "week_end":    today.strftime("%d %b %Y"),
+        "check_freq":  check_freq,
+        **_counts(non_bt_stats),
+        "groups":      groups,
+        "bt":          _counts(bt_stats),
+        "always_off":  always_off,
+        "persistent":  persistent,
+        "degraded":    degraded,
+        "recovered":   recovered,
+        "retired":     retired,
     }
 
 
@@ -225,19 +255,58 @@ def _sensor_table(sensors, show_prev=False):
     </table>{note}"""
 
 
+def _split_table(sensors, show_prev=False):
+    """Render one sub-table per group, Bluetooth Paths last."""
+    if not sensors:
+        return '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'
+    # collect groups preserving insertion order, BT last
+    groups = []
+    for s in sensors:
+        if s["group"] not in groups and s["group"] != "Bluetooth Paths":
+            groups.append(s["group"])
+    if any(s["group"] == "Bluetooth Paths" for s in sensors):
+        groups.append("Bluetooth Paths")
+    out = ""
+    for g in groups:
+        subset = [s for s in sensors if s["group"] == g]
+        out += f'<p style="font-size:12px;font-weight:600;color:#6b7280;margin:16px 0 6px">{g}</p>'
+        out += _sensor_table(subset, show_prev=show_prev)
+    return out
+
+
+def _always_off_summary(sensors):
+    """Returns the always-visible summary text for the always-off section."""
+    if not sensors:
+        return "None this week — all sensors reported at least some activity."
+    # count per group, BT last
+    groups = {}
+    for s in sensors:
+        groups.setdefault(s["group"], 0)
+        groups[s["group"]] += 1
+    bt_count = groups.pop("Bluetooth Paths", 0)
+    parts = [f"<strong>{c} {g}</strong>" for g, c in groups.items()]
+    if bt_count:
+        parts.append(f"<strong>{bt_count} Bluetooth path{'s' if bt_count != 1 else ''}</strong>")
+    joined = ", ".join(parts[:-1]) + (" and " + parts[-1] if len(parts) > 1 else parts[0])
+    return (f"{joined} recorded no successful checks during this period. "
+            f"Possible causes include equipment faults, loss of network connectivity, or sensors "
+            f"that have been physically removed but not yet formally retired. "
+            f"These should be investigated or decommissioned.")
+
+
 def build_html(d):
     generated_at = datetime.now(CYPRUS_TZ).strftime("%d %b %Y %H:%M EEST")
 
-    def section(title, color, content, open_by_default=True):
-        open_attr = " open" if open_by_default else ""
+    def section(title, color, description, content):
         return f"""
-        <details{open_attr} style="margin-bottom:28px">
-          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;margin-bottom:10px">
-            <span style="font-size:15px;font-weight:600;color:{color}">{title}</span>
-            <span style="font-size:11px;color:#9ca3af;margin-left:4px">(click to collapse)</span>
-          </summary>
-          {content}
-        </details>"""
+        <div style="margin-bottom:28px">
+          <h3 style="font-size:15px;font-weight:600;color:{color};margin:0 0 6px">{title}</h3>
+          <p style="font-size:13px;color:#374151;margin:0 0 10px">{description}</p>
+          <details open>
+            <summary style="cursor:pointer;list-style:none;font-size:12px;color:#9ca3af;margin-bottom:8px">Show breakdown ▾</summary>
+            {content}
+          </details>
+        </div>"""
 
     retired_rows = "".join(
         f'<tr><td style="padding:5px 12px;font-size:12px;color:#6b7280">{r["group"]}</td>'
@@ -249,41 +318,123 @@ def build_html(d):
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">
         <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Group</th>
-        <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor</th>
+        <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor ID</th>
         <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Last seen</th>
       </tr></thead><tbody>{retired_rows}</tbody>
     </table>""" if d["retired"] else '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'
 
+    badge_legend = """
+    <div style="background:#f9fafb;border-radius:8px;padding:12px 16px;margin-bottom:28px;font-size:12px">
+      <div style="font-weight:600;color:#374151;margin-bottom:8px">How to read the health badges</div>
+      <p style="color:#6b7280;margin:0 0 8px">
+        The <strong>health %</strong> is the share of automated checks (run {d['check_freq']}) that returned
+        a successful response during the week. A sensor at 100% responded correctly to every check;
+        one at 0% failed every check.
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span style="background:#e1f5ee;color:#085041;padding:2px 8px;border-radius:10px;white-space:nowrap">Always on — 100%</span>
+        <span style="background:#c0dd97;color:#27500a;padding:2px 8px;border-radius:10px;white-space:nowrap">Healthy — 90–99%</span>
+        <span style="background:#faeeda;color:#633806;padding:2px 8px;border-radius:10px;white-space:nowrap">Intermittent — 70–89%</span>
+        <span style="background:#fac775;color:#412402;padding:2px 8px;border-radius:10px;white-space:nowrap">Unstable — 40–69%</span>
+        <span style="background:#f09595;color:#501313;padding:2px 8px;border-radius:10px;white-space:nowrap">Critical — 1–39%</span>
+        <span style="background:#e24b4a;color:#ffffff;padding:2px 8px;border-radius:10px;white-space:nowrap">Always off — 0%</span>
+      </div>
+    </div>"""
+
     return f"""
     <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#111;max-width:680px;margin:0 auto;padding:24px">
 
-    <h2 style="margin:0 0 4px;font-size:20px">Weekly Network Health Digest</h2>
-    <p style="color:#6b7280;font-size:13px;margin:0 0 24px">{d['week_start']} — {d['week_end']} &nbsp;·&nbsp; Generated {generated_at}</p>
+    <h2 style="margin:0 0 4px;font-size:20px">Cyprus ITS — Weekly Network Health Digest</h2>
+    <p style="color:#6b7280;font-size:13px;margin:0 0 12px">{d['week_start']} — {d['week_end']} &nbsp;·&nbsp; Generated {generated_at}</p>
+    <p style="font-size:13px;color:#374151;margin:0 0 24px">
+      This report summarises the health of Cyprus ITS infrastructure sensors for the past week.
+      It highlights sensors that went offline, are performing below expectations, or have changed
+      significantly since last week. Bluetooth path sensors are monitored separately and are not
+      included in the totals below.
+    </p>
 
-    <div style="display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap">
+    <div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Sensors</div>
+    <div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:120px;background:#f9fafb;border-radius:10px;padding:14px 18px;text-align:center">
         <div style="font-size:22px;font-weight:700">{d['total']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Total sensors</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Monitored</div>
       </div>
       <div style="flex:1;min-width:120px;background:#ecfdf5;border-radius:10px;padding:14px 18px;text-align:center">
         <div style="font-size:22px;font-weight:700;color:#1d9e75">{d['healthy']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Healthy ≥90%</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Healthy (≥90%)</div>
       </div>
       <div style="flex:1;min-width:120px;background:#fffbeb;border-radius:10px;padding:14px 18px;text-align:center">
         <div style="font-size:22px;font-weight:700;color:#e58e0a">{d['unstable']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Unstable</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Need attention (1–89%)</div>
       </div>
       <div style="flex:1;min-width:120px;background:#fef2f2;border-radius:10px;padding:14px 18px;text-align:center">
         <div style="font-size:22px;font-weight:700;color:#e24b4a">{d['offline']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Always off</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Always off (0%)</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
+      <thead>
+        <tr style="border-bottom:1px solid #e5e7eb">
+          <th style="padding:5px 10px;text-align:left;font-weight:500;color:#9ca3af">Group</th>
+          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#9ca3af">Monitored</th>
+          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#1d9e75">Healthy</th>
+          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#e58e0a">Need attention</th>
+          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#e24b4a">Always off</th>
+        </tr>
+      </thead>
+      <tbody>
+        {"".join(f'''<tr style="border-bottom:1px solid #f3f4f6">
+          <td style="padding:5px 10px;color:#374151">{g}</td>
+          <td style="padding:5px 10px;text-align:center;color:#374151">{c['total']}</td>
+          <td style="padding:5px 10px;text-align:center;color:#1d9e75">{c['healthy']}</td>
+          <td style="padding:5px 10px;text-align:center;color:#e58e0a">{c['unstable']}</td>
+          <td style="padding:5px 10px;text-align:center;color:#e24b4a">{c['offline']}</td>
+        </tr>''' for g, c in d['groups'].items())}
+      </tbody>
+    </table>
+
+    <div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Bluetooth Paths</div>
+    <div style="display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px;background:#f9fafb;border-radius:10px;padding:14px 18px;text-align:center">
+        <div style="font-size:22px;font-weight:700">{d['bt']['total']}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Monitored</div>
+      </div>
+      <div style="flex:1;min-width:120px;background:#ecfdf5;border-radius:10px;padding:14px 18px;text-align:center">
+        <div style="font-size:22px;font-weight:700;color:#1d9e75">{d['bt']['healthy']}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Healthy (≥90%)</div>
+      </div>
+      <div style="flex:1;min-width:120px;background:#fffbeb;border-radius:10px;padding:14px 18px;text-align:center">
+        <div style="font-size:22px;font-weight:700;color:#e58e0a">{d['bt']['unstable']}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Need attention (1–89%)</div>
+      </div>
+      <div style="flex:1;min-width:120px;background:#fef2f2;border-radius:10px;padding:14px 18px;text-align:center">
+        <div style="font-size:22px;font-weight:700;color:#e24b4a">{d['bt']['offline']}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">Always off (0%)</div>
       </div>
     </div>
 
-    {section("🔴 Always off this week (0%)", "#e24b4a", _sensor_table(d['always_off']))}
-    {section("🟠 Persistently unstable (&lt;70% for 2+ weeks)", "#e58e0a", _sensor_table(d['persistent'], show_prev=True))}
-    {section("📉 Degraded vs last week (>15% drop)", "#e58e0a", _sensor_table(d['degraded'], show_prev=True))}
-    {section("📈 Recovered vs last week (>15% improvement)", "#1d9e75", _sensor_table(d['recovered'], show_prev=True))}
-    {section("🗑️ Retired this week (removed from API feed)", "#6b7280", retired_table)}
+    {badge_legend}
+
+    {section("🔴 Always off this week",
+             "#e24b4a",
+             _always_off_summary(d['always_off']),
+             _split_table(d['always_off']) if d['always_off'] else "")}
+    {section("🟠 Persistently underperforming",
+             "#e58e0a",
+             "Sensors and paths that have been below 70% health for at least two consecutive weeks. These likely require hands-on investigation.",
+             _split_table(d['persistent'], show_prev=True))}
+    {section("📉 Degraded since last week",
+             "#e58e0a",
+             "Sensors and paths whose health dropped by more than 15 percentage points compared to the previous week.",
+             _split_table(d['degraded'], show_prev=True))}
+    {section("📈 Recovered since last week",
+             "#1d9e75",
+             "Sensors and paths whose health improved by more than 15 percentage points compared to the previous week.",
+             _split_table(d['recovered'], show_prev=True))}
+    {section("🗑️ Retired this week",
+             "#6b7280",
+             "Sensors that were removed from the API feed this week. They are no longer being monitored.",
+             retired_table)}
 
     <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb">
       <a href="{DASHBOARD_URL}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500">Open live dashboard →</a>
@@ -329,4 +480,13 @@ def send_digest():
 
 
 if __name__ == "__main__":
-    send_digest()
+    if "--preview" in sys.argv:
+        import webbrowser
+        d    = build_digest()
+        html = build_html(d)
+        out  = Path(__file__).parent.parent / "reports" / "digest_preview.html"
+        out.write_text(html, encoding="utf-8")
+        print(f"Preview saved: {out}")
+        webbrowser.open(str(out))
+    else:
+        send_digest()
