@@ -80,7 +80,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Schedule
 
-Tests run every 2 hours (12 times daily), triggered externally via [cron-job.org](https://cron-job.org) using a `workflow_dispatch` call to the GitHub API. The workflow can also be triggered manually from the GitHub Actions tab.
+Tests run frequently throughout the day. The workflow can also be triggered manually from the GitHub Actions tab.
 
 A **weekly digest email** is sent every Monday at 08:00 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging always-off sensors, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. Requires `GMAIL_USER`, `GMAIL_APP_PW`, and `NOTIFY_EMAIL` set as GitHub Secrets.
 
@@ -106,7 +106,7 @@ A **weekly digest email** is sent every Monday at 08:00 Cyprus time (EEST). It s
 ├── reports/
 │   └── latest.html             ← Generated dashboard (auto-committed after each run)
 ├── .github/workflows/
-│   ├── daily_tests.yml         ← GitHub Actions schedule (every 2 hours)
+│   ├── daily_tests.yml         ← GitHub Actions workflow (triggered frequently)
 │   └── weekly_digest.yml       ← Weekly digest email (Mondays 08:00 EEST)
 ├── run.ps1                     ← Local run script (PowerShell, loads .env automatically)
 ├── run.bat                     ← Local run script (double-click alternative, no execution policy needed)

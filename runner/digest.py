@@ -129,12 +129,12 @@ def build_digest():
     this_week_totals = []
     for key, days_data in daily.items():
         week_total = sum(days_data.get(d, {}).get("total", 0)
-                        for d in [(week_start + timedelta(days=i)).isoformat() for i in range(7)])
+                        for d in [(today - timedelta(days=i)).isoformat() for i in range(1, 6)])
         if week_total > 0:
             this_week_totals.append(week_total)
     if this_week_totals:
         avg_runs = sum(this_week_totals) / len(this_week_totals)
-        runs_per_day = avg_runs / 7
+        runs_per_day = avg_runs / 5
         if runs_per_day >= 1:
             hours_between = round(24 / runs_per_day)
             check_freq = f"every {hours_between} hour{'s' if hours_between != 1 else ''}"
