@@ -543,7 +543,7 @@ def generate_report() -> str:
         elif row["test_name"] == "Bluetooth Paths Live (FCD)":
             health_by_run[rid]["bt"] = _extract_health_pct(cs, "bt_paths_speed_and_traveltime")
             if row["status"] != "pass":
-                health_by_run[rid]["feed_issues"].append("BT Paths")
+                health_by_run[rid]["feed_issues"].append("Bluetooth Paths")
 
     def _pct_or_null(run_id, key):
         v = health_by_run.get(run_id, {}).get(key)
@@ -714,7 +714,7 @@ def generate_report() -> str:
                     failing_ids = sensor_data.get("failing", [])
                     extra += f"""
                     <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">BT Paths with data</div>
+                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Bluetooth Paths with data</div>
                       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
                         <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
                           <div style="width:{pct}%;height:6px;background:{bar_color};border-radius:3px"></div>
@@ -932,10 +932,10 @@ def generate_report() -> str:
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
+            '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">' + _lbl('map_layers','bt','Bluetooth Sensors') + '</button>'
+            '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">' + _lbl('map_layers','paths','Bluetooth Paths') + '</button>'
             '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">' + _lbl('map_layers','td','Traffic Detection (SWARCO)') + '</button>'
-            '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">' + _lbl('map_layers','bt','Bluetooth Sites') + '</button>'
             '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">' + _lbl('map_layers','vms','VMS') + '</button>'
-            '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">' + _lbl('map_layers','paths','BT Paths') + '</button>'
             '<span style="flex:1"></span>'
             '<button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
@@ -1119,7 +1119,7 @@ def generate_report() -> str:
       <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted)">
         <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Traffic Detection</span>
         <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#378add;display:inline-block"></span>VMS</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#e58e0a;display:inline-block"></span>BT Paths</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#e58e0a;display:inline-block"></span>Bluetooth Paths</span>
       </div>
     </div>
   </div>
@@ -1132,7 +1132,7 @@ def generate_report() -> str:
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
     <div class="panel-body" id="b-p-history">
       <table>
-        <thead><tr><th>{_lbl('history_columns','time','Time (EET)')}</th><th>{_lbl('history_columns','td','Traffic Detection')}</th><th>{_lbl('history_columns','vms','VMS')}</th><th>{_lbl('history_columns','bt','BT Paths')}</th><th>{_lbl('history_columns','api_response','API response')}</th></tr></thead>
+        <thead><tr><th>{_lbl('history_columns','time','Time (EET)')}</th><th>{_lbl('history_columns','td','Traffic Detection')}</th><th>{_lbl('history_columns','vms','VMS')}</th><th>{_lbl('history_columns','bt','Bluetooth Paths')}</th><th>{_lbl('history_columns','api_response','API response')}</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
@@ -1191,7 +1191,7 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
     datasets: [
       {{ label: 'Traffic Detection', data: {chart_td},  borderColor: '#1d9e75', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }},
       {{ label: 'VMS',               data: {chart_vms}, borderColor: '#378add', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }},
-      {{ label: 'BT Paths',          data: {chart_bt},  borderColor: '#e58e0a', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }}
+      {{ label: 'Bluetooth Paths',    data: {chart_bt},  borderColor: '#e58e0a', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }}
     ]
   }},
   options: {{

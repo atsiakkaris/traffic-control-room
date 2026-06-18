@@ -1,14 +1,3 @@
-"""
-Weekly digest email — sent every Monday at 08:00 Cyprus time.
-
-Summarises the past 7 days of sensor health and flags:
-  - Always-off sensors (0% healthy all week)
-  - Persistently unstable sensors (below 70% for 2+ weeks)
-  - Sensors that degraded vs the previous week
-  - Sensors that recovered vs the previous week
-  - Sensors retired (removed from API feed) this week
-"""
-
 import os
 import sys
 import logging
@@ -81,14 +70,16 @@ def fetch_sensor_health_by_day(days_back):
 
 
 def fetch_active_sensors():
-    """Return (sensors, bt_paths) as separate sets of (group_name, sensor_id)."""
+    """Return (sensors, bt_paths) as sets of (group_name, sensor_id), plus a name lookup dict."""
     conn = get_connection()
-    sc = conn.execute("SELECT group_name, sensor_id FROM sensor_coords WHERE active=1").fetchall()
-    bt = conn.execute("SELECT path_id FROM bt_path_coords WHERE active=1").fetchall()
+    sc = conn.execute("SELECT group_name, sensor_id, name FROM sensor_coords WHERE active=1").fetchall()
+    bt = conn.execute("SELECT path_id, name FROM bt_path_coords WHERE active=1").fetchall()
     conn.close()
-    sensors = {(r["group_name"], r["sensor_id"]) for r in sc}
+    sensors  = {(r["group_name"], r["sensor_id"]) for r in sc}
     bt_paths = {("Bluetooth Paths", r["path_id"]) for r in bt}
-    return sensors, bt_paths
+    names    = {(r["group_name"], r["sensor_id"]): r["name"] or r["sensor_id"] for r in sc}
+    names   |= {("Bluetooth Paths", r["path_id"]): r["name"] or r["path_id"] for r in bt}
+    return sensors, bt_paths, names
 
 
 def fetch_retired_this_week():
@@ -130,7 +121,7 @@ def build_digest():
     prev_week_start = today - timedelta(days=14)
 
     daily = fetch_sensor_health_by_day(14)
-    active_sensors, active_bt = fetch_active_sensors()
+    active_sensors, active_bt, sensor_names = fetch_active_sensors()
     active = active_sensors | active_bt
     retired = fetch_retired_this_week()
 
@@ -170,10 +161,11 @@ def build_digest():
         if this_pct is None and prev_pct is None:
             continue
         sensor_stats.append({
-            "group": key[0],
+            "group":     key[0],
             "sensor_id": key[1],
-            "this_pct": this_pct,
-            "prev_pct": prev_pct,
+            "name":      sensor_names.get(key, str(key[1])),
+            "this_pct":  this_pct,
+            "prev_pct":  prev_pct,
         })
 
     always_off = [s for s in sensor_stats if s["this_pct"] is not None and s["this_pct"] == 0]
@@ -236,18 +228,16 @@ def _sensor_table(sensors, show_prev=False):
         prev_cell = f'<td style="padding:6px 12px">{_badge(s["prev_pct"])}</td>' if show_prev else ""
         rows += f"""
         <tr>
-          <td style="padding:6px 12px;font-size:12px;color:#6b7280">{s['group']}</td>
-          <td style="padding:6px 12px;font-family:monospace;font-size:13px">{s['sensor_id']}</td>
+          <td style="padding:6px 12px;font-size:13px">{s['name']}</td>
           <td style="padding:6px 12px">{_badge(s['this_pct'])}</td>
           {prev_cell}
         </tr>"""
-    note = f'<p style="font-size:11px;color:#9ca3af;margin-top:4px">Showing top 30 of {len(sensors)}</p>' if len(sensors) > 30 else ""
+    note = f'<p style="font-size:11px;color:#9ca3af;margin-top:4px"><strong>Showing top 30 of {len(sensors)}</strong></p>' if len(sensors) > 30 else ""
     prev_header = '<th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Prev week</th>' if show_prev else ""
     return f"""
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">
-        <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Group</th>
-        <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor ID</th>
+        <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Name</th>
         <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">This week</th>
         {prev_header}
       </tr></thead>
@@ -269,7 +259,7 @@ def _split_table(sensors, show_prev=False):
     out = ""
     for g in groups:
         subset = [s for s in sensors if s["group"] == g]
-        out += f'<p style="font-size:12px;font-weight:600;color:#6b7280;margin:16px 0 6px">{g}</p>'
+        out += f'<p style="font-size:12px;font-weight:600;color:#374151;margin:16px 0 6px">{g}</p>'
         out += _sensor_table(subset, show_prev=show_prev)
     return out
 
@@ -318,12 +308,12 @@ def build_html(d):
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">
         <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Group</th>
-        <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor ID</th>
+        <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">ID</th>
         <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Last seen</th>
       </tr></thead><tbody>{retired_rows}</tbody>
     </table>""" if d["retired"] else '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'
 
-    badge_legend = """
+    badge_legend = f"""
     <div style="background:#f9fafb;border-radius:8px;padding:12px 16px;margin-bottom:28px;font-size:12px">
       <div style="font-weight:600;color:#374151;margin-bottom:8px">How to read the health badges</div>
       <p style="color:#6b7280;margin:0 0 8px">
@@ -331,13 +321,13 @@ def build_html(d):
         a successful response during the week. A sensor at 100% responded correctly to every check;
         one at 0% failed every check.
       </p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <span style="background:#e1f5ee;color:#085041;padding:2px 8px;border-radius:10px;white-space:nowrap">Always on — 100%</span>
-        <span style="background:#c0dd97;color:#27500a;padding:2px 8px;border-radius:10px;white-space:nowrap">Healthy — 90–99%</span>
-        <span style="background:#faeeda;color:#633806;padding:2px 8px;border-radius:10px;white-space:nowrap">Intermittent — 70–89%</span>
-        <span style="background:#fac775;color:#412402;padding:2px 8px;border-radius:10px;white-space:nowrap">Unstable — 40–69%</span>
-        <span style="background:#f09595;color:#501313;padding:2px 8px;border-radius:10px;white-space:nowrap">Critical — 1–39%</span>
-        <span style="background:#e24b4a;color:#ffffff;padding:2px 8px;border-radius:10px;white-space:nowrap">Always off — 0%</span>
+      <div>
+        <span style="display:inline-block;background:#e1f5ee;color:#085041;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Always on — 100%</span>
+        <span style="display:inline-block;background:#c0dd97;color:#27500a;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Healthy — 90–99%</span>
+        <span style="display:inline-block;background:#faeeda;color:#633806;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Intermittent — 70–89%</span>
+        <span style="display:inline-block;background:#fac775;color:#412402;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Unstable — 40–69%</span>
+        <span style="display:inline-block;background:#f09595;color:#501313;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Critical — 1–39%</span>
+        <span style="display:inline-block;background:#e24b4a;color:#ffffff;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Always off — 0%</span>
       </div>
     </div>"""
 
@@ -458,7 +448,7 @@ def send_digest():
     week = d["week_start"]
 
     subject = (
-        f"⚠️ Weekly Digest {week} — {d['offline']} offline, {d['unstable']} unstable"
+        f"Weekly Infrastructure Status: {week} — {d['offline']} offline, {d['unstable']} unstable"
         if d["offline"] or d["unstable"]
         else f"✅ Weekly Digest {week} — Network healthy"
     )
