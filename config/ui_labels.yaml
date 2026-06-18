@@ -16,7 +16,7 @@ history_columns:
   time:         "Time (EET)"
   td:           "Traffic Detection"
   vms:          "VMS"
-  bt:           "BT Paths"
+  bt:           "Bluetooth Paths"
   api_response: "API response"
 
 # ── Group display names (DB name on left, label shown in UI on right) ─────────
@@ -29,6 +29,6 @@ group_display:
 # ── Map layer toggle button labels ────────────────────────────────────────────
 map_layers:
   td:    "Traffic Detection (SWARCO)"
-  bt:    "Bluetooth Sites"
+  bt:    "Bluetooth Sensors"
   vms:   "VMS"
-  paths: "BT Paths"
+  paths: "Bluetooth Paths"

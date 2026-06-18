@@ -113,6 +113,19 @@ STATUS_LABEL = {
     "stale": "Feed data is stale",
 }
 
+STATUS_TOOLTIP = {
+    "working":        "Sensor responded with a valid positive speed — vehicles detected and hardware functioning normally.",
+    "ok":             "Sensor responded correctly in this check.",
+    "no_traffic":     "Sensor is communicating but reported speed = 0. No vehicles were detected at this location during the check.",
+    "no_measurement": "Sensor appears in the inventory feed but sent no data in this check. It may be offline or temporarily excluded from the live feed.",
+    "no_status":      "VMS controller exists in the system but did not send any status in this run. It may be unreachable or misconfigured.",
+    "not_working":    "VMS controller explicitly reported a fault. The sign may be physically damaged or its communication link is down.",
+    "malfunctioning": "Sensor reported speed = -1, which is the hardware fault code. The loop detector is likely damaged or requires maintenance.",
+    "failing":        "Bluetooth path reported no speed or travel time data. This usually means no vehicles were detected on the route, or the Bluetooth readers at each end lost connectivity.",
+    "missing":        "Sensor was expected in the live feed based on the inventory, but was not present in this run.",
+    "stale":          "The feed's publication timestamp is older than expected. Data may not reflect current conditions.",
+}
+
 GOOD_STATUSES = {"working", "ok"}
 
 GROUP_DISPLAY = _UI.get("group_display") or {"Traffic Detection": "Traffic Detection (SWARCO)"}
@@ -266,9 +279,10 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
             None
         )
         if last_bad:
-            issue_label = STATUS_LABEL.get(last_bad["status"], last_bad["status"])
-            issue_color = STATUS_COLOR.get(last_bad["status"], "#9ca3af")
-            last_issue_html = f'<span style="font-size:11px;color:{issue_color}">{issue_label}</span>'
+            issue_label   = STATUS_LABEL.get(last_bad["status"], last_bad["status"])
+            issue_color   = STATUS_COLOR.get(last_bad["status"], "#9ca3af")
+            issue_tooltip = STATUS_TOOLTIP.get(last_bad["status"], "")
+            last_issue_html = f'<span title="{issue_tooltip}" style="font-size:11px;color:{issue_color};cursor:help">{issue_label}</span>'
         else:
             last_issue_html = '<span style="font-size:11px;color:#1d9e75">—</span>'
 
@@ -309,7 +323,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         composite_id = f"{s['group_name']}|{s['sensor_id']}"
         safe_sid = composite_id.replace("'", "\\'")
         rows += f"""
-        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
+        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-pct="{pct}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
           <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
@@ -363,11 +377,13 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
                      background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer">
         {options}
       </select>
-      <button onclick="exportStabilityCSV()"
-              style="font-size:13px;padding:5px 12px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
-                     background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer;white-space:nowrap">
-        ↓ Export CSV
-      </button>
+      <select id="sortOrder" onchange="_applyStabilityFilters()"
+              style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
+                     background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer">
+        <option value="default">Sort: Default</option>
+        <option value="worst">Worst first</option>
+        <option value="best">Best first</option>
+      </select>
     </div>
     <table id="sensorTable">
       <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
@@ -378,20 +394,40 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     function _applyStabilityFilters() {{
       var group  = document.getElementById('groupFilter').value;
       var search = (document.getElementById('stabilitySearch').value || '').toLowerCase().trim();
-      document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
-        if (!tr.dataset.group) return;  // skip trend rows — they follow their parent
+      var sort   = document.getElementById('sortOrder').value;
+      var tbody  = document.querySelector('#sensorTable tbody');
+
+      // sort sensor rows if needed
+      if (sort !== 'default') {{
+        var sensorRows = Array.from(tbody.querySelectorAll('tr[data-group]'));
+        sensorRows.sort(function(a, b) {{
+          var pa = parseInt(a.dataset.pct, 10);
+          var pb = parseInt(b.dataset.pct, 10);
+          return sort === 'worst' ? pa - pb : pb - pa;
+        }});
+        sensorRows.forEach(function(tr) {{
+          var sid = tr.getAttribute('onclick') && tr.getAttribute('onclick').match(/'([^']+)'/);
+          var trow = sid ? document.getElementById('trend-' + sid[1]) : null;
+          tbody.appendChild(tr);
+          if (trow) tbody.appendChild(trow);
+        }});
+      }}
+
+      // apply visibility filters
+      tbody.querySelectorAll('tr').forEach(function(tr) {{
+        if (!tr.dataset.group) return;
         var groupMatch  = group === 'all' || tr.dataset.group === group;
         var searchMatch = !search || (tr.dataset.display || '').indexOf(search) !== -1;
         var visible = groupMatch && searchMatch;
         tr.style.display = visible ? '' : 'none';
-        // also hide the associated trend row if sensor row is hidden
         var sid = tr.getAttribute('onclick') && tr.getAttribute('onclick').match(/'([^']+)'/);
         if (sid) {{
           var trow = document.getElementById('trend-' + sid[1]);
           if (trow && !visible) trow.style.display = 'none';
         }}
       }});
-      // update progress bar using group stats (search doesn't affect bar)
+
+      // update progress bar
       var stats = _groupStats[group] || _groupStats['all'];
       var pct = stats.total > 0 ? Math.round(stats.good / stats.total * 100) : 0;
       var color = pct >= 90 ? '#1d9e75' : (pct >= 55 ? '#e58e0a' : '#e24b4a');
@@ -478,26 +514,6 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           }}
         }}
       }});
-    }}
-
-    function exportStabilityCSV() {{
-      var headers = ['Group','Sensor ID','Stability','Last issue','Last working','First seen'];
-      var lines = [headers.map(function(h){{return '"'+h+'"';}}).join(',')];
-      document.querySelectorAll('#sensorTable tbody tr').forEach(function(tr) {{
-        if (tr.style.display === 'none') return;
-        var cells = tr.querySelectorAll('td');
-        var vals = [0,1,3,4,5,6].map(function(i) {{
-          return '"' + (cells[i] ? cells[i].textContent.trim().replace(/"/g,'""') : '') + '"';
-        }});
-        lines.push(vals.join(','));
-      }});
-      var blob = new Blob([lines.join('\\n')], {{type:'text/csv'}});
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'sensor_stability.csv';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
     }}
     </script>"""
 
@@ -1082,6 +1098,48 @@ def generate_report() -> str:
 <div style="display:flex;gap:20px;align-items:flex-start">
 <div style="flex:0 0 60%;min-width:0">
 
+  <details style="margin-bottom:16px;background:var(--color-background-secondary);border-radius:10px;border:0.5px solid var(--color-border-tertiary);padding:12px 16px;font-size:13px">
+    <summary style="cursor:pointer;font-weight:600;color:var(--color-text-primary);list-style:none;display:flex;align-items:center;gap:6px">
+      <i class="ti ti-info-circle" style="font-size:15px" aria-hidden="true"></i> How to read this report
+    </summary>
+    <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:16px;color:var(--color-text-secondary)">
+
+      <div>
+        <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">Group status</div>
+        <div style="margin-bottom:4px"><span style="background:#e1f5ee;color:#085041;padding:1px 7px;border-radius:8px;font-size:11px;font-weight:500">Operational</span> — All checks passing, sensors healthy.</div>
+        <div style="margin-bottom:4px"><span style="background:#faeeda;color:#633806;padding:1px 7px;border-radius:8px;font-size:11px;font-weight:500">Deteriorated</span> — Checks pass but sensor health is below 80%.</div>
+        <div style="margin-bottom:4px"><span style="background:#fcebeb;color:#e24b4a;padding:1px 7px;border-radius:8px;font-size:11px;font-weight:500">Feed issue</span> — One or more API checks are failing.</div>
+      </div>
+
+      <div>
+        <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">Traffic Detection sensor statuses</div>
+        <div style="margin-bottom:4px"><span style="color:#1d9e75;font-weight:500">Working</span> — Sensor reported a positive speed; vehicles detected, hardware OK.</div>
+        <div style="margin-bottom:4px"><span style="color:#9ca3af;font-weight:500">No traffic</span> — Sensor is communicating but reported speed = 0; no vehicles detected.</div>
+        <div style="margin-bottom:4px"><span style="color:#e24b4a;font-weight:500">Malfunctioning</span> — Sensor reported speed = -1, the hardware fault code; loop detector likely damaged.</div>
+        <div style="margin-bottom:4px"><span style="color:#9ca3af;font-weight:500">No measurement</span> — Sensor is in the inventory but sent no data this run.</div>
+      </div>
+
+      <div>
+        <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">VMS statuses</div>
+        <div style="margin-bottom:4px"><span style="color:#1d9e75;font-weight:500">Working</span> — Controller is active and responding correctly.</div>
+        <div style="margin-bottom:4px"><span style="color:#e24b4a;font-weight:500">Not working</span> — Controller explicitly reported a fault; sign may be physically damaged.</div>
+        <div style="margin-bottom:4px"><span style="color:#9ca3af;font-weight:500">No status</span> — Controller exists in the system but sent no status in this run.</div>
+      </div>
+
+      <div>
+        <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">Bluetooth Path statuses</div>
+        <div style="margin-bottom:4px"><span style="color:#1d9e75;font-weight:500">Working</span> — Path has valid speed and travel time data.</div>
+        <div style="margin-bottom:4px"><span style="color:#e24b4a;font-weight:500">Failing</span> — No speed or travel time reported; no vehicles detected on route or Bluetooth readers lost connectivity.</div>
+      </div>
+
+      <div style="grid-column:span 2">
+        <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">Sensor stability panel</div>
+        <div style="margin-bottom:4px">Each row shows a sensor's last 20 checks as coloured bars — <span style="color:#1d9e75;font-weight:500">green</span> = good, <span style="color:#e24b4a;font-weight:500">red</span> = fault, <span style="color:#9ca3af;font-weight:500">grey</span> = no data or no traffic. Hover over a bar to see the exact timestamp and status.</div>
+        <div>The <strong>health badge</strong> (e.g. Healthy 95%) shows the percentage of checks that returned a good status over the past 30 days. Click any row to expand a daily trend chart.</div>
+      </div>
+    </div>
+  </details>
+
   <div class="panel" id="p-groups">
     <div class="panel-header" onclick="togglePanel('p-groups')">
       <span class="panel-title">{_lbl('panels', 'groups', 'Infrastructure groups')}</span>
@@ -1131,6 +1189,11 @@ def generate_report() -> str:
     </div>
     <div class="panel-bar"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
     <div class="panel-body" id="b-p-history">
+      <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 12px">
+        Each row is one automated test run. The percentage columns show how many sensors in that group
+        returned a healthy status during that run. <strong>API response</strong> is the time in milliseconds
+        the server took to respond — high values may indicate server load issues.
+      </p>
       <table>
         <thead><tr><th>{_lbl('history_columns','time','Time (EET)')}</th><th>{_lbl('history_columns','td','Traffic Detection')}</th><th>{_lbl('history_columns','vms','VMS')}</th><th>{_lbl('history_columns','bt','Bluetooth Paths')}</th><th>{_lbl('history_columns','api_response','API response')}</th></tr></thead>
         <tbody>{history_rows}</tbody>
