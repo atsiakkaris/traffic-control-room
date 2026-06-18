@@ -240,13 +240,17 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         pct = round(good / total * 100) if total else 0
 
         if pct == 100:
-            badge_bg, badge_color, badge_label, badge_tip = "#e1f5ee", "#0f6e56", "Always on", "100% of runs good"
-        elif pct == 0:
-            badge_bg, badge_color, badge_label, badge_tip = "#fcebeb", "#a32d2d", "Always off", "0% of runs good"
+            badge_bg, badge_color, badge_label, badge_tip = "#e1f5ee", "#085041", "Always on",   "100% of runs good"
+        elif pct >= 90:
+            badge_bg, badge_color, badge_label, badge_tip = "#c0dd97", "#27500a", "Healthy",     "90–99% of runs good"
         elif pct >= 70:
-            badge_bg, badge_color, badge_label, badge_tip = "#faeeda", "#854f0b", "Mostly on", "70–99% of runs good"
+            badge_bg, badge_color, badge_label, badge_tip = "#faeeda", "#633806", "Intermittent","70–89% of runs good"
+        elif pct >= 40:
+            badge_bg, badge_color, badge_label, badge_tip = "#fac775", "#412402", "Unstable",    "40–69% of runs good"
+        elif pct > 0:
+            badge_bg, badge_color, badge_label, badge_tip = "#f09595", "#501313", "Critical",    "1–39% of runs good"
         else:
-            badge_bg, badge_color, badge_label, badge_tip = "#faeeda", "#854f0b", "Unstable", "1–69% of runs good"
+            badge_bg, badge_color, badge_label, badge_tip = "#e24b4a", "#ffffff", "Always off",  "0% of runs good"
 
         # Sparkline: last 40 runs as tiny squares with rich tooltips
         sparks = ""
@@ -1652,3 +1656,8 @@ function closeMapPanel() {
   }
 }
 </script>"""
+
+
+if __name__ == "__main__":
+    path = generate_report()
+    print(f"Report written to {path}")

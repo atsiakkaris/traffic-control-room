@@ -35,6 +35,17 @@ The monitor uses a two-tier health model:
 - **Feed health** (binary) — did the API respond with valid, fresh XML? If not, the group is marked as a feed issue regardless of sensor counts.
 - **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 55 %, red < 55 %.
 
+Each sensor in the Stability panel gets one of six badges based on its historical health %:
+
+| Badge | Range | Meaning |
+|---|---|---|
+| Always on | 100% | Every recorded run was good |
+| Healthy | 90–99% | Consistently up, rare misses |
+| Intermittent | 70–89% | Mostly working but with regular gaps |
+| Unstable | 40–69% | Unreliable — failing more often than not |
+| Critical | 1–39% | Almost always failing |
+| Always off | 0% | No good runs recorded |
+
 This means a group is never falsely marked "failed" just because some sensors are malfunctioning — the feed being up/down is tracked separately from individual sensor health.
 
 ---
