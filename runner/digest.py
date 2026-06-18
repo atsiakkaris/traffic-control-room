@@ -38,17 +38,22 @@ def _health_pct(good, total):
     return round(good / total * 100) if total else None
 
 
-def _color(pct):
-    if pct is None:
-        return "#9ca3af"
-    return "#1d9e75" if pct >= 90 else ("#e58e0a" if pct >= 70 else "#e24b4a")
-
-
 def _badge(pct):
     if pct is None:
-        return '<span style="background:#e5e7eb;color:#6b7280;padding:2px 8px;border-radius:10px;font-size:12px">No data</span>'
-    color = _color(pct)
-    return f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px">{pct}%</span>'
+        return '<span style="background:#e5e7eb;color:#6b7280;padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">No data</span>'
+    if pct == 100:
+        bg, fg, label = "#e1f5ee", "#085041", "Always on"
+    elif pct >= 90:
+        bg, fg, label = "#c0dd97", "#27500a", "Healthy"
+    elif pct >= 70:
+        bg, fg, label = "#faeeda", "#633806", "Intermittent"
+    elif pct >= 40:
+        bg, fg, label = "#fac775", "#412402", "Unstable"
+    elif pct > 0:
+        bg, fg, label = "#f09595", "#501313", "Critical"
+    else:
+        bg, fg, label = "#e24b4a", "#ffffff", "Always off"
+    return f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">{label} ({pct}%)</span>'
 
 
 def fetch_sensor_health_by_day(days_back):
@@ -76,14 +81,14 @@ def fetch_sensor_health_by_day(days_back):
 
 
 def fetch_active_sensors():
-    """Return set of (group_name, sensor_id) currently active."""
+    """Return (sensors, bt_paths) as separate sets of (group_name, sensor_id)."""
     conn = get_connection()
     sc = conn.execute("SELECT group_name, sensor_id FROM sensor_coords WHERE active=1").fetchall()
     bt = conn.execute("SELECT path_id FROM bt_path_coords WHERE active=1").fetchall()
     conn.close()
-    active = {(r["group_name"], r["sensor_id"]) for r in sc}
-    active |= {("Bluetooth Paths", r["path_id"]) for r in bt}
-    return active
+    sensors = {(r["group_name"], r["sensor_id"]) for r in sc}
+    bt_paths = {("Bluetooth Paths", r["path_id"]) for r in bt}
+    return sensors, bt_paths
 
 
 def fetch_retired_this_week():
@@ -125,7 +130,8 @@ def build_digest():
     prev_week_start = today - timedelta(days=14)
 
     daily = fetch_sensor_health_by_day(14)
-    active = fetch_active_sensors()
+    active_sensors, active_bt = fetch_active_sensors()
+    active = active_sensors | active_bt
     retired = fetch_retired_this_week()
 
     this_week_days = [(week_start      + timedelta(days=i)).isoformat() for i in range(7)]
@@ -171,10 +177,11 @@ def build_digest():
         key=lambda x: -(x["this_pct"] - x["prev_pct"])
     )
 
-    total_sensors  = len(sensor_stats)
-    healthy_count  = sum(1 for s in sensor_stats if s["this_pct"] is not None and s["this_pct"] >= 90)
-    unstable_count = sum(1 for s in sensor_stats if s["this_pct"] is not None and 0 < s["this_pct"] < 90)
-    offline_count  = len(always_off)
+    non_bt_stats   = [s for s in sensor_stats if s["group"] != "Bluetooth Paths"]
+    total_sensors  = len(non_bt_stats)
+    healthy_count  = sum(1 for s in non_bt_stats if s["this_pct"] is not None and s["this_pct"] >= 90)
+    unstable_count = sum(1 for s in non_bt_stats if s["this_pct"] is not None and 0 < s["this_pct"] < 90)
+    offline_count  = sum(1 for s in non_bt_stats if s["this_pct"] is not None and s["this_pct"] == 0)
 
     return {
         "week_start": week_start.strftime("%d %b %Y"),
@@ -210,7 +217,7 @@ def _sensor_table(sensors, show_prev=False):
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">
         <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Group</th>
-        <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor</th>
+        <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor ID</th>
         <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">This week</th>
         {prev_header}
       </tr></thead>
@@ -221,12 +228,16 @@ def _sensor_table(sensors, show_prev=False):
 def build_html(d):
     generated_at = datetime.now(CYPRUS_TZ).strftime("%d %b %Y %H:%M EEST")
 
-    def section(title, color, content):
+    def section(title, color, content, open_by_default=True):
+        open_attr = " open" if open_by_default else ""
         return f"""
-        <div style="margin-bottom:28px">
-          <h3 style="margin:0 0 10px;font-size:15px;font-weight:600;color:{color}">{title}</h3>
+        <details{open_attr} style="margin-bottom:28px">
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;margin-bottom:10px">
+            <span style="font-size:15px;font-weight:600;color:{color}">{title}</span>
+            <span style="font-size:11px;color:#9ca3af;margin-left:4px">(click to collapse)</span>
+          </summary>
           {content}
-        </div>"""
+        </details>"""
 
     retired_rows = "".join(
         f'<tr><td style="padding:5px 12px;font-size:12px;color:#6b7280">{r["group"]}</td>'
@@ -285,7 +296,7 @@ def build_html(d):
 def send_digest():
     gmail_user = os.environ.get("GMAIL_USER", "")
     gmail_pw   = os.environ.get("GMAIL_APP_PW", "")
-    recipient  = os.environ.get("NOTIFY_EMAIL", gmail_user)
+    recipients = [r.strip() for r in os.environ.get("NOTIFY_EMAIL", gmail_user).split(",") if r.strip()]
 
     if not gmail_user or not gmail_pw:
         log.error("GMAIL_USER / GMAIL_APP_PW not set — cannot send digest.")
@@ -304,14 +315,14 @@ def send_digest():
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = gmail_user
-    msg["To"]      = recipient
+    msg["To"]      = ", ".join(recipients)
     msg.attach(MIMEText(html, "html"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(gmail_user, gmail_pw)
-            server.sendmail(gmail_user, recipient, msg.as_string())
-        log.info("Weekly digest sent to %s", recipient)
+            server.sendmail(gmail_user, recipients, msg.as_string())
+        log.info("Weekly digest sent to %s", ", ".join(recipients))
     except Exception as e:
         log.error("Failed to send digest: %s", e)
         sys.exit(1)
