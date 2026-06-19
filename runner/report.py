@@ -1284,7 +1284,10 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
+    plugins: {{
+      legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: function(c) {{ return c.dataset.label + ': ' + c.parsed.y + '%'; }} }} }}
+    }},
     scales: {{
       x: {{ ticks: {{ font: {{ size: 11 }}, color: '#9ca3af', maxRotation: 45, autoSkip: true, maxTicksLimit: 15 }} }},
       y: {{ min: 0, max: 100, ticks: {{ stepSize: 20, font: {{ size: 11 }}, color: '#9ca3af', callback: function(v) {{ return v + '%' }} }}, grid: {{ color: 'rgba(128,128,128,0.1)' }} }}
@@ -1699,6 +1702,11 @@ function flyToSensor(el) {
     _markers.forEach(function(m) {
       if (m._sensorId === sid) m.fire('click');
     });
+    // highlight ring
+    var ring = L.circleMarker([lat, lon], {
+      radius: 18, color: '#facc15', weight: 5, fill: false, opacity: 1, interactive: false
+    }).addTo(_map);
+    setTimeout(function() { _map.removeLayer(ring); }, 3000);
   }, 900);
 }
 

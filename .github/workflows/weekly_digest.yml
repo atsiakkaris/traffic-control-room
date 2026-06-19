@@ -1,9 +1,9 @@
 name: Weekly Digest Email
 
 on:
-  # 05:00 UTC = 08:00 EEST (UTC+3, summer). In winter (EET, UTC+2) this fires at 07:00 local.
+  # 04:30 UTC = 07:30 EEST (UTC+3, summer). In winter (EET, UTC+2) this fires at 06:30 local.
   schedule:
-    - cron: "0 5 * * 1"
+    - cron: "30 4 * * 1"
   workflow_dispatch:
 
 jobs:

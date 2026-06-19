@@ -125,6 +125,14 @@ def build_digest():
     active = active_sensors | active_bt
     retired = fetch_retired_this_week()
 
+    # count total runs this week
+    conn = get_connection()
+    run_count = conn.execute(
+        "SELECT COUNT(DISTINCT run_at) FROM sensor_results WHERE run_at >= ?",
+        (week_start.isoformat(),)
+    ).fetchone()[0]
+    conn.close()
+
     # derive approximate check frequency from this week's run counts
     this_week_totals = []
     for key, days_data in daily.items():
@@ -168,11 +176,17 @@ def build_digest():
             "prev_pct":  prev_pct,
         })
 
-    always_off = [s for s in sensor_stats if s["this_pct"] is not None and s["this_pct"] == 0]
-    persistent = [s for s in sensor_stats
-                  if s["this_pct"] is not None and s["this_pct"] < 70
-                  and s["prev_pct"] is not None and s["prev_pct"] < 70
-                  and s["this_pct"] > 0]
+    always_off = sorted(
+        [s for s in sensor_stats if s["this_pct"] is not None and s["this_pct"] == 0],
+        key=lambda x: x["group"]
+    )
+    persistent = sorted(
+        [s for s in sensor_stats
+         if s["this_pct"] is not None and s["this_pct"] < 70
+         and s["prev_pct"] is not None and s["prev_pct"] < 70
+         and s["this_pct"] > 0],
+        key=lambda x: x["this_pct"]
+    )
     degraded   = sorted(
         [s for s in sensor_stats
          if s["this_pct"] is not None and s["prev_pct"] is not None
@@ -192,10 +206,13 @@ def build_digest():
 
     def _counts(stats):
         return {
-            "total":    len(stats),
-            "healthy":  sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] >= 90),
-            "unstable": sum(1 for s in stats if s["this_pct"] is not None and 0 < s["this_pct"] < 90),
-            "offline":  sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 0),
+            "total":        len(stats),
+            "always_on":    sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 100),
+            "healthy":      sum(1 for s in stats if s["this_pct"] is not None and 90 <= s["this_pct"] < 100),
+            "intermittent": sum(1 for s in stats if s["this_pct"] is not None and 70 <= s["this_pct"] < 90),
+            "unstable":     sum(1 for s in stats if s["this_pct"] is not None and 40 <= s["this_pct"] < 70),
+            "critical":     sum(1 for s in stats if s["this_pct"] is not None and 0 < s["this_pct"] < 40),
+            "offline":      sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 0),
         }
 
     # per-group breakdown (non-BT), preserving natural order
@@ -208,6 +225,7 @@ def build_digest():
     return {
         "week_start":  week_start.strftime("%d %b %Y"),
         "week_end":    today.strftime("%d %b %Y"),
+        "run_count":   run_count,
         "check_freq":  check_freq,
         **_counts(non_bt_stats),
         "groups":      groups,
@@ -225,20 +243,20 @@ def _sensor_table(sensors, show_prev=False):
         return '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'
     rows = ""
     for s in sensors[:30]:
-        prev_cell = f'<td style="padding:6px 12px">{_badge(s["prev_pct"])}</td>' if show_prev else ""
+        prev_cell = f'<td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s["prev_pct"])}</td>' if show_prev else ""
         rows += f"""
-        <tr>
+        <tr style="border-bottom:1px solid #f3f4f6">
           <td style="padding:6px 12px;font-size:13px">{s['name']}</td>
-          <td style="padding:6px 12px">{_badge(s['this_pct'])}</td>
+          <td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s['this_pct'])}</td>
           {prev_cell}
         </tr>"""
     note = f'<p style="font-size:11px;color:#9ca3af;margin-top:4px"><strong>Showing top 30 of {len(sensors)}</strong></p>' if len(sensors) > 30 else ""
-    prev_header = '<th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Prev week</th>' if show_prev else ""
+    prev_header = '<th style="padding:6px 12px;text-align:right;font-weight:500;color:#6b7280;font-size:12px;white-space:nowrap">Prev week</th>' if show_prev else ""
     return f"""
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">
         <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Name</th>
-        <th style="padding:6px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">This week</th>
+        <th style="padding:6px 12px;text-align:right;font-weight:500;color:#6b7280;font-size:12px;white-space:nowrap">This week</th>
         {prev_header}
       </tr></thead>
       <tbody>{rows}</tbody>
@@ -334,76 +352,114 @@ def build_html(d):
     return f"""
     <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#111;max-width:680px;margin:0 auto;padding:24px">
 
-    <h2 style="margin:0 0 4px;font-size:20px">Cyprus ITS — Weekly Network Health Digest</h2>
-    <p style="color:#6b7280;font-size:13px;margin:0 0 12px">{d['week_start']} — {d['week_end']} &nbsp;·&nbsp; Generated {generated_at}</p>
-    <p style="font-size:13px;color:#374151;margin:0 0 24px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:4px">
+      <tr>
+        <td><h2 style="margin:0;font-size:20px">Cyprus ITS — Weekly Network Health Digest</h2></td>
+        <td align="right" style="white-space:nowrap"><a href="{DASHBOARD_URL}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;white-space:nowrap">See dashboard →</a></td>
+      </tr>
+    </table>
+    <p style="color:#6b7280;font-size:13px;margin:0 0 12px">{d['week_start']} — {d['week_end']} &nbsp;·&nbsp; Generated {generated_at} &nbsp;·&nbsp; {d['run_count']} runs</p>
+    <p style="font-size:13px;color:#374151;margin:0 0 16px">
       This report summarises the health of Cyprus ITS infrastructure sensors for the past week.
       It highlights sensors that went offline, are performing below expectations, or have changed
-      significantly since last week. Bluetooth path sensors are monitored separately and are not
-      included in the totals below.
+      significantly since last week.
     </p>
 
+    {badge_legend}
+
     <div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Sensors</div>
-    <div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
-      <div style="flex:1;min-width:120px;background:#f9fafb;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700">{d['total']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Monitored</div>
-      </div>
-      <div style="flex:1;min-width:120px;background:#ecfdf5;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#1d9e75">{d['healthy']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Healthy (≥90%)</div>
-      </div>
-      <div style="flex:1;min-width:120px;background:#fffbeb;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#e58e0a">{d['unstable']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Need attention (1–89%)</div>
-      </div>
-      <div style="flex:1;min-width:120px;background:#fef2f2;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#e24b4a">{d['offline']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Always off (0%)</div>
-      </div>
-    </div>
+    <table width="100%" cellspacing="4" cellpadding="0" style="margin-bottom:12px;border-collapse:separate;border-spacing:4px">
+      <tr>
+        <td width="14%" style="background:#f9fafb;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700">{d['total']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Monitored</div>
+        </td>
+        <td width="14%" style="background:#e1f5ee;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#085041">{d['always_on']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always on (100%)</div>
+        </td>
+        <td width="14%" style="background:#ecfdf5;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#1d9e75">{d['healthy']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Healthy (90–99%)</div>
+        </td>
+        <td width="14%" style="background:#faeeda;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#633806">{d['intermittent']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Intermittent (70–89%)</div>
+        </td>
+        <td width="14%" style="background:#fffbeb;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#e58e0a">{d['unstable']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Unstable (40–69%)</div>
+        </td>
+        <td width="14%" style="background:#fde8e8;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#9b1c1c">{d['critical']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Critical (1–39%)</div>
+        </td>
+        <td width="14%" style="background:#fef2f2;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#e24b4a">{d['offline']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off (0%)</div>
+        </td>
+      </tr>
+    </table>
     <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
       <thead>
         <tr style="border-bottom:1px solid #e5e7eb">
-          <th style="padding:5px 10px;text-align:left;font-weight:500;color:#9ca3af">Group</th>
-          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#9ca3af">Monitored</th>
-          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#1d9e75">Healthy</th>
-          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#e58e0a">Need attention</th>
-          <th style="padding:5px 10px;text-align:center;font-weight:500;color:#e24b4a">Always off</th>
+          <th style="padding:5px 8px;text-align:left;font-weight:500;color:#9ca3af">Group</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#9ca3af">Total</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#085041">Always on</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#1d9e75">Healthy</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#633806">Intermittent</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e58e0a">Unstable</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#9b1c1c">Critical</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e24b4a">Always off</th>
         </tr>
       </thead>
       <tbody>
         {"".join(f'''<tr style="border-bottom:1px solid #f3f4f6">
-          <td style="padding:5px 10px;color:#374151">{g}</td>
-          <td style="padding:5px 10px;text-align:center;color:#374151">{c['total']}</td>
-          <td style="padding:5px 10px;text-align:center;color:#1d9e75">{c['healthy']}</td>
-          <td style="padding:5px 10px;text-align:center;color:#e58e0a">{c['unstable']}</td>
-          <td style="padding:5px 10px;text-align:center;color:#e24b4a">{c['offline']}</td>
+          <td style="padding:5px 8px;color:#374151">{g}</td>
+          <td style="padding:5px 8px;text-align:center;color:#374151">{c['total']}</td>
+          <td style="padding:5px 8px;text-align:center;color:#085041">{c['always_on']}</td>
+          <td style="padding:5px 8px;text-align:center;color:#1d9e75">{c['healthy']}</td>
+          <td style="padding:5px 8px;text-align:center;color:#633806">{c['intermittent']}</td>
+          <td style="padding:5px 8px;text-align:center;color:#e58e0a">{c['unstable']}</td>
+          <td style="padding:5px 8px;text-align:center;color:#9b1c1c">{c['critical']}</td>
+          <td style="padding:5px 8px;text-align:center;color:#e24b4a">{c['offline']}</td>
         </tr>''' for g, c in d['groups'].items())}
       </tbody>
     </table>
 
     <div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Bluetooth Paths</div>
-    <div style="display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap">
-      <div style="flex:1;min-width:120px;background:#f9fafb;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700">{d['bt']['total']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Monitored</div>
-      </div>
-      <div style="flex:1;min-width:120px;background:#ecfdf5;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#1d9e75">{d['bt']['healthy']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Healthy (≥90%)</div>
-      </div>
-      <div style="flex:1;min-width:120px;background:#fffbeb;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#e58e0a">{d['bt']['unstable']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Need attention (1–89%)</div>
-      </div>
-      <div style="flex:1;min-width:120px;background:#fef2f2;border-radius:10px;padding:14px 18px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:#e24b4a">{d['bt']['offline']}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px">Always off (0%)</div>
-      </div>
-    </div>
-
-    {badge_legend}
+    <table width="100%" cellspacing="4" cellpadding="0" style="margin-bottom:28px;border-collapse:separate;border-spacing:4px">
+      <tr>
+        <td width="14%" style="background:#f9fafb;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700">{d['bt']['total']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Monitored</div>
+        </td>
+        <td width="14%" style="background:#e1f5ee;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#085041">{d['bt']['always_on']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always on (100%)</div>
+        </td>
+        <td width="14%" style="background:#ecfdf5;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#1d9e75">{d['bt']['healthy']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Healthy (90–99%)</div>
+        </td>
+        <td width="14%" style="background:#faeeda;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#633806">{d['bt']['intermittent']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Intermittent (70–89%)</div>
+        </td>
+        <td width="14%" style="background:#fffbeb;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#e58e0a">{d['bt']['unstable']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Unstable (40–69%)</div>
+        </td>
+        <td width="14%" style="background:#fde8e8;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#9b1c1c">{d['bt']['critical']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Critical (1–39%)</div>
+        </td>
+        <td width="14%" style="background:#fef2f2;border-radius:10px;padding:12px 8px;text-align:center">
+          <div style="font-size:20px;font-weight:700;color:#e24b4a">{d['bt']['offline']}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off (0%)</div>
+        </td>
+      </tr>
+    </table>
 
     {section("🔴 Always off this week",
              "#e24b4a",
@@ -427,10 +483,10 @@ def build_html(d):
              retired_table)}
 
     <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb">
-      <a href="{DASHBOARD_URL}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500">Open live dashboard →</a>
+      <a href="{DASHBOARD_URL}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500">See dashboard →</a>
     </div>
 
-    <p style="color:#9ca3af;font-size:11px;margin-top:24px">Cyprus ITS Infrastructure Monitor · Sent every Monday 08:00 EEST</p>
+    <p style="color:#9ca3af;font-size:11px;margin-top:24px">Cyprus ITS Infrastructure Monitor · Sent every Monday at 07:30 EEST</p>
     </body></html>"""
 
 
