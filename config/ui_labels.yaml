@@ -65,3 +65,8 @@ groups:
 # This controls the polyline layer toggle on the map only.
 # It is not a group in the history table or trend chart.
 bt_paths_map_label: "Bluetooth Paths"
+
+# ── Staleness warning ─────────────────────────────────────────────────────────
+# Show a banner on the dashboard if the last run is older than this many hours.
+# Set to 1.5× your scheduled run interval (e.g. 2h runs → 3h threshold).
+staleness_threshold_hours: 3

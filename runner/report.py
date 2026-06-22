@@ -1062,6 +1062,19 @@ def generate_report() -> str:
 
     run_time = _to_cyprus(latest_run["run_at"])
 
+    # Staleness: warn if last run was more than 3 hours ago (1.5× the 2h schedule)
+    _last_run_dt = datetime.fromisoformat(latest_run["run_at"].replace("Z", "+00:00"))
+    if _last_run_dt.tzinfo is None:
+        _last_run_dt = _last_run_dt.replace(tzinfo=timezone.utc)
+    _age_hours = (datetime.now(timezone.utc) - _last_run_dt).total_seconds() / 3600
+    stale_banner = (
+        f'<div id="stale-banner" style="background:#7c3aed;color:#fff;text-align:center;'
+        f'padding:8px 16px;font-size:12px;font-weight:500">'
+        f'<i class="ti ti-alert-triangle" style="vertical-align:-2px;margin-right:6px"></i>'
+        f'Data may be outdated — last run was {_age_hours:.0f} hours ago. '
+        f'Monitoring may be disrupted.</div>'
+    ) if _age_hours > _UI.get("staleness_threshold_hours", 3) else ""
+
     # Chart labels in Cyprus time
     chart_labels = json.dumps([_to_cyprus(r["run_at"]) for r in chart_runs])
 
@@ -1090,6 +1103,7 @@ def generate_report() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="3600">
 <title>{_UI.get('page_title', 'ITS Infrastructure Health')}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -1164,12 +1178,26 @@ def generate_report() -> str:
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+<script>
+  (function() {{
+    var secs = 3600;
+    var el = null;
+    function tick() {{
+      if (!el) el = document.getElementById('refresh-countdown');
+      if (el) el.textContent = Math.floor(secs/60) + ':' + ('0' + (secs%60)).slice(-2);
+      if (secs-- <= 0) return;
+      setTimeout(tick, 1000);
+    }}
+    document.addEventListener('DOMContentLoaded', tick);
+  }})();
+</script>
 </head>
 <body>
+{stale_banner}
 <header>
   <div>
     <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
-    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {len(runs)} runs recorded</div>
+    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {len(runs)} runs recorded &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">60:00</span></div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
