@@ -1018,6 +1018,13 @@ def generate_report() -> str:
     _runs_sorted = sorted(_run_timeline.values(), key=lambda r: r["run_at"])
     history_playback_json = json.dumps(_runs_sorted[-20:])
 
+    # Pre-compute group-driven HTML/JS snippets so injection sites stay clean
+    _bt_paths_label   = _UI.get("bt_paths_map_label", "Bluetooth Paths")
+    chart_legend      = _chart_legend_html(GROUP_META)
+    history_th_cells  = _history_header_cells(GROUP_META)
+    chart_datasets    = _chart_datasets_js(GROUP_META, chart_series)
+    map_layer_buttons = _map_layer_buttons(GROUP_META, _bt_paths_label)
+
     has_map_data = bool(map_sensors or map_bt_paths)
     map_script_html = _build_map_script(map_sensors_json, map_bt_paths_json, history_playback_json, GROUP_META) if has_map_data else ""
 
@@ -1029,7 +1036,7 @@ def generate_report() -> str:
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
             + map_layer_buttons
-            '<span style="flex:1"></span>'
+            + '<span style="flex:1"></span>'
             '<button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
             '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
@@ -1054,13 +1061,6 @@ def generate_report() -> str:
         )
 
     run_time = _to_cyprus(latest_run["run_at"])
-
-    # Pre-compute group-driven HTML/JS snippets so the f-string stays clean
-    _bt_paths_label   = _UI.get("bt_paths_map_label", "Bluetooth Paths")
-    chart_legend      = _chart_legend_html(GROUP_META)
-    history_th_cells  = _history_header_cells(GROUP_META)
-    chart_datasets    = _chart_datasets_js(GROUP_META, chart_series)
-    map_layer_buttons = _map_layer_buttons(GROUP_META, _bt_paths_label)
 
     # Chart labels in Cyprus time
     chart_labels = json.dumps([_to_cyprus(r["run_at"]) for r in chart_runs])
@@ -1434,7 +1434,7 @@ var STATUS_LABELS  = {
 /* -- Icon factory ------------------------------------------------- */
 var ICON_CLASS = """ + icon_class_js + """;
 var ICON_SIZE  = """ + icon_size_js + """;
-var ICON_SHAPE = """ + icon_shape_js + ";")
+var ICON_SHAPE = """ + icon_shape_js + """;
 
 function makeIcon(group, color) {
   var ic  = ICON_CLASS[group] || 'ti-circle';
@@ -1835,7 +1835,7 @@ function closeMapPanel() {
     _highlighted = null;
   }
 }
-</script>"""
+</script>""")
 
 
 if __name__ == "__main__":
