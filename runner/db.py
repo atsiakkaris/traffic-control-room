@@ -326,18 +326,30 @@ def fetch_bt_path_coords():
     return result
 
 
-def fetch_sensor_health_history(limit=30):
-    """Return per-run health data for sensor check endpoints, newest-first.
-    One row per sensor endpoint per run (up to limit runs × 3 endpoints)."""
+def fetch_sensor_health_history(limit=30, live_test_names=None):
+    """Return per-run health data for live sensor check endpoints, newest-first.
+    live_test_names: list of test_name strings to filter by (derived from endpoints.yaml).
+    If not provided, returns all test results (no filter applied).
+    """
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
-        FROM runs r
-        JOIN test_results tr ON tr.run_id = r.run_id
-        WHERE tr.test_name IN ('Traffic Detection Live', 'VMS Live Data', 'Bluetooth Paths Live (FCD)')
-        ORDER BY r.run_at DESC
-        LIMIT ?
-    """, (limit * 3,)).fetchall()
+    if live_test_names:
+        placeholders = ",".join("?" * len(live_test_names))
+        rows = conn.execute(f"""
+            SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
+            FROM runs r
+            JOIN test_results tr ON tr.run_id = r.run_id
+            WHERE tr.test_name IN ({placeholders})
+            ORDER BY r.run_at DESC
+            LIMIT ?
+        """, list(live_test_names) + [limit * len(live_test_names)]).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
+            FROM runs r
+            JOIN test_results tr ON tr.run_id = r.run_id
+            ORDER BY r.run_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

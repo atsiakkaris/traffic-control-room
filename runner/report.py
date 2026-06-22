@@ -160,6 +160,65 @@ SENSOR_CHECKS = {"sensor_speed_status", "vms_controller_status", "bt_paths_speed
 HEALTH_WARNING_PCT = 80
 
 
+# ── HTML/JS generation helpers (group-meta driven) ────────────────────────────
+
+def _chart_legend_html(group_meta):
+    """Coloured line + label for each group — shown below the trend chart."""
+    parts = []
+    for gname, meta in group_meta.items():
+        color = meta.get("color", "#6b7280")
+        label = meta.get("history_label", gname)
+        parts.append(
+            f'<span style="display:flex;align-items:center;gap:5px">'
+            f'<span style="width:22px;height:3px;border-radius:2px;'
+            f'background:{color};display:inline-block"></span>{label}</span>'
+        )
+    return "\n        ".join(parts)
+
+
+def _history_header_cells(group_meta):
+    """One <th> per group for the run-history table."""
+    return "".join(
+        f'<th>{meta.get("history_label", gname)}</th>'
+        for gname, meta in group_meta.items()
+    )
+
+
+def _chart_datasets_js(group_meta, chart_series):
+    """JS array contents for the Chart.js trend chart — one dataset per group."""
+    datasets = []
+    for gname, meta in group_meta.items():
+        datasets.append(
+            "{ "
+            f'label: {json.dumps(meta.get("history_label", gname))}, '
+            f'data: {chart_series[gname]}, '
+            f'borderColor: {json.dumps(meta.get("color", "#6b7280"))}, '
+            "backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true"
+            " }"
+        )
+    return ",\n      ".join(datasets)
+
+
+def _map_layer_buttons(group_meta, bt_paths_label):
+    """Toggle buttons for the map — one per group layer, plus BT paths polyline."""
+    buttons = []
+    for gname, meta in group_meta.items():
+        key = meta.get("layer_key", "")
+        if not key:
+            continue
+        label = meta.get("map_label", gname)
+        buttons.append(
+            f'<button class="map-toggle active" data-layer="{key}" '
+            f'onclick="toggleLayer(this,\'{key}\')">{label}</button>'
+        )
+        if gname == "Bluetooth":
+            buttons.append(
+                f'<button class="map-toggle active" data-layer="paths" '
+                f'onclick="toggleLayer(this,\'paths\')">{bt_paths_label}</button>'
+            )
+    return "\n".join(buttons)
+
+
 def _extract_health_pct(check_summary, check_name):
     """Extract a 0-100 health percentage from a check_summary string for a given sensor check."""
     if not check_summary or check_name not in check_summary:
@@ -567,7 +626,7 @@ def generate_report() -> str:
     all_sensors = fetch_sensor_stability()
 
     # Sensor health history — build per-run lookup keyed by run_id → group_name
-    raw_health = fetch_sensor_health_history(60)
+    raw_health = fetch_sensor_health_history(60, live_test_names=list(HEALTH_ENDPOINTS.keys()))
     health_by_run = {}
     for row in raw_health:
         rid = row["run_id"]
@@ -969,13 +1028,7 @@ def generate_report() -> str:
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
-            + "".join(
-                f'<button class="map-toggle active" data-layer="{meta[\'layer_key\']}" onclick="toggleLayer(this,\'{meta[\'layer_key\']}\')">{ meta.get(\'map_label\', gname)}</button>'
-                + (f'<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">{_UI.get("bt_paths_map_label", "Bluetooth Paths")}</button>'
-                   if gname == "Bluetooth" else "")
-                for gname, meta in GROUP_META.items()
-                if meta.get("layer_key")
-            )
+            + map_layer_buttons
             '<span style="flex:1"></span>'
             '<button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
@@ -1001,6 +1054,13 @@ def generate_report() -> str:
         )
 
     run_time = _to_cyprus(latest_run["run_at"])
+
+    # Pre-compute group-driven HTML/JS snippets so the f-string stays clean
+    _bt_paths_label   = _UI.get("bt_paths_map_label", "Bluetooth Paths")
+    chart_legend      = _chart_legend_html(GROUP_META)
+    history_th_cells  = _history_header_cells(GROUP_META)
+    chart_datasets    = _chart_datasets_js(GROUP_META, chart_series)
+    map_layer_buttons = _map_layer_buttons(GROUP_META, _bt_paths_label)
 
     # Chart labels in Cyprus time
     chart_labels = json.dumps([_to_cyprus(r["run_at"]) for r in chart_runs])
@@ -1208,7 +1268,7 @@ def generate_report() -> str:
         <canvas id="trendChart" role="img" aria-label="Line chart of sensor health percentages across recent runs"></canvas>
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted)">
-        {"".join(f'<span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:{meta.get("color","#6b7280")};display:inline-block"></span>{meta.get("history_label", gname)}</span>' for gname, meta in GROUP_META.items())}
+        {chart_legend}
       </div>
     </div>
   </div>
@@ -1226,7 +1286,7 @@ def generate_report() -> str:
         the server took to respond — high values may indicate server load issues.
       </p>
       <table>
-        <thead><tr><th>Time (EET)</th>{"".join(f"<th>{meta.get('history_label', gname)}</th>" for gname, meta in GROUP_META.items())}<th>API response</th></tr></thead>
+        <thead><tr><th>Time (EET)</th>{history_th_cells}<th>API response</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
@@ -1283,14 +1343,7 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
   data: {{
     labels: {chart_labels},
     datasets: [
-      {",".join(
-        '{{ label: {label}, data: {data}, borderColor: {color}, backgroundColor: \'transparent\', tension: 0.3, pointRadius: 3, spanGaps: true }}'.format(
-          label=json.dumps(meta.get("history_label", gname)),
-          data=chart_series[gname],
-          color=json.dumps(meta.get("color", "#6b7280"))
-        )
-        for gname, meta in GROUP_META.items()
-      )}
+      {chart_datasets}
     ]
   }},
   options: {{
@@ -1315,17 +1368,38 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
 
 
 def _build_map_script(map_sensors_json, map_bt_paths_json, history_json, group_meta=None):
-    return """<script>
+    gm = group_meta or {}
+    layer_keys = [m["layer_key"] for m in gm.values() if m.get("layer_key")]
+
+    # Pre-compute all group-driven JS snippets
+    active_layers_js = json.dumps({**{k: True for k in layer_keys}, "paths": True})
+    layer_groups_entries = "\n  ".join(
+        f"{m['layer_key']}: L.markerClusterGroup(_clusterOpts),"
+        for m in gm.values() if m.get("layer_key")
+    )
+    group_layer_js = json.dumps({g: m["layer_key"] for g, m in gm.items() if m.get("layer_key")})
+    layer_keys_js  = json.dumps(layer_keys)
+    icon_class_js  = json.dumps({g: m.get("icon", "ti-circle") for g, m in gm.items()})
+    icon_size_js   = json.dumps({g: m.get("icon_size", 24) for g, m in gm.items()})
+    icon_shape_js  = json.dumps({g: m["icon_shape"] for g, m in gm.items() if m.get("icon_shape")})
+    legend_rows = "+".join(
+        "row(iconBox({icon},{color}{shape})+'<span style=\"color:#1a1a2e\">{label}</span>')".format(
+            icon=json.dumps(m.get("icon", "ti-circle")),
+            color="'#6b7280'",
+            shape=(f",{json.dumps(m['icon_shape'])}" if m.get("icon_shape") else ""),
+            label=m.get("display", g),
+        )
+        for g, m in gm.items()
+    )
+
+    return ("""<script>
 var _sensors  = """ + map_sensors_json + """;
 var _btPaths  = """ + map_bt_paths_json + """;
 var _history  = """ + history_json + """;
 var _playIdx  = _history.length - 1;
 var _playTimer = null;
 var _activeFilter = 'all';
-var _activeLayers = """ + json.dumps({
-        **{meta["layer_key"]: True for meta in (group_meta or {}).values() if meta.get("layer_key")},
-        "paths": True
-    }) + ";"
+var _activeLayers = """ + active_layers_js + """;
 
 var STATUS_COLOR_MAP = {
   working:'#1d9e75', ok:'#1d9e75', no_traffic:'#1d9e75',
@@ -1342,16 +1416,14 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 var _clusterOpts = {showCoverageOnHover:false, maxClusterRadius:50, disableClusteringAtZoom:13, chunkedLoading:true};
 var _clustered = true;
-var _layerGroups = {""" + ",".join(
-        f"  {meta['layer_key']}: L.markerClusterGroup(_clusterOpts)"
-        for meta in (group_meta or {}).values() if meta.get("layer_key")
-    ) + """,
+var _layerGroups = {
+  """ + layer_groups_entries + """
   paths: L.layerGroup(),
   arrows: L.layerGroup()
 };
 Object.values(_layerGroups).forEach(function(lg){ lg.addTo(_map); });
 
-var GROUP_LAYER    = """ + json.dumps({gname: meta["layer_key"] for gname, meta in (group_meta or {}).items() if meta.get("layer_key")}) + """;
+var GROUP_LAYER    = """ + group_layer_js + """;
 var ISSUE_STATUSES = ['malfunctioning','not_working','failing','stale','missing'];
 var STATUS_LABELS  = {
   working:'Working', ok:'OK', no_traffic:'No traffic', no_measurement:'No data',
@@ -1360,9 +1432,9 @@ var STATUS_LABELS  = {
 };
 
 /* -- Icon factory ------------------------------------------------- */
-var ICON_CLASS = """ + json.dumps({gname: meta.get("icon", "ti-circle") for gname, meta in (group_meta or {}).items()}) + """;
-var ICON_SIZE  = """ + json.dumps({gname: meta.get("icon_size", 24) for gname, meta in (group_meta or {}).items()}) + """;
-var ICON_SHAPE = """ + json.dumps({gname: meta["icon_shape"] for gname, meta in (group_meta or {}).items() if meta.get("icon_shape")}) + ";"
+var ICON_CLASS = """ + icon_class_js + """;
+var ICON_SIZE  = """ + icon_size_js + """;
+var ICON_SHAPE = """ + icon_shape_js + ";")
 
 function makeIcon(group, color) {
   var ic  = ICON_CLASS[group] || 'ti-circle';
@@ -1468,7 +1540,7 @@ _sensors.forEach(function(s) {
   _markersByGroup[key].push(m);
   _markers.push(m);
 });
-""" + json.dumps([meta["layer_key"] for meta in (group_meta or {}).values() if meta.get("layer_key")]) + """.forEach(function(key) {
+""" + layer_keys_js + """.forEach(function(key) {
   _markersByGroup[key].forEach(function(m){ _layerGroups[key].addLayer(m); });
 });
 
@@ -1518,10 +1590,7 @@ _legend.onAdd = function() {
   }
   var body =
     '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
-    """ + "+".join(
-        f"row(iconBox('{meta.get('icon','ti-circle')}','#6b7280'{(\",'\"+meta['icon_shape']+\"'\"  if meta.get('icon_shape') else '')})+'<span style=\"color:#1a1a2e\">{meta.get(\"display\",gname)}</span>')"
-        for gname, meta in (group_meta or {}).items()
-    ) + """+
+    """ + legend_rows + """+
     row(line('#1d9e75','3')+'<span style="color:#1a1a2e">BT Path (OK)</span>')+
     row(line('#e24b4a','4')+'<span style="color:#1a1a2e">BT Path (issue)</span>')+
     row(line('#9ca3af','2')+'<span style="color:#1a1a2e">BT Path (no data)</span>')+
@@ -1550,7 +1619,7 @@ _legend.addTo(_map);
 
 /* -- Visibility filter -------------------------------------------- */
 function applyVisibility() {
-  """ + json.dumps([meta["layer_key"] for meta in (group_meta or {}).values() if meta.get("layer_key")]) + """.forEach(function(key) {
+  """ + layer_keys_js + """.forEach(function(key) {
     var lg = _layerGroups[key];
     lg.clearLayers();
     if (!_activeLayers[key]) return;
@@ -1606,7 +1675,7 @@ function setFilter(btn, val) {
 
 /* -- Cluster toggle ----------------------------------------------- */
 function _rebuildPointLayers() {
-  """ + json.dumps([meta["layer_key"] for meta in (group_meta or {}).values() if meta.get("layer_key")]) + """.forEach(function(key) {
+  """ + layer_keys_js + """.forEach(function(key) {
     _map.removeLayer(_layerGroups[key]);
     _layerGroups[key] = _clustered
       ? L.markerClusterGroup(_clusterOpts)
