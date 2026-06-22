@@ -39,6 +39,9 @@ log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "endpoints.yaml"
 
+_STATUS_KEY = {"pass": "passed", "fail": "failed", "error": "errored"}
+_STATUS_ICON = {"pass": "✓", "fail": "✗", "error": "⚠"}
+
 
 def load_config():
     with open(CONFIG_PATH) as f:
@@ -151,7 +154,7 @@ def run_all():
             r = run_single(ep, base_url, swarco)
 
             totals["total"] += 1
-            totals[{"pass": "passed", "fail": "failed", "error": "errored"}.get(r["status"], "errored")] += 1
+            totals[_STATUS_KEY.get(r["status"], "errored")] += 1
 
             insert_result(
                 run_id=run_id,
@@ -166,9 +169,7 @@ def run_all():
                 failure_reason=r["failure_reason"],
                 check_summary=" | ".join(r.get("check_details", [])),
             )
-            # BT path statuses are stored under "Bluetooth Paths" to avoid
-            # ID collision with BT site IDs stored under "Bluetooth"
-            sensor_group = "Bluetooth Paths" if ep["name"] == "Bluetooth Paths Live (FCD)" else group_name
+            sensor_group = ep.get("sensor_group", group_name)
             live_mode = os.environ.get("LIVE_MODE", "").lower() in ("1", "true", "yes")
             for sensor_id, s_status in r.get("sensors", {}).items():
                 mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
@@ -194,7 +195,7 @@ def run_all():
                         upsert_bt_path_coords(paths)
                         retire_missing_bt_paths(set(paths.keys()))
 
-            icon = {"pass": "✓", "fail": "✗", "error": "⚠"}.get(r["status"], "?")
+            icon = _STATUS_ICON.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])
             if r["failure_reason"]:
                 log.info("     %s", r["failure_reason"])

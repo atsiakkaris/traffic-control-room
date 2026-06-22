@@ -6,11 +6,17 @@ import xml.etree.ElementTree as ET
 GML_NS = "http://www.opengis.net/gml"
 
 
+def _parse(response_text):
+    try:
+        return ET.fromstring(response_text.strip())
+    except ET.ParseError:
+        return None
+
+
 def extract_measurement_site_coords(response_text):
     """Return {site_id: {lat, lon, name}} from a MeasurementSiteTablePublication."""
-    try:
-        root = ET.fromstring(response_text.strip())
-    except ET.ParseError:
+    root = _parse(response_text)
+    if root is None:
         return {}
     result = {}
     for site in root.findall(".//{*}measurementSite"):
@@ -36,9 +42,8 @@ def extract_measurement_site_coords(response_text):
 
 def extract_vms_coords(response_text):
     """Return {controller_id: {lat, lon, name}} from a VmsTablePublication."""
-    try:
-        root = ET.fromstring(response_text.strip())
-    except ET.ParseError:
+    root = _parse(response_text)
+    if root is None:
         return {}
     result = {}
     for ctrl in root.findall(".//{*}vmsController"):
@@ -65,9 +70,8 @@ def extract_vms_coords(response_text):
 
 def extract_bt_path_coords(response_text):
     """Return {path_id: {name, coords: [[lat,lon],...]}} from PredefinedLocationsPublication."""
-    try:
-        root = ET.fromstring(response_text.strip())
-    except ET.ParseError:
+    root = _parse(response_text)
+    if root is None:
         return {}
     result = {}
     for loc in root.findall(".//{*}predefinedLocationReference"):
@@ -84,12 +88,11 @@ def extract_bt_path_coords(response_text):
             continue
         coords = []
         for pair in coords_el.text.strip().split():
-            parts = pair.split(',')
-            if len(parts) == 2:
-                try:
-                    coords.append([float(parts[0]), float(parts[1])])
-                except ValueError:
-                    pass
+            try:
+                lon, lat = map(float, pair.split(','))
+                coords.append([lon, lat])
+            except ValueError:
+                pass
         if coords:
             result[pid] = {"name": name, "coords": coords}
     return result

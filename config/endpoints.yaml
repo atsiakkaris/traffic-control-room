@@ -5,7 +5,13 @@
 #   1. Add a new entry under the appropriate group (or create a new group).
 #   2. Set `path` to the URL suffix after {{swarco}} (e.g. MyNewEndpoint).
 #   3. Optionally set `expected_status`, `max_response_ms`, and `checks`.
-#   4. Commit and push — the next scheduled run will pick it up automatically.
+#   4. For live endpoints that track per-sensor health, set:
+#        health_check: <check_name>   — the check that produces the health %
+#   5. If sensor results should be stored under a different group name than the
+#      parent group (e.g. Bluetooth Paths vs Bluetooth), set:
+#        sensor_group: "Other Name"
+#   6. Add a matching block under `groups:` in config/ui_labels.yaml.
+#   7. Commit and push — the next scheduled run will pick it up automatically.
 #
 # VARIABLES (set as GitHub Secrets → passed as env vars at runtime):
 #   BASE_URL  – e.g. https://datex.example.com/
@@ -24,11 +30,12 @@ groups:
         max_response_ms: 5000
         checks:
           - valid_xml
-          
+
       - name: VMS Live Data
         path: VmsPublication
         expected_status: 200
         max_response_ms: 5000
+        health_check: vms_controller_status
         checks:
           - valid_xml
           - feed_freshness          # publicationTime must be within freshness_minutes
@@ -58,6 +65,8 @@ groups:
         path: PredefinedLocationDataPublication
         expected_status: 200
         max_response_ms: 30000
+        sensor_group: "Bluetooth Paths"   # results stored under this group, not "Bluetooth"
+        health_check: bt_paths_speed_and_traveltime
         checks:
           - valid_xml
           - feed_freshness                  # publicationTime must be within freshness_minutes
@@ -78,6 +87,7 @@ groups:
         path: MeasuredDataPublication
         expected_status: 200
         max_response_ms: 5000
+        health_check: sensor_speed_status
         checks:
           - valid_xml
           - feed_freshness        # publicationTime must be within freshness_minutes

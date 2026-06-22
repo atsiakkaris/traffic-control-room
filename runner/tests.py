@@ -115,32 +115,9 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
         return {"passed": False, "detail": "No predefinedLocationReference elements found"}
 
     speed_ok, ttime_ok, failing = 0, 0, []
-
-    for path in paths:
-        pid = path.get("id", "unknown")
-        ext = path.find(".//{*}_predefinedLocationExtension")
-
-        speed_el = ext.find("obs_speed") if ext is not None else None
-        ttime_el = ext.find("obs_t_time") if ext is not None else None
-
-        speed = _safe_float(speed_el)
-        ttime = _safe_float(ttime_el)
-
-        if speed and speed > 0:
-            speed_ok += 1
-        if ttime and ttime > 0:
-            ttime_ok += 1
-
-        missing = []
-        if not (speed and speed > 0):
-            missing.append("no speed")
-        if not (ttime and ttime > 0):
-            missing.append("no travel time")
-        if missing:
-            failing.append(pid)
-
     sensors_map = {}
     measurements_map = {}
+
     for path in paths:
         pid = path.get("id", "unknown")
         ext = path.find(".//{*}_predefinedLocationExtension")
@@ -148,7 +125,15 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
         ttime_el = ext.find("obs_t_time") if ext is not None else None
         spd = _safe_float(speed_el)
         ttime = _safe_float(ttime_el)
-        sensors_map[pid] = "failing" if pid in failing else "ok"
+
+        if spd and spd > 0:
+            speed_ok += 1
+        if ttime and ttime > 0:
+            ttime_ok += 1
+        if not (spd and spd > 0) or not (ttime and ttime > 0):
+            failing.append(pid)
+
+        sensors_map[pid] = "failing" if (not (spd and spd > 0) or not (ttime and ttime > 0)) else "ok"
         measurements_map[pid] = {
             "speed_kmh": round(spd, 1) if spd is not None else None,
             "travel_time_s": round(ttime, 0) if ttime is not None else None,

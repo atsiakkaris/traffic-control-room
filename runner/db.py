@@ -63,6 +63,7 @@ def init_db():
             name        TEXT,
             site_code   TEXT,
             active      INTEGER NOT NULL DEFAULT 1,
+            last_seen   TEXT,
             PRIMARY KEY (sensor_id, group_name)
         );
 
@@ -106,10 +107,13 @@ def init_db():
             active INTEGER NOT NULL DEFAULT 1)""")
         conn.commit()
 
-    # Migrate: add active column to sensor_coords and bt_path_coords
+    # Migrate: add active and last_seen columns to sensor_coords
     sc_cols = [r[1] for r in conn.execute("PRAGMA table_info(sensor_coords)").fetchall()]
     if "active" not in sc_cols:
         conn.execute("ALTER TABLE sensor_coords ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
+    if "last_seen" not in sc_cols:
+        conn.execute("ALTER TABLE sensor_coords ADD COLUMN last_seen TEXT")
         conn.commit()
     bt_cols = [r[1] for r in conn.execute("PRAGMA table_info(bt_path_coords)").fetchall()]
     if "active" not in bt_cols:
@@ -226,15 +230,17 @@ def fetch_sensor_live_data_for_run(run_id):
 
 def upsert_sensor_coords(group_name, coords_dict):
     """coords_dict: {sensor_id: {lat, lon, name, site_code?}}"""
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     conn = get_connection()
     for sid, c in coords_dict.items():
         conn.execute(
-            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code, active)
-               VALUES (?,?,?,?,?,?,1)
+            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code, active, last_seen)
+               VALUES (?,?,?,?,?,?,1,?)
                ON CONFLICT(sensor_id, group_name) DO UPDATE
                SET lat=excluded.lat, lon=excluded.lon, name=excluded.name,
-                   site_code=excluded.site_code, active=1""",
-            (sid, group_name, c["lat"], c["lon"], c.get("name", sid), c.get("site_code"))
+                   site_code=excluded.site_code, active=1, last_seen=excluded.last_seen""",
+            (sid, group_name, c["lat"], c["lon"], c.get("name", sid), c.get("site_code"), now)
         )
     conn.commit()
     conn.close()
@@ -320,18 +326,30 @@ def fetch_bt_path_coords():
     return result
 
 
-def fetch_sensor_health_history(limit=30):
-    """Return per-run health data for sensor check endpoints, newest-first.
-    One row per sensor endpoint per run (up to limit runs × 3 endpoints)."""
+def fetch_sensor_health_history(limit=30, live_test_names=None):
+    """Return per-run health data for live sensor check endpoints, newest-first.
+    live_test_names: list of test_name strings to filter by (derived from endpoints.yaml).
+    If not provided, returns all test results (no filter applied).
+    """
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
-        FROM runs r
-        JOIN test_results tr ON tr.run_id = r.run_id
-        WHERE tr.test_name IN ('Traffic Detection Live', 'VMS Live Data', 'Bluetooth Paths Live (FCD)')
-        ORDER BY r.run_at DESC
-        LIMIT ?
-    """, (limit * 3,)).fetchall()
+    if live_test_names:
+        placeholders = ",".join("?" * len(live_test_names))
+        rows = conn.execute(f"""
+            SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
+            FROM runs r
+            JOIN test_results tr ON tr.run_id = r.run_id
+            WHERE tr.test_name IN ({placeholders})
+            ORDER BY r.run_at DESC
+            LIMIT ?
+        """, list(live_test_names) + [limit * len(live_test_names)]).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT r.run_id, r.run_at, tr.test_name, tr.status, tr.check_summary, tr.failure_reason
+            FROM runs r
+            JOIN test_results tr ON tr.run_id = r.run_id
+            ORDER BY r.run_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
