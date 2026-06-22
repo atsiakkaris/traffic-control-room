@@ -1,9 +1,7 @@
 name: Weekly Digest Email
 
 on:
-  # 04:30 UTC = 07:30 EEST (UTC+3, summer). In winter (EET, UTC+2) this fires at 06:30 local.
-  schedule:
-    - cron: "30 4 * * 1"
+  # Triggered externally via cron-job.org every Monday at 07:30 EEST (04:30 UTC).
   workflow_dispatch:
 
 jobs:

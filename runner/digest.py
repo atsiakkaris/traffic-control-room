@@ -360,7 +360,7 @@ def build_html(d):
     </table>
     <p style="color:#6b7280;font-size:13px;margin:0 0 12px">{d['week_start']} — {d['week_end']} &nbsp;·&nbsp; Generated {generated_at} &nbsp;·&nbsp; {d['run_count']} runs</p>
     <p style="font-size:13px;color:#374151;margin:0 0 16px">
-      This report summarises the health of Cyprus ITS infrastructure sensors for the past week.
+      This report summarises the health of Cyprus' ITS infrastructure sensors for the past week.
       It highlights sensors that went offline, are performing below expectations, or have changed
       significantly since last week.
     </p>
@@ -467,7 +467,7 @@ def build_html(d):
              _split_table(d['always_off']) if d['always_off'] else "")}
     {section("🟠 Persistently underperforming",
              "#e58e0a",
-             "Sensors and paths that have been below 70% health for at least two consecutive weeks. These likely require hands-on investigation.",
+             "Sensors and paths that have been below 70% health for at least two consecutive weeks.",
              _split_table(d['persistent'], show_prev=True))}
     {section("📉 Degraded since last week",
              "#e58e0a",
