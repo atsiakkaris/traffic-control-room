@@ -1700,7 +1700,7 @@ function flyToSensor(el) {
   _map.flyTo([lat, lon], 15, {duration:0.8});
   setTimeout(function() {
     _markers.forEach(function(m) {
-      if (m._sensorId === sid) m.fire('click');
+      if (m._sensorId === sid && m._sensorGroup2 === grp) m.fire('click');
     });
     // highlight ring
     var ring = L.circleMarker([lat, lon], {

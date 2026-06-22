@@ -151,7 +151,7 @@ def run_all():
             r = run_single(ep, base_url, swarco)
 
             totals["total"] += 1
-            totals[{"pass": "passed", "fail": "failed", "error": "errored"}[r["status"]]] += 1
+            totals[{"pass": "passed", "fail": "failed", "error": "errored"}.get(r["status"], "errored")] += 1
 
             insert_result(
                 run_id=run_id,

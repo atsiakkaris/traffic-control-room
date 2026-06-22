@@ -311,10 +311,13 @@ def fetch_bt_path_coords():
         "SELECT path_id, name, coords FROM bt_path_coords WHERE active=1"
     ).fetchall()
     conn.close()
-    return {
-        r["path_id"]: {"name": r["name"], "coords": json.loads(r["coords"])}
-        for r in rows
-    }
+    result = {}
+    for r in rows:
+        try:
+            result[r["path_id"]] = {"name": r["name"], "coords": json.loads(r["coords"])}
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return result
 
 
 def fetch_sensor_health_history(limit=30):

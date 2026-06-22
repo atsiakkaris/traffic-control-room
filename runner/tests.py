@@ -62,7 +62,7 @@ def vms_controller_status(response_text: str) -> dict:
 
     detail_lines = [
         f"Working: {len(working)}",
-        f"Not working: {len(not_working)}" + (f" — IDs: — {', '.join(not_working)}" if not_working else ""),
+        f"Not working: {len(not_working)}" + (f" — IDs: {', '.join(not_working)}" if not_working else ""),
         f"No status: {len(no_status)}" + (f" — {', '.join(no_status)}" if no_status else ""),
     ]
 
