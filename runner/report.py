@@ -3,6 +3,7 @@ report.py - Generate a static HTML report from the SQLite history DB.
 """
 
 import os
+import re
 import json
 import yaml
 from pathlib import Path
@@ -14,14 +15,32 @@ from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_s
 CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
 
 # Load UI labels from config — falls back to defaults if file is missing
-_LABELS_PATH = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
+_LABELS_PATH    = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
+_ENDPOINTS_PATH = Path(__file__).parent.parent / "config" / "endpoints.yaml"
 try:
     _UI = yaml.safe_load(_LABELS_PATH.read_text(encoding="utf-8"))
 except Exception:
     _UI = {}
+try:
+    _ENDPOINTS_CONFIG = yaml.safe_load(_ENDPOINTS_PATH.read_text(encoding="utf-8"))
+except Exception:
+    _ENDPOINTS_CONFIG = {"groups": []}
 
 def _lbl(section, key, default=""):
     return (_UI.get(section) or {}).get(key, default)
+
+# Per-group UI metadata keyed by DB group name
+GROUP_META: dict = _UI.get("groups", {})
+
+# Mapping: test_name → {group, check} for endpoints that drive group health %
+HEALTH_ENDPOINTS: dict = {}
+for _g in _ENDPOINTS_CONFIG.get("groups", []):
+    for _ep in _g.get("endpoints", []):
+        if "health_check" in _ep:
+            HEALTH_ENDPOINTS[_ep["name"]] = {
+                "group": _g["name"],
+                "check": _ep["health_check"],
+            }
 
 
 def _to_cyprus(utc_iso: str) -> str:
@@ -38,7 +57,6 @@ REPORT_PATH = Path("reports/latest.html")
 def parse_vms_detail(text):
     if not text or "vms_controller_status" not in text:
         return None
-    import re
     working = re.search(r"Working: (\d+)", text)
     not_working = re.search(r"Not working: (\d+)", text)
     no_status = re.search(r"No status: (\d+)", text)
@@ -56,7 +74,6 @@ def parse_vms_detail(text):
 def parse_bt_detail(text):
     if not text or "bt_paths_speed_and_traveltime" not in text:
         return None
-    import re
     speed_ok = re.search(r"Speed OK: (\d+)/(\d+)", text)
     failing = re.search(r"Failing paths: (.+?)$", text)
     return {
@@ -69,7 +86,6 @@ def parse_bt_detail(text):
 def parse_sensor_detail(text):
     if not text or "sensor_speed_status" not in text:
         return None
-    import re
     working = re.search(r"Working: (\d+)/(\d+)", text)
     no_traffic = re.search(r"No traffic \(speed=0\): (\d+)", text)
     malfunction = re.search(r"Malfunctioning \(speed=-1\): (\d+)", text)
@@ -138,7 +154,7 @@ CHECK_DESCRIPTION = {
     "VMS Live Data":              "Checks feed freshness and reports how many controllers are working, not working, or not sending any status.",
 }
 
-GROUP_DISPLAY = _UI.get("group_display") or {"Traffic Detection": "Traffic Detection (SWARCO)"}
+GROUP_DISPLAY = {k: v.get("display", k) for k, v in GROUP_META.items()}
 
 SENSOR_CHECKS = {"sensor_speed_status", "vms_controller_status", "bt_paths_speed_and_traveltime"}
 HEALTH_WARNING_PCT = 80
@@ -146,7 +162,6 @@ HEALTH_WARNING_PCT = 80
 
 def _extract_health_pct(check_summary, check_name):
     """Extract a 0-100 health percentage from a check_summary string for a given sensor check."""
-    import re
     if not check_summary or check_name not in check_summary:
         return None
     if check_name == "sensor_speed_status":
@@ -178,7 +193,6 @@ def _humanize_failure(check_name, full_failure_reason):
     Receives the full failure_reason string so regexes can find sub-parts
     even when the detail itself contains ' | ' delimiters.
     """
-    import re
     fr = full_failure_reason or ""
     if check_name == "feed_freshness":
         m = re.search(r"feed_freshness: ([^|]+)", fr)
@@ -552,34 +566,30 @@ def generate_report() -> str:
     # Sensor stability (coord lookups fetched below with map data)
     all_sensors = fetch_sensor_stability()
 
-    # Sensor health history — build per-run lookup keyed by run_id
+    # Sensor health history — build per-run lookup keyed by run_id → group_name
     raw_health = fetch_sensor_health_history(60)
     health_by_run = {}
     for row in raw_health:
         rid = row["run_id"]
         if rid not in health_by_run:
-            health_by_run[rid] = {"td": None, "vms": None, "bt": None, "feed_issues": []}
-        cs = row.get("check_summary") or ""
-        if row["test_name"] == "Traffic Detection Live":
-            health_by_run[rid]["td"] = _extract_health_pct(cs, "sensor_speed_status")
+            health_by_run[rid] = {"feed_issues": []}
+        ep_info = HEALTH_ENDPOINTS.get(row["test_name"])
+        if ep_info:
+            cs = row.get("check_summary") or ""
+            grp = ep_info["group"]
+            health_by_run[rid][grp] = _extract_health_pct(cs, ep_info["check"])
             if row["status"] != "pass":
-                health_by_run[rid]["feed_issues"].append("Traffic Detection")
-        elif row["test_name"] == "VMS Live Data":
-            health_by_run[rid]["vms"] = _extract_health_pct(cs, "vms_controller_status")
-            if row["status"] != "pass":
-                health_by_run[rid]["feed_issues"].append("VMS")
-        elif row["test_name"] == "Bluetooth Paths Live (FCD)":
-            health_by_run[rid]["bt"] = _extract_health_pct(cs, "bt_paths_speed_and_traveltime")
-            if row["status"] != "pass":
-                health_by_run[rid]["feed_issues"].append("Bluetooth Paths")
+                health_by_run[rid]["feed_issues"].append(grp)
 
-    def _pct_or_null(run_id, key):
-        v = health_by_run.get(run_id, {}).get(key)
+    def _pct_or_null(run_id, group_name):
+        v = health_by_run.get(run_id, {}).get(group_name)
         return round(v, 1) if v is not None else None
 
-    chart_td  = json.dumps([_pct_or_null(r["run_id"], "td")  for r in chart_runs])
-    chart_vms = json.dumps([_pct_or_null(r["run_id"], "vms") for r in chart_runs])
-    chart_bt  = json.dumps([_pct_or_null(r["run_id"], "bt")  for r in chart_runs])
+    # One JSON series per group for the trend chart
+    chart_series = {
+        gname: json.dumps([_pct_or_null(r["run_id"], gname) for r in chart_runs])
+        for gname in GROUP_META
+    }
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
@@ -637,9 +647,8 @@ def generate_report() -> str:
             # Failure lines: only for non-passing feed-level checks (sensor checks excluded)
             failure_lines = ""
             if r["status"] != "pass" and r.get("failure_reason"):
-                import re as _re2
                 fr = r["failure_reason"]
-                check_names_found = _re2.findall(r"(?:^| \| )([a-z][a-z_]+): ", fr)
+                check_names_found = re.findall(r"(?:^| \| )([a-z][a-z_]+): ", fr)
                 feed_checks = [cn for cn in check_names_found if cn not in SENSOR_CHECKS]
                 if feed_checks:
                     seen = set()
@@ -653,26 +662,25 @@ def generate_report() -> str:
 
             # Name suffix: device count for BT Inventory; health fraction for sensor checks
             name_suffix = ""
-            import re as _re
             if r["test_name"] == "Bluetooth Inventory" and cs:
-                m = _re.search(r"bt_site_count: (\d+)", cs)
+                m = re.search(r"bt_site_count: (\d+)", cs)
                 if m:
                     name_suffix = f' <span style="font-size:11px;color:var(--color-text-secondary)">— {m.group(1)} devices</span>'
             elif "sensor_speed_status" in cs:
-                m = _re.search(r"Working: (\d+)/(\d+)", cs)
+                m = re.search(r"Working: (\d+)/(\d+)", cs)
                 if m:
                     pct = int(m.group(1)) / int(m.group(2)) * 100
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} working</span>'
             elif "vms_controller_status" in cs:
-                w = _re.search(r"Working: (\d+)", cs)
-                nw = _re.search(r"Not working: (\d+)", cs)
-                ns = _re.search(r"No status: (\d+)", cs)
+                w = re.search(r"Working: (\d+)", cs)
+                nw = re.search(r"Not working: (\d+)", cs)
+                ns = re.search(r"No status: (\d+)", cs)
                 if w:
                     total = int(w.group(1)) + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
                     pct = int(w.group(1)) / total * 100 if total else 0
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {w.group(1)}/{total} working</span>'
             elif "bt_paths_speed_and_traveltime" in cs:
-                m = _re.search(r"Speed OK: (\d+)/(\d+)", cs)
+                m = re.search(r"Speed OK: (\d+)/(\d+)", cs)
                 if m:
                     pct = int(m.group(1)) / int(m.group(2)) * 100
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} with data</span>'
@@ -782,7 +790,7 @@ def generate_report() -> str:
                       {_collapsible_ids("no measurement data", "#888", no_measurement_ids)}
                     </div>"""
 
-        layer_key = {"Traffic Detection": "td", "Bluetooth": "bt", "VMS": "vms"}.get(group_name, "")
+        layer_key = (GROUP_META.get(group_name) or {}).get("layer_key", "")
         map_btn = (
             f'<div style="margin-top:12px;border-top:0.5px solid var(--color-border-tertiary);padding-top:10px">'
             f'<button onclick="focusMapLayer(\'{layer_key}\')" '
@@ -809,10 +817,9 @@ def generate_report() -> str:
           {map_btn}
         </div>"""
 
-    group_icons = {"VMS": "ti-road-sign", "Bluetooth": "ti-bluetooth", "Traffic Detection": "ti-traffic-cone"}
     group_cards = ""
     for gname, gresults in sorted(groups.items()):
-        icon = group_icons.get(gname, "ti-device-analytics")
+        icon = (GROUP_META.get(gname) or {}).get("icon", "ti-device-analytics")
         group_cards += group_status_card(gname, icon, gresults)
 
     def _hcell(pct):
@@ -843,12 +850,11 @@ def generate_report() -> str:
                          'border-radius:20px;background:#e1f5ee;color:#0f6e56">'
                          '<i class="ti ti-circle-check" style="font-size:11px;vertical-align:-1px" aria-hidden="true"></i>'
                          ' All up</span></td>')
+        group_cells = "".join(_hcell(h.get(gname)) for gname in GROUP_META)
         history_rows += f"""
         <tr>
           <td style="color:var(--color-text-secondary);font-size:13px;padding:9px 14px">{ts}</td>
-          {_hcell(h.get("td"))}
-          {_hcell(h.get("vms"))}
-          {_hcell(h.get("bt"))}
+          {group_cells}
           {feed_cell}
         </tr>"""
 
@@ -954,7 +960,7 @@ def generate_report() -> str:
     history_playback_json = json.dumps(_runs_sorted[-20:])
 
     has_map_data = bool(map_sensors or map_bt_paths)
-    map_script_html = _build_map_script(map_sensors_json, map_bt_paths_json, history_playback_json) if has_map_data else ""
+    map_script_html = _build_map_script(map_sensors_json, map_bt_paths_json, history_playback_json, GROUP_META) if has_map_data else ""
 
     if not has_map_data:
         map_panel_html = '<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>'
@@ -963,10 +969,13 @@ def generate_report() -> str:
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
-            '<button class="map-toggle active" data-layer="bt" onclick="toggleLayer(this,\'bt\')">' + _lbl('map_layers','bt','Bluetooth Sensors') + '</button>'
-            '<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">' + _lbl('map_layers','paths','Bluetooth Paths') + '</button>'
-            '<button class="map-toggle active" data-layer="td" onclick="toggleLayer(this,\'td\')">' + _lbl('map_layers','td','Traffic Detection (SWARCO)') + '</button>'
-            '<button class="map-toggle active" data-layer="vms" onclick="toggleLayer(this,\'vms\')">' + _lbl('map_layers','vms','VMS') + '</button>'
+            + "".join(
+                f'<button class="map-toggle active" data-layer="{meta[\'layer_key\']}" onclick="toggleLayer(this,\'{meta[\'layer_key\']}\')">{ meta.get(\'map_label\', gname)}</button>'
+                + (f'<button class="map-toggle active" data-layer="paths" onclick="toggleLayer(this,\'paths\')">{_UI.get("bt_paths_map_label", "Bluetooth Paths")}</button>'
+                   if gname == "Bluetooth" else "")
+                for gname, meta in GROUP_META.items()
+                if meta.get("layer_key")
+            )
             '<span style="flex:1"></span>'
             '<button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
@@ -992,7 +1001,6 @@ def generate_report() -> str:
         )
 
     run_time = _to_cyprus(latest_run["run_at"])
-    total_runs_label = len(runs)
 
     # Chart labels in Cyprus time
     chart_labels = json.dumps([_to_cyprus(r["run_at"]) for r in chart_runs])
@@ -1002,13 +1010,13 @@ def generate_report() -> str:
     overall_pct = round(latest_run["passed"] / latest_total * 100)
     overall_bar_color = "#1d9e75" if overall_pct >= 90 else ("#e58e0a" if overall_pct >= 55 else "#e24b4a")
 
-    health_vals = [v for r in chart_runs for k in ("td", "vms", "bt")
-                   for v in [health_by_run.get(r["run_id"], {}).get(k)] if v is not None]
+    health_vals = [v for r in chart_runs for gname in GROUP_META
+                   for v in [health_by_run.get(r["run_id"], {}).get(gname)] if v is not None]
     trend_pct = round(sum(health_vals) / len(health_vals)) if health_vals else 0
     trend_bar_color = _health_color(trend_pct)
 
     latest_h = health_by_run.get(latest_run["run_id"], {})
-    latest_hvals = [v for k in ("td", "vms", "bt") for v in [latest_h.get(k)] if v is not None]
+    latest_hvals = [v for gname in GROUP_META for v in [latest_h.get(gname)] if v is not None]
     history_pct = round(sum(latest_hvals) / len(latest_hvals)) if latest_hvals else overall_pct
     history_bar_color = _health_color(history_pct)
 
@@ -1101,7 +1109,7 @@ def generate_report() -> str:
 <header>
   <div>
     <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
-    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {total_runs_label} runs recorded</div>
+    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {len(runs)} runs recorded</div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
@@ -1200,9 +1208,7 @@ def generate_report() -> str:
         <canvas id="trendChart" role="img" aria-label="Line chart of sensor health percentages across recent runs"></canvas>
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted)">
-        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#1d9e75;display:inline-block"></span>Traffic Detection</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#378add;display:inline-block"></span>VMS</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:#e58e0a;display:inline-block"></span>Bluetooth Paths</span>
+        {"".join(f'<span style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:3px;border-radius:2px;background:{meta.get("color","#6b7280")};display:inline-block"></span>{meta.get("history_label", gname)}</span>' for gname, meta in GROUP_META.items())}
       </div>
     </div>
   </div>
@@ -1220,7 +1226,7 @@ def generate_report() -> str:
         the server took to respond — high values may indicate server load issues.
       </p>
       <table>
-        <thead><tr><th>{_lbl('history_columns','time','Time (EET)')}</th><th>{_lbl('history_columns','td','Traffic Detection')}</th><th>{_lbl('history_columns','vms','VMS')}</th><th>{_lbl('history_columns','bt','Bluetooth Paths')}</th><th>{_lbl('history_columns','api_response','API response')}</th></tr></thead>
+        <thead><tr><th>Time (EET)</th>{"".join(f"<th>{meta.get('history_label', gname)}</th>" for gname, meta in GROUP_META.items())}<th>API response</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
@@ -1277,9 +1283,14 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
   data: {{
     labels: {chart_labels},
     datasets: [
-      {{ label: 'Traffic Detection', data: {chart_td},  borderColor: '#1d9e75', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }},
-      {{ label: 'VMS',               data: {chart_vms}, borderColor: '#378add', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }},
-      {{ label: 'Bluetooth Paths',    data: {chart_bt},  borderColor: '#e58e0a', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true }}
+      {",".join(
+        '{{ label: {label}, data: {data}, borderColor: {color}, backgroundColor: \'transparent\', tension: 0.3, pointRadius: 3, spanGaps: true }}'.format(
+          label=json.dumps(meta.get("history_label", gname)),
+          data=chart_series[gname],
+          color=json.dumps(meta.get("color", "#6b7280"))
+        )
+        for gname, meta in GROUP_META.items()
+      )}
     ]
   }},
   options: {{
@@ -1303,7 +1314,7 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
     return str(REPORT_PATH)
 
 
-def _build_map_script(map_sensors_json, map_bt_paths_json, history_json):
+def _build_map_script(map_sensors_json, map_bt_paths_json, history_json, group_meta=None):
     return """<script>
 var _sensors  = """ + map_sensors_json + """;
 var _btPaths  = """ + map_bt_paths_json + """;
@@ -1311,7 +1322,10 @@ var _history  = """ + history_json + """;
 var _playIdx  = _history.length - 1;
 var _playTimer = null;
 var _activeFilter = 'all';
-var _activeLayers = {td:true, bt:true, vms:true, paths:true};
+var _activeLayers = """ + json.dumps({
+        **{meta["layer_key"]: True for meta in (group_meta or {}).values() if meta.get("layer_key")},
+        "paths": True
+    }) + ";"
 
 var STATUS_COLOR_MAP = {
   working:'#1d9e75', ok:'#1d9e75', no_traffic:'#1d9e75',
@@ -1328,16 +1342,16 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 var _clusterOpts = {showCoverageOnHover:false, maxClusterRadius:50, disableClusteringAtZoom:13, chunkedLoading:true};
 var _clustered = true;
-var _layerGroups = {
-  td:    L.markerClusterGroup(_clusterOpts),
-  bt:    L.markerClusterGroup(_clusterOpts),
-  vms:   L.markerClusterGroup(_clusterOpts),
+var _layerGroups = {""" + ",".join(
+        f"  {meta['layer_key']}: L.markerClusterGroup(_clusterOpts)"
+        for meta in (group_meta or {}).values() if meta.get("layer_key")
+    ) + """,
   paths: L.layerGroup(),
   arrows: L.layerGroup()
 };
 Object.values(_layerGroups).forEach(function(lg){ lg.addTo(_map); });
 
-var GROUP_LAYER    = {'Traffic Detection':'td','Bluetooth':'bt','VMS':'vms'};
+var GROUP_LAYER    = """ + json.dumps({gname: meta["layer_key"] for gname, meta in (group_meta or {}).items() if meta.get("layer_key")}) + """;
 var ISSUE_STATUSES = ['malfunctioning','not_working','failing','stale','missing'];
 var STATUS_LABELS  = {
   working:'Working', ok:'OK', no_traffic:'No traffic', no_measurement:'No data',
@@ -1346,9 +1360,9 @@ var STATUS_LABELS  = {
 };
 
 /* -- Icon factory ------------------------------------------------- */
-var ICON_CLASS = {'Traffic Detection':'ti-traffic-cone','Bluetooth':'ti-bluetooth','VMS':'ti-road-sign'};
-var ICON_SIZE  = {'Traffic Detection':26,'Bluetooth':22,'VMS':28};
-var ICON_SHAPE = {'VMS':'6px'};
+var ICON_CLASS = """ + json.dumps({gname: meta.get("icon", "ti-circle") for gname, meta in (group_meta or {}).items()}) + """;
+var ICON_SIZE  = """ + json.dumps({gname: meta.get("icon_size", 24) for gname, meta in (group_meta or {}).items()}) + """;
+var ICON_SHAPE = """ + json.dumps({gname: meta["icon_shape"] for gname, meta in (group_meta or {}).items() if meta.get("icon_shape")}) + ";"
 
 function makeIcon(group, color) {
   var ic  = ICON_CLASS[group] || 'ti-circle';
@@ -1388,7 +1402,7 @@ function makeMarker(s) {
   var m = L.marker([s.lat, s.lon], {icon: makeIcon(s.group, s.color)});
   m._sensorId     = s.id;
   m._sensorStatus = s.status;
-  m._sensorGroup  = GROUP_LAYER[s.group] || 'td';
+  m._sensorGroup  = GROUP_LAYER[s.group] || s.group;
   m._sensorColor  = s.color;
   m._sensorGroup2 = s.group;
   var d = s.data || {};
@@ -1454,7 +1468,7 @@ _sensors.forEach(function(s) {
   _markersByGroup[key].push(m);
   _markers.push(m);
 });
-['td','bt','vms'].forEach(function(key) {
+""" + json.dumps([meta["layer_key"] for meta in (group_meta or {}).values() if meta.get("layer_key")]) + """.forEach(function(key) {
   _markersByGroup[key].forEach(function(m){ _layerGroups[key].addLayer(m); });
 });
 
@@ -1504,9 +1518,10 @@ _legend.onAdd = function() {
   }
   var body =
     '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
-    row(iconBox('ti-traffic-cone','#6b7280')+'<span style="color:#1a1a2e">Traffic Detection (SWARCO)</span>')+
-    row(iconBox('ti-bluetooth','#6b7280')+'<span style="color:#1a1a2e">Bluetooth Site</span>')+
-    row(iconBox('ti-road-sign','#6b7280','6px')+'<span style="color:#1a1a2e">VMS Controller</span>')+
+    """ + "+".join(
+        f"row(iconBox('{meta.get('icon','ti-circle')}','#6b7280'{(\",'\"+meta['icon_shape']+\"'\"  if meta.get('icon_shape') else '')})+'<span style=\"color:#1a1a2e\">{meta.get(\"display\",gname)}</span>')"
+        for gname, meta in (group_meta or {}).items()
+    ) + """+
     row(line('#1d9e75','3')+'<span style="color:#1a1a2e">BT Path (OK)</span>')+
     row(line('#e24b4a','4')+'<span style="color:#1a1a2e">BT Path (issue)</span>')+
     row(line('#9ca3af','2')+'<span style="color:#1a1a2e">BT Path (no data)</span>')+
@@ -1535,7 +1550,7 @@ _legend.addTo(_map);
 
 /* -- Visibility filter -------------------------------------------- */
 function applyVisibility() {
-  ['td','bt','vms'].forEach(function(key) {
+  """ + json.dumps([meta["layer_key"] for meta in (group_meta or {}).values() if meta.get("layer_key")]) + """.forEach(function(key) {
     var lg = _layerGroups[key];
     lg.clearLayers();
     if (!_activeLayers[key]) return;
@@ -1591,7 +1606,7 @@ function setFilter(btn, val) {
 
 /* -- Cluster toggle ----------------------------------------------- */
 function _rebuildPointLayers() {
-  ['td','bt','vms'].forEach(function(key) {
+  """ + json.dumps([meta["layer_key"] for meta in (group_meta or {}).values() if meta.get("layer_key")]) + """.forEach(function(key) {
     _map.removeLayer(_layerGroups[key]);
     _layerGroups[key] = _clustered
       ? L.markerClusterGroup(_clusterOpts)

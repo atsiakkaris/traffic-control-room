@@ -63,6 +63,7 @@ def init_db():
             name        TEXT,
             site_code   TEXT,
             active      INTEGER NOT NULL DEFAULT 1,
+            last_seen   TEXT,
             PRIMARY KEY (sensor_id, group_name)
         );
 
@@ -106,10 +107,13 @@ def init_db():
             active INTEGER NOT NULL DEFAULT 1)""")
         conn.commit()
 
-    # Migrate: add active column to sensor_coords and bt_path_coords
+    # Migrate: add active and last_seen columns to sensor_coords
     sc_cols = [r[1] for r in conn.execute("PRAGMA table_info(sensor_coords)").fetchall()]
     if "active" not in sc_cols:
         conn.execute("ALTER TABLE sensor_coords ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
+    if "last_seen" not in sc_cols:
+        conn.execute("ALTER TABLE sensor_coords ADD COLUMN last_seen TEXT")
         conn.commit()
     bt_cols = [r[1] for r in conn.execute("PRAGMA table_info(bt_path_coords)").fetchall()]
     if "active" not in bt_cols:
@@ -226,15 +230,17 @@ def fetch_sensor_live_data_for_run(run_id):
 
 def upsert_sensor_coords(group_name, coords_dict):
     """coords_dict: {sensor_id: {lat, lon, name, site_code?}}"""
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     conn = get_connection()
     for sid, c in coords_dict.items():
         conn.execute(
-            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code, active)
-               VALUES (?,?,?,?,?,?,1)
+            """INSERT INTO sensor_coords (sensor_id, group_name, lat, lon, name, site_code, active, last_seen)
+               VALUES (?,?,?,?,?,?,1,?)
                ON CONFLICT(sensor_id, group_name) DO UPDATE
                SET lat=excluded.lat, lon=excluded.lon, name=excluded.name,
-                   site_code=excluded.site_code, active=1""",
-            (sid, group_name, c["lat"], c["lon"], c.get("name", sid), c.get("site_code"))
+                   site_code=excluded.site_code, active=1, last_seen=excluded.last_seen""",
+            (sid, group_name, c["lat"], c["lon"], c.get("name", sid), c.get("site_code"), now)
         )
     conn.commit()
     conn.close()

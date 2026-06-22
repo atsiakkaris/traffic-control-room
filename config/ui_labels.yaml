@@ -11,24 +11,57 @@ panels:
   stability:    "Sensor stability"
   history:      "Run history"
 
-# ── Run history table column headers ─────────────────────────────────────────
-history_columns:
-  time:         "Time (EET)"
-  td:           "Traffic Detection"
-  vms:          "VMS"
-  bt:           "Bluetooth Paths"
-  api_response: "API response"
+# ── Per-group metadata ────────────────────────────────────────────────────────
+# One block per sensor group. The key (e.g. "Traffic Detection") must exactly
+# match the group `name` in endpoints.yaml (and the group_name stored in DB).
+#
+# Required fields:
+#   display       – label shown in System Overview cards and sensor lists
+#   color         – hex colour used in the trend chart and history table dots
+#   layer_key     – short JS identifier for the map layer toggle (unique, no spaces)
+#   map_label     – label on the map layer toggle button
+#   history_label – column header in the Run History table
+#   icon          – Tabler icon class for the group card (https://tabler.io/icons)
+#   icon_size     – icon font-size in px
+#
+# Optional fields:
+#   icon_shape    – border-radius of the icon container (e.g. "6px" for square VMS)
+#
+# HOW TO ADD A NEW GROUP:
+#   1. Add an entry here with all required fields.
+#   2. Add the group and its endpoints to endpoints.yaml.
+#   3. That's it — the report and digest pick it up automatically.
+#
+groups:
+  Traffic Detection:
+    display:       "Traffic Detection (SWARCO)"
+    color:         "#1d9e75"
+    layer_key:     "td"
+    map_label:     "Traffic Detection (SWARCO)"
+    history_label: "Traffic Detection"
+    icon:          "ti-traffic-cone"
+    icon_size:     26
 
-# ── Group display names (DB name on left, label shown in UI on right) ─────────
-# The DB names must stay exactly as-is — only change the values on the right.
-group_display:
-  Traffic Detection: "Traffic Detection (SWARCO)"
-  Bluetooth:         "Bluetooth"
-  VMS:               "VMS"
+  VMS:
+    display:       "VMS"
+    color:         "#378add"
+    layer_key:     "vms"
+    map_label:     "VMS"
+    history_label: "VMS"
+    icon:          "ti-road-sign"
+    icon_size:     28
+    icon_shape:    "6px"
 
-# ── Map layer toggle button labels ────────────────────────────────────────────
-map_layers:
-  td:    "Traffic Detection (SWARCO)"
-  bt:    "Bluetooth Sensors"
-  vms:   "VMS"
-  paths: "Bluetooth Paths"
+  Bluetooth:
+    display:       "Bluetooth"
+    color:         "#e58e0a"
+    layer_key:     "bt"
+    map_label:     "Bluetooth Sensors"
+    history_label: "Bluetooth Paths"
+    icon:          "ti-bluetooth"
+    icon_size:     22
+
+# ── Bluetooth Paths map layer (sub-group, not a main sensor group) ────────────
+# This controls the polyline layer toggle on the map only.
+# It is not a group in the history table or trend chart.
+bt_paths_map_label: "Bluetooth Paths"
