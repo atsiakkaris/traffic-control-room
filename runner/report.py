@@ -156,7 +156,7 @@ CHECK_DESCRIPTION = {
 
 GROUP_DISPLAY = {k: v.get("display", k) for k, v in GROUP_META.items()}
 
-SENSOR_CHECKS = {"sensor_speed_status", "vms_controller_status", "bt_paths_speed_and_traveltime"}
+SENSOR_CHECKS = {ep["check"] for ep in HEALTH_ENDPOINTS.values()}
 HEALTH_WARNING_PCT = 80
 
 

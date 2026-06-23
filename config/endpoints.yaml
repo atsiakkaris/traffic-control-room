@@ -10,8 +10,12 @@
 #   5. If sensor results should be stored under a different group name than the
 #      parent group (e.g. Bluetooth Paths vs Bluetooth), set:
 #        sensor_group: "Other Name"
-#   6. Add a matching block under `groups:` in config/ui_labels.yaml.
-#   7. Commit and push — the next scheduled run will pick it up automatically.
+#   6. For inventory endpoints that provide sensor coordinates, set:
+#        coords_extract: measurement_site   — for loop/BT sensor sites (lat/lon + name)
+#        coords_extract: vms               — for VMS controllers
+#        coords_extract: bt_paths          — for predefined BT path polylines
+#   7. Add a matching block under `groups:` in config/ui_labels.yaml.
+#   8. Commit and push — the next scheduled run will pick it up automatically.
 #
 # VARIABLES (set as GitHub Secrets → passed as env vars at runtime):
 #   BASE_URL  – e.g. https://datex.example.com/
@@ -28,6 +32,7 @@ groups:
         path: VmsTablePublication
         expected_status: 200
         max_response_ms: 5000
+        coords_extract: vms
         checks:
           - valid_xml
 
@@ -49,6 +54,7 @@ groups:
         path: BTMeasurementSiteTablePublication
         expected_status: 200
         max_response_ms: 5000
+        coords_extract: measurement_site
         checks:
           - valid_xml
           - bt_site_count   # counts measurementSite elements → shown in report
@@ -57,6 +63,7 @@ groups:
         path: PredefinedLocationPublication
         expected_status: 200
         max_response_ms: 5000
+        coords_extract: bt_paths
         checks:
           - valid_xml
           - predefined_paths_count   # asserts at least 1 predefined path exists
@@ -80,6 +87,7 @@ groups:
         path: TrafficMeasurementSiteTablePublication
         expected_status: 200
         max_response_ms: 5000
+        coords_extract: measurement_site
         checks:
           - valid_xml
 

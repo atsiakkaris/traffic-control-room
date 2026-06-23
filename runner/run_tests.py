@@ -176,20 +176,20 @@ def run_all():
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
             # Extract and store coordinates from inventory endpoints
-            ep_name = ep["name"]
             txt = r.get("response_text", "")
-            if txt:
-                if ep_name in ("Traffic Detection Inventory", "Bluetooth Inventory"):
+            coords_type = ep.get("coords_extract")
+            if txt and coords_type:
+                if coords_type == "measurement_site":
                     coords = extract_measurement_site_coords(txt)
                     if coords:
                         upsert_sensor_coords(group_name, coords)
                         retire_missing_sensors(group_name, set(coords.keys()))
-                elif ep_name == "VMS Inventory":
+                elif coords_type == "vms":
                     coords = extract_vms_coords(txt)
                     if coords:
                         upsert_sensor_coords(group_name, coords)
                         retire_missing_sensors(group_name, set(coords.keys()))
-                elif ep_name == "Bluetooth Paths Inventory":
+                elif coords_type == "bt_paths":
                     paths = extract_bt_path_coords(txt)
                     if paths:
                         upsert_bt_path_coords(paths)
