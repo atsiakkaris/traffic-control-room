@@ -58,7 +58,6 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
 - Marker clustering at country zoom (expands at zoom 13+); toggle clustering on/off with the **Cluster** button
 - All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data), with directional arrows showing the direction of travel
-- Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
 - **View on map** button on each group card isolates that group and flies to its bounds
 - **Historical playback** bar — scrub or step through the last 30 runs to see how sensor statuses changed over time
@@ -70,7 +69,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - Group dropdown filter
 - Sort dropdown — Default, Worst first, or Best first
 - 📍 icon on each row — click to fly the map to that sensor or BT path and open its popup
-- Expandable per-sensor daily health % trend chart (last 7 / 14 / 30 days)
+- Expandable per-sensor daily health % trend chart (last 7 / 30 days)
 
 **Run History** — per-run feed status and sensor health % for each sensor group across the last 30 runs.
 
@@ -83,8 +82,6 @@ This means a group is never falsely marked "failed" just because some sensors ar
 Tests run frequently throughout the day. The workflow can also be triggered manually from the GitHub Actions tab.
 
 A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging always-off sensors, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed.
-
-> Timestamps in the dashboard are displayed in Cyprus local time (EEST/EET) and adjust automatically for DST.
 
 ---
 
@@ -110,8 +107,7 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   └── weekly_digest.yml       ← Weekly digest email (Mondays 07:30 EEST, triggered via cron-job.org)
 ├── tests/
 │   └── test_generate_report.py ← Smoke tests for the HTML report generator
-├── run.ps1                     ← Local run script (PowerShell, loads .env automatically)
-├── run.bat                     ← Local run script (double-click alternative, no execution policy needed)
+├── run.bat                     ← Local run script (double-click, loads .env automatically)
 ├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
 └── requirements.txt
 ```

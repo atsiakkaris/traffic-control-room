@@ -463,7 +463,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       <select id="sortOrder" onchange="_applyStabilityFilters()"
               style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
                      background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer">
-        <option value="default">Sort: Default</option>
+        <option value="default">Sort: Group / ID</option>
         <option value="worst">Worst first</option>
         <option value="best">Best first</option>
       </select>

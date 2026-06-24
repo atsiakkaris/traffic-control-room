@@ -4,3 +4,9 @@ __pycache__/
 .idea/
 .pytest_cache/
 digest_recipients_list.txt
+ONBOARDING.docx
+~$*.docx
+ITS_Infrastructure_Health_Monitor.pptx
+reports/digest_preview.html
+scheduled command.txt
+run.bat
