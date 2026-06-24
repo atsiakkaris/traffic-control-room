@@ -34,10 +34,10 @@ panels:
 #
 groups:
   Traffic Detection:
-    display:       "Traffic Detection (SWARCO)"
+    display:       "Traffic Detection"
     color:         "#1d9e75"
     layer_key:     "td"
-    map_label:     "Traffic Detection (SWARCO)"
+    map_label:     "Traffic Detection"
     history_label: "Traffic Detection"
     icon:          "ti-traffic-cone"
     icon_size:     26

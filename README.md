@@ -1,6 +1,6 @@
 # ITS Infrastructure Health Monitor
 
-Automated health monitoring for Cyprus traffic infrastructure. Tests run hourly via GitHub Actions, results are stored in SQLite, and a live HTML dashboard is published to GitHub Pages after every run.
+Automated health monitoring for Cyprus traffic infrastructure. Tests run every 2 hours via GitHub Actions, results are stored in SQLite, and a live HTML dashboard is published to GitHub Pages after every run.
 
 ---
 
@@ -33,7 +33,7 @@ All live endpoints also check: HTTP 200 status, response time within limit, and 
 The monitor uses a two-tier health model:
 
 - **Feed health** (binary) — did the API respond with valid, fresh XML? If not, the group is marked as a feed issue regardless of sensor counts.
-- **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 55 %, red < 55 %.
+- **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 80 %, red < 80 %.
 
 Each sensor in the Stability panel gets one of six badges based on its historical health %:
 
@@ -52,7 +52,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Dashboard Panels
 
-**System Overview** — one card per group showing feed status and sensor health %, with a breakdown of each check. Each check includes a short description of what it tests. A colour-coded bar shows the overall pass rate for the latest run.
+**System Overview** — one card per group showing feed status and sensor health %, with a breakdown of each check. Each check includes a short description of what it tests. Hover the group badge (Operational / Deteriorated / Feed issue) to see colour thresholds and which test is driving the status. Hover individual endpoint dots to see a per-check pass/fail breakdown.
 
 **Sensor Map** — interactive Leaflet.js map with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
@@ -61,7 +61,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - Click any marker or path to see live measurements (speed, flow rate, travel time) in a fixed info panel
 - Toggle layers on/off; filter to issues only; collapsible legend
 - **View on map** button on each group card isolates that group and flies to its bounds
-- **Historical playback** bar — scrub or step through the last 20 runs to see how sensor statuses changed over time
+- **Historical playback** bar — scrub or step through the last 30 runs to see how sensor statuses changed over time
 
 **Sensor Health Trend** — one line per sensor group showing health % across the last 30 runs.
 
@@ -72,7 +72,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 - 📍 icon on each row — click to fly the map to that sensor or BT path and open its popup
 - Expandable per-sensor daily health % trend chart (last 7 / 14 / 30 days)
 
-**Run History** — per-run feed status and sensor health % for each sensor group across the last 20 runs.
+**Run History** — per-run feed status and sensor health % for each sensor group across the last 30 runs.
 
 > The dashboard uses a **two-column layout** (60/40): the left column holds System Overview, Sensor Map, Health Trend, and Run History; the right column holds the Sensor Stability panel and stays sticky while you scroll. On narrow screens (below 900px) the columns stack vertically.
 

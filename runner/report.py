@@ -348,7 +348,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         else:
             badge_bg, badge_color, badge_label, badge_tip = "#e24b4a", "#ffffff", "Always off",  "0% of runs good"
 
-        # Sparkline: last 40 runs as tiny squares with rich tooltips
+        # Sparkline: last 20 runs as tiny squares with rich tooltips
         sparks = ""
         for h in history[-20:]:
             c = STATUS_COLOR.get(h["status"], "#9ca3af")
@@ -661,12 +661,15 @@ def generate_report() -> str:
 
         # Compute minimum sensor health across all endpoints in this group
         min_health_pct = None
+        degraded_test_name = None
         for r in results:
             cs = r.get("check_summary", "") or ""
             for cn in SENSOR_CHECKS:
                 pct = _extract_health_pct(cs, cn)
                 if pct is not None:
-                    min_health_pct = pct if min_health_pct is None else min(min_health_pct, pct)
+                    if min_health_pct is None or pct < min_health_pct:
+                        min_health_pct = pct
+                        degraded_test_name = r.get("test_name", cn)
 
         sensor_degraded = min_health_pct is not None and min_health_pct < HEALTH_WARNING_PCT
 
@@ -675,16 +678,33 @@ def generate_report() -> str:
             status_bg    = "#faeeda" if any_error else "#fcebeb"
             status_label = "Degraded" if any_error else "Feed issue"
             status_icon  = "ti-alert-triangle" if any_error else "ti-circle-x"
+            failing_tests = [r["test_name"] for r in results if r["status"] != "pass"]
+            status_tip   = (
+                ("⚠ One or more endpoints returned an error or timed out." if any_error
+                 else "✗ Feed check failed — data from this group may be missing or stale.")
+                + f"\nFailing: {', '.join(failing_tests)}"
+            )
         elif sensor_degraded:
             status_color = "#e58e0a"
             status_bg    = "#faeeda"
             status_label = f"Deteriorated ({round(min_health_pct)}%)"
             status_icon  = "ti-alert-triangle"
+            status_tip   = (
+                f"⚠ Sensor health is below {HEALTH_WARNING_PCT}% (currently {round(min_health_pct)}%).\n"
+                f"Threshold: ≥90% = Operational · ≥{HEALTH_WARNING_PCT}% = Deteriorated · below = Feed issue\n"
+                f"Driven by: {degraded_test_name}"
+            )
         else:
             status_color = "#1d9e75"
             status_bg    = "#e1f5ee"
             status_label = "Operational" + (f" ({round(min_health_pct)}%)" if min_health_pct is not None else "")
             status_icon  = "ti-circle-check"
+            status_tip   = (
+                (f"✓ All sensors reporting normally ({round(min_health_pct)}% healthy).\n"
+                 f"Threshold: ≥90% = Operational · ≥{HEALTH_WARNING_PCT}% = Deteriorated")
+                if min_health_pct is not None
+                else "✓ All feed checks passing."
+            )
 
         pass_count = sum(1 for r in results if r["status"] == "pass")
 
@@ -692,9 +712,22 @@ def generate_report() -> str:
         for r in results:
             cs = r.get("check_summary", "") or ""
 
-            # Dot color: feed failure = red/amber; sensor check = health-based; otherwise green
+            # Dot color + tooltip: feed failure = red/amber; sensor check = health-based; otherwise green
+            # Parse individual check results from check_summary for the tooltip
+            check_lines = []
+            for part in cs.split(" | "):
+                part = part.strip()
+                if part.startswith("[✓]") or part.startswith("[✗]"):
+                    icon = "✓" if part.startswith("[✓]") else "✗"
+                    rest = part[3:].strip()
+                    check_lines.append(f"  {icon} {rest}")
+
             if r["status"] != "pass":
                 dot_color = "#e58e0a" if r["status"] == "error" else "#e24b4a"
+                base = ("⚠ Error: endpoint timed out or returned an unexpected response."
+                        if r["status"] == "error"
+                        else "✗ Feed check failed.")
+                dot_tip = base + ("\n\nChecks:\n" + "\n".join(check_lines) if check_lines else "")
             else:
                 h_pct = None
                 for cn in SENSOR_CHECKS:
@@ -702,6 +735,15 @@ def generate_report() -> str:
                     if h_pct is not None:
                         break
                 dot_color = _health_color(h_pct) if h_pct is not None else "#1d9e75"
+                if h_pct is not None:
+                    status_word = "good" if h_pct >= 90 else "deteriorated"
+                    dot_tip = (
+                        f"{'✓' if h_pct >= 90 else '⚠'} Sensor health: {round(h_pct)}% ({status_word})\n"
+                        f"≥90% = green · ≥{HEALTH_WARNING_PCT}% = amber · below = red\n"
+                        + ("\nChecks:\n" + "\n".join(check_lines) if check_lines else "")
+                    )
+                else:
+                    dot_tip = "✓ All checks passed." + ("\n\nChecks:\n" + "\n".join(check_lines) if check_lines else "")
 
             # Failure lines: only for non-passing feed-level checks (sensor checks excluded)
             failure_lines = ""
@@ -749,7 +791,7 @@ def generate_report() -> str:
             detail_rows += f"""
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
               <div style="display:flex;align-items:center;gap:8px">
-                <span style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0"></span>
+                <span title="{dot_tip}" style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0;cursor:help"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">{r['test_name']}{name_suffix}</span>
               </div>
               {check_desc_html}
@@ -865,7 +907,7 @@ def generate_report() -> str:
               <div style="font-size:15px;font-weight:500;color:var(--color-text-primary)">{GROUP_DISPLAY.get(group_name, group_name)}</div>
               <div style="font-size:12px;color:var(--color-text-secondary)">{pass_count}/{len(results)} checks passing</div>
             </div>
-            <span style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:4px 10px;border-radius:20px;background:{status_bg};color:{status_color}">
+            <span title="{status_tip}" style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:4px 10px;border-radius:20px;background:{status_bg};color:{status_color};cursor:help">
               <i class="ti {status_icon}" style="font-size:14px" aria-hidden="true"></i>{status_label}
             </span>
           </div>
@@ -895,7 +937,7 @@ def generate_report() -> str:
                 f'<div style="width:{bw}%;height:4px;border-radius:2px;background:{color}"></div></div></td>')
 
     history_rows = ""
-    for run in runs[:20]:
+    for run in runs[:30]:
         h = health_by_run.get(run["run_id"], {})
         ts = _to_cyprus(run["run_at"])
         issues = h.get("feed_issues", [])
@@ -1016,7 +1058,7 @@ def generate_report() -> str:
                 _run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
             _run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
     _runs_sorted = sorted(_run_timeline.values(), key=lambda r: r["run_at"])
-    history_playback_json = json.dumps(_runs_sorted[-20:])
+    history_playback_json = json.dumps(_runs_sorted[-30:])
 
     # Pre-compute group-driven HTML/JS snippets so injection sites stay clean
     _bt_paths_label   = _UI.get("bt_paths_map_label", "Bluetooth Paths")
@@ -1155,6 +1197,7 @@ def generate_report() -> str:
     .col-left, .col-right {{ flex:none; width:100%; max-height:none; position:static; }}
   }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  #sensorTable {{ min-width: 700px; }}
   th {{ font-size: 11px; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase;
         color: var(--muted); padding: 8px 12px; border-bottom: 0.5px solid var(--border); text-align: left; }}
   td {{ padding: 10px 12px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }}
@@ -1266,7 +1309,6 @@ def generate_report() -> str:
       </div>
       <div class="panel-chevron open" id="c-p-groups"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-bar" title="Overall pass rate from the latest run: {overall_pct}% of checks passed" style="cursor:help"><div class="panel-bar-fill" style="width:{overall_pct}%;background:{overall_bar_color}"></div></div>
     <div class="panel-body" id="b-p-groups">
       <div class="group-cards">
         {group_cards}
@@ -1303,7 +1345,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-history">
     <div class="panel-header" onclick="togglePanel('p-history')">
-      <span class="panel-title">{_lbl('panels', 'history', 'Run history')} — last 20 runs</span>
+      <span class="panel-title">{_lbl('panels', 'history', 'Run history')} — last 30 runs</span>
       <div class="panel-chevron open" id="c-p-history"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar" title="Average health across all sensors in the last run: {history_pct}%" style="cursor:help"><div class="panel-bar-fill" style="width:{history_pct}%;background:{history_bar_color}"></div></div>
@@ -1329,7 +1371,7 @@ def generate_report() -> str:
       <div class="panel-chevron open" id="c-p-sensors"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar" id="sensorBarWrap" title="{sensor_pct}% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
-    <div class="panel-body" id="b-p-sensors">
+    <div class="panel-body" id="b-p-sensors" style="overflow-x:auto">
       {sensor_stability_html}
     </div>
   </div>
