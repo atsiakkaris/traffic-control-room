@@ -611,6 +611,11 @@ def generate_report() -> str:
         REPORT_PATH.write_text("<html><body>No runs yet.</body></html>")
         return str(REPORT_PATH)
 
+    conn = get_connection()
+    first_run_at = conn.execute("SELECT MIN(run_at) FROM runs").fetchone()[0]
+    conn.close()
+    first_run_date = _to_cyprus(first_run_at).split(" ")[0] if first_run_at else "—"
+
     latest_run = runs[0]
     latest_results = fetch_results_for_run(latest_run["run_id"])
 
@@ -1240,7 +1245,7 @@ def generate_report() -> str:
 <header>
   <div>
     <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
-    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; {len(runs)} runs recorded &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">60:00</span></div>
+    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; running since {first_run_date} &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">60:00</span></div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
