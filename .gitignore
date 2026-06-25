@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 digest_recipients_list.txt
 ONBOARDING.docx
+DATA_QUALITY.docx
 ~$*.docx
 ITS_Infrastructure_Health_Monitor.pptx
 reports/digest_preview.html

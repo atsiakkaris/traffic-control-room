@@ -354,6 +354,17 @@ def fetch_sensor_health_history(limit=30, live_test_names=None):
     return [dict(r) for r in rows]
 
 
+def fetch_sensor_ids_for_run(run_id, group_name):
+    """Return the set of sensor IDs inserted for a given run and group."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT sensor_id FROM sensor_results WHERE run_id=? AND group_name=?",
+        (run_id, group_name)
+    ).fetchall()
+    conn.close()
+    return {r["sensor_id"] for r in rows}
+
+
 def fetch_sensor_stability():
     """Return per-sensor history: [{group_name, sensor_id, history: [{run_at, status}]}]"""
     conn = get_connection()

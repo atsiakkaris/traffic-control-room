@@ -25,7 +25,10 @@ from pathlib import Path
 # Make sure runner/ is on the path when called from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db import init_db, insert_run, insert_result, insert_sensor_result, upsert_sensor_coords, upsert_bt_path_coords, retire_missing_sensors, retire_missing_bt_paths
+from db import (init_db, insert_run, insert_result, insert_sensor_result,
+                upsert_sensor_coords, upsert_bt_path_coords,
+                retire_missing_sensors, retire_missing_bt_paths,
+                fetch_sensor_ids_for_run)
 from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report
@@ -175,25 +178,33 @@ def run_all():
                 mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
-            # Extract and store coordinates from inventory endpoints
+            # Extract and store coordinates from inventory endpoints.
+            # Only retire missing sensors when the feed explicitly passed — an
+            # empty coord set from a failed fetch must not wipe active sensors.
             txt = r.get("response_text", "")
             coords_type = ep.get("coords_extract")
             if txt and coords_type:
                 if coords_type == "measurement_site":
                     coords = extract_measurement_site_coords(txt)
-                    if coords:
+                    if r["status"] == "pass" and coords:
                         upsert_sensor_coords(group_name, coords)
                         retire_missing_sensors(group_name, set(coords.keys()))
+                    elif r["status"] == "pass" and not coords:
+                        log.warning("[%s] Inventory passed but returned no sensors — skipping retire", group_name)
                 elif coords_type == "vms":
                     coords = extract_vms_coords(txt)
-                    if coords:
+                    if r["status"] == "pass" and coords:
                         upsert_sensor_coords(group_name, coords)
                         retire_missing_sensors(group_name, set(coords.keys()))
+                    elif r["status"] == "pass" and not coords:
+                        log.warning("[%s] VMS inventory passed but returned no controllers — skipping retire", group_name)
                 elif coords_type == "bt_paths":
                     paths = extract_bt_path_coords(txt)
-                    if paths:
+                    if r["status"] == "pass" and paths:
                         upsert_bt_path_coords(paths)
                         retire_missing_bt_paths(set(paths.keys()))
+                    elif r["status"] == "pass" and not paths:
+                        log.warning("[%s] BT paths inventory passed but returned no paths — skipping retire", group_name)
 
             icon = _STATUS_ICON.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])
