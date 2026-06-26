@@ -1150,7 +1150,7 @@ def generate_report() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="3600">
+<meta http-equiv="refresh" content="1800">
 <title>{_UI.get('page_title', 'ITS Infrastructure Health')}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -1228,7 +1228,7 @@ def generate_report() -> str:
 <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
 <script>
   (function() {{
-    var secs = 3600;
+    var secs = 1800;
     var el = null;
     function tick() {{
       if (!el) el = document.getElementById('refresh-countdown');
@@ -1245,7 +1245,7 @@ def generate_report() -> str:
 <header>
   <div>
     <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
-    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; running since {first_run_date} &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">60:00</span></div>
+    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; running since {first_run_date} &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">30:00</span></div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
