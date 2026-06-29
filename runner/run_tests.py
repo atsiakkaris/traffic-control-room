@@ -72,57 +72,66 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
         "check_details": [],
     }
 
-    try:
-        t0 = time.perf_counter()
-        resp = httpx.get(url, timeout=max_ms / 1000 + 10, follow_redirects=True)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
+    for attempt in range(2):
+        try:
+            t0 = time.perf_counter()
+            resp = httpx.get(url, timeout=max_ms / 1000 + 10, follow_redirects=True)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        result["status_code"] = resp.status_code
-        result["response_ms"] = round(elapsed_ms, 1)
-        result["response_text"] = resp.text
+            result["status_code"] = resp.status_code
+            result["response_ms"] = round(elapsed_ms, 1)
+            result["response_text"] = resp.text
 
-        failures = []
+            failures = []
 
-        # Status code check
-        if resp.status_code != expected_status:
-            failures.append(f"Expected HTTP {expected_status}, got {resp.status_code}")
+            # Status code check
+            if resp.status_code != expected_status:
+                failures.append(f"Expected HTTP {expected_status}, got {resp.status_code}")
 
-        # Response time check
-        if elapsed_ms > max_ms:
-            failures.append(f"Response time {elapsed_ms:.0f}ms > {max_ms}ms limit")
+            # Response time check
+            if elapsed_ms > max_ms:
+                failures.append(f"Response time {elapsed_ms:.0f}ms > {max_ms}ms limit")
 
-        # Domain checks
-        for check_name in check_names:
-            fn = REGISTRY.get(check_name)
-            if fn is None:
-                log.warning("Unknown check '%s' — skipping", check_name)
+            # Domain checks
+            for check_name in check_names:
+                fn = REGISTRY.get(check_name)
+                if fn is None:
+                    log.warning("Unknown check '%s' — skipping", check_name)
+                    continue
+                try:
+                    check_result = fn(resp.text)
+                    result["check_details"].append(
+                        f"[{'✓' if check_result['passed'] else '✗'}] {check_name}: {check_result['detail']}"
+                    )
+                    if not check_result["passed"]:
+                        failures.append(f"{check_name}: {check_result['detail']}")
+                    if check_result.get("sensors"):
+                        result.setdefault("sensors", {}).update(check_result["sensors"])
+                    if check_result.get("measurements"):
+                        result.setdefault("measurements", {}).update(check_result["measurements"])
+                except Exception as e:
+                    failures.append(f"{check_name} raised exception: {e}")
+
+            if failures:
+                result["status"] = "fail"
+                result["failure_reason"] = " | ".join(failures)
+            else:
+                result["status"] = "pass"
+
+            break  # success — no retry needed
+
+        except httpx.TimeoutException:
+            if attempt == 0:
+                log.warning("  ↻  Timeout on attempt 1, retrying…")
                 continue
-            try:
-                check_result = fn(resp.text)
-                result["check_details"].append(
-                    f"[{'✓' if check_result['passed'] else '✗'}] {check_name}: {check_result['detail']}"
-                )
-                if not check_result["passed"]:
-                    failures.append(f"{check_name}: {check_result['detail']}")
-                if check_result.get("sensors"):
-                    result.setdefault("sensors", {}).update(check_result["sensors"])
-                if check_result.get("measurements"):
-                    result.setdefault("measurements", {}).update(check_result["measurements"])
-            except Exception as e:
-                failures.append(f"{check_name} raised exception: {e}")
-
-        if failures:
-            result["status"] = "fail"
-            result["failure_reason"] = " | ".join(failures)
-        else:
-            result["status"] = "pass"
-
-    except httpx.TimeoutException:
-        result["status"] = "error"
-        result["failure_reason"] = f"Request timed out after {max_ms/1000+5:.0f}s"
-    except Exception as e:
-        result["status"] = "error"
-        result["failure_reason"] = str(e)
+            result["status"] = "error"
+            result["failure_reason"] = f"Request timed out after {max_ms/1000+5:.0f}s (2 attempts)"
+        except Exception as e:
+            if attempt == 0:
+                log.warning("  ↻  Error on attempt 1 (%s), retrying…", e)
+                continue
+            result["status"] = "error"
+            result["failure_reason"] = str(e)
 
     result.setdefault("response_text", "")
     return result

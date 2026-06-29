@@ -501,6 +501,7 @@ def send_digest():
         log.error("GMAIL_USER / GMAIL_APP_PW not set — cannot send digest.")
         sys.exit(1)
 
+    log.info("Sending digest to: %s", ", ".join(recipients))
     d    = build_digest()
     html = build_html(d)
     week = d["week_start"]
