@@ -49,7 +49,7 @@ def _to_cyprus(utc_iso: str) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     local = dt.astimezone(CYPRUS_TZ)
-    return local.strftime("%Y-%m-%d %H:%M")
+    return local.strftime("%d/%m/%y %H:%M")
 
 REPORT_PATH = Path("reports/latest.html")
 
@@ -606,7 +606,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 def generate_report() -> str:
     REPORT_PATH.parent.mkdir(exist_ok=True)
 
-    runs = fetch_recent_runs(60)
+    runs = fetch_recent_runs(200)
     if not runs:
         REPORT_PATH.write_text("<html><body>No runs yet.</body></html>")
         return str(REPORT_PATH)
@@ -625,13 +625,13 @@ def generate_report() -> str:
         groups.setdefault(r["group_name"], []).append(r)
 
     # Chart data
-    chart_runs = list(reversed(runs[:30]))
+    chart_runs = list(reversed(runs[:200]))
 
     # Sensor stability (coord lookups fetched below with map data)
     all_sensors = fetch_sensor_stability()
 
     # Sensor health history — build per-run lookup keyed by run_id → group_name
-    raw_health = fetch_sensor_health_history(60, live_test_names=list(HEALTH_ENDPOINTS.keys()))
+    raw_health = fetch_sensor_health_history(200, live_test_names=list(HEALTH_ENDPOINTS.keys()))
     health_by_run = {}
     for row in raw_health:
         rid = row["run_id"]
@@ -1123,7 +1123,10 @@ def generate_report() -> str:
     ) if _age_hours > _UI.get("staleness_threshold_hours", 3) else ""
 
     # Chart labels in Cyprus time
-    chart_labels = json.dumps([_to_cyprus(r["run_at"]) for r in chart_runs])
+    _chart_label_list = [_to_cyprus(r["run_at"]) for r in chart_runs]
+    chart_labels = json.dumps(_chart_label_list)
+    chart_x_min = json.dumps(_chart_label_list[-30] if len(_chart_label_list) > 30 else _chart_label_list[0])
+    chart_x_max = json.dumps(_chart_label_list[-1] if _chart_label_list else '')
 
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
@@ -1154,6 +1157,8 @@ def generate_report() -> str:
 <title>{_UI.get('page_title', 'ITS Infrastructure Health')}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
@@ -1173,7 +1178,8 @@ def generate_report() -> str:
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
           background: var(--bg); color: var(--text); min-height: 100vh; transition: background .2s, color .2s; }}
   header {{ background: var(--header-bg); color: white; padding: 20px 28px;
-            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }}
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+            position: sticky; top: 0; z-index: 2000; }}
   header h1 {{ font-size: 1.15rem; font-weight: 500; letter-spacing: -0.01em; }}
   header .meta {{ font-size: 11px; opacity: 0.45; margin-top:3px; }}
   .wrap {{ max-width: 100%; margin: 0 auto; padding: 20px 32px; }}
@@ -1219,6 +1225,14 @@ def generate_report() -> str:
     border:0.5px solid var(--border);background:var(--surface);color:var(--muted);transition:all .15s;
   }}
   .map-toggle.active {{ background:var(--header-bg);color:#fff;border-color:var(--header-bg); }}
+  .trend-btn {{
+    font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;
+    border:1px solid var(--border);background:var(--surface);color:var(--muted);
+  }}
+  .trend-btn:hover {{ background:var(--header-bg);color:#fff;border-color:var(--header-bg); }}
+  #trendChart {{ cursor: grab; }}
+  #trendChart:active {{ cursor: grabbing; }}
+  .leaflet-top {{ transition: top .1s; }}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1245,7 +1259,7 @@ def generate_report() -> str:
 <header>
   <div>
     <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
-    <div class="meta">Last checked {run_time} EET &nbsp;·&nbsp; running since {first_run_date} &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">30:00</span></div>
+    <div class="meta">Last checked {run_time} Cyprus time &nbsp;·&nbsp; running since {first_run_date} &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">30:00</span></div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
@@ -1334,7 +1348,7 @@ def generate_report() -> str:
 
   <div class="panel" id="p-trend">
     <div class="panel-header" onclick="togglePanel('p-trend')">
-      <span class="panel-title">{_lbl('panels', 'health_trend', 'Sensor health trend')} — last {len(chart_runs)} runs</span>
+      <span class="panel-title">{_lbl('panels', 'health_trend', 'Sensor health trend')}</span>
       <div class="panel-chevron open" id="c-p-trend"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-bar" title="Average health across all recent runs (sensors combined): {trend_pct}%" style="cursor:help"><div class="panel-bar-fill" style="width:{trend_pct}%;background:{trend_bar_color}"></div></div>
@@ -1342,8 +1356,12 @@ def generate_report() -> str:
       <div style="position:relative;height:180px">
         <canvas id="trendChart" role="img" aria-label="Line chart of sensor health percentages across recent runs"></canvas>
       </div>
-      <div style="display:flex;gap:16px;margin-top:10px;font-size:12px;color:var(--muted)">
-        {chart_legend}
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;gap:16px;font-size:12px;color:var(--muted)">{chart_legend}</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
+          <span>Scroll to zoom &middot; drag to pan</span>
+          <button onclick="(function(){{var c=window._healthTrendChart,l=c.data.labels;c.options.scales.x.min=l.length>30?l[l.length-30]:l[0];c.options.scales.x.max=l[l.length-1];c.update('none')}})()" class="trend-btn" title="Reset to last 30 runs">Reset</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1361,7 +1379,7 @@ def generate_report() -> str:
         the server took to respond — high values may indicate server load issues.
       </p>
       <table>
-        <thead><tr><th>Time (EET)</th>{history_th_cells}<th>API response</th></tr></thead>
+        <thead><tr><th>Time (Cyprus)</th>{history_th_cells}<th>API response</th></tr></thead>
         <tbody>{history_rows}</tbody>
       </table>
     </div>
@@ -1403,7 +1421,7 @@ function toggleDark() {{
   document.body.classList.toggle('dark', _dark);
   document.getElementById('dmIcon').className = _dark ? 'ti ti-sun' : 'ti ti-moon';
   document.getElementById('dmLabel').textContent = _dark ? 'Light' : 'Dark';
-  var tc = '#9ca3af';
+  var tc = _dark ? '#9ca3af' : '#4b5563';
   var gc = _dark ? 'rgba(255,255,255,0.06)' : 'rgba(128,128,128,0.1)';
   if (window._healthTrendChart) {{
     window._healthTrendChart.options.scales.x.ticks.color = tc;
@@ -1425,11 +1443,20 @@ window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
     responsive: true, maintainAspectRatio: false,
     plugins: {{
       legend: {{ display: false }},
-      tooltip: {{ callbacks: {{ label: function(c) {{ return c.dataset.label + ': ' + c.parsed.y + '%'; }} }} }}
+      tooltip: {{ callbacks: {{ label: function(c) {{ return c.dataset.label + ': ' + c.parsed.y + '%'; }} }} }},
+      zoom: {{
+        limits: {{ x: {{ minRange: 5 }} }},
+        pan: {{ enabled: true, mode: 'x' }},
+        zoom: {{
+          wheel: {{ enabled: true }},
+          pinch: {{ enabled: true }},
+          mode: 'x'
+        }}
+      }}
     }},
     scales: {{
-      x: {{ ticks: {{ font: {{ size: 11 }}, color: '#9ca3af', maxRotation: 45, autoSkip: true, maxTicksLimit: 15 }} }},
-      y: {{ min: 0, max: 100, ticks: {{ stepSize: 20, font: {{ size: 11 }}, color: '#9ca3af', callback: function(v) {{ return v + '%' }} }}, grid: {{ color: 'rgba(128,128,128,0.1)' }} }}
+      x: {{ min: {chart_x_min}, max: {chart_x_max}, ticks: {{ font: {{ size: 11 }}, color: '#9ca3af', maxRotation: 45, autoSkip: true, maxTicksLimit: 25 }} }},
+      y: {{ min: 0, max: 100, ticks: {{ stepSize: 20, font: {{ size: 11 }}, color: '#9ca3af', callback: function(v) {{ return v + '%' }} }}, grid: {{ color: 'rgba(255,255,255,0.06)' }} }}
     }}
   }}
 }});
@@ -1484,6 +1511,15 @@ var STATUS_COLOR_MAP = {
 };
 
 var _map = L.map('sensorMap', {zoomControl:true}).setView([34.95, 33.15], 9);
+(function() {
+  var hdr = document.querySelector('header');
+  function _fixLeafletTop() {
+    var h = hdr ? hdr.getBoundingClientRect().height : 0;
+    document.querySelectorAll('.leaflet-top').forEach(function(el) { el.style.top = h + 'px'; });
+  }
+  _fixLeafletTop();
+  window.addEventListener('resize', _fixLeafletTop);
+})();
 _map.on('click', function() { closeMapPanel(); });
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors', maxZoom: 19

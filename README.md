@@ -1,6 +1,6 @@
 # ITS Infrastructure Health Monitor
 
-Automated health monitoring for Cyprus traffic infrastructure. Tests run every 2 hours via GitHub Actions, results are stored in SQLite, and a live HTML dashboard is published to GitHub Pages after every run.
+Automated health monitoring for Cyprus traffic infrastructure. Tests run every 6 hours via GitHub Actions, results are stored in SQLite, and a live HTML dashboard is published to GitHub Pages after every run.
 
 ---
 
@@ -79,7 +79,7 @@ This means a group is never falsely marked "failed" just because some sensors ar
 
 ## Schedule
 
-Tests run frequently throughout the day. The workflow can also be triggered manually from the GitHub Actions tab.
+Tests run every 6 hours (triggered via cron-job.org). The workflow can also be triggered manually from the GitHub Actions tab.
 
 A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging always-off sensors, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed.
 
