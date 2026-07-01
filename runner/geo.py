@@ -1,9 +1,9 @@
 """
 geo.py — Extract geographic coordinates from DATEX II inventory feeds.
 """
+import re
+import html
 import xml.etree.ElementTree as ET
-
-GML_NS = "http://www.opengis.net/gml"
 
 
 def _parse(response_text):
@@ -81,18 +81,19 @@ def extract_bt_path_coords(response_text):
         name_el = loc.find(".//{*}predefinedLocationName//{*}value")
         name = name_el.text if name_el is not None else pid
         pos_el = loc.find(".//{*}posList")
-        if pos_el is None:
+        if pos_el is None or not pos_el.text:
             continue
-        coords_el = pos_el.find(f"{{{GML_NS}}}LineString/{{{GML_NS}}}coordinates")
-        if coords_el is None or not coords_el.text:
+        m = re.search(r'<gml:coordinates[^>]*>(.*?)</gml:coordinates>', html.unescape(pos_el.text), re.DOTALL)
+        if not m:
             continue
         coords = []
-        for pair in coords_el.text.strip().split():
-            try:
-                lon, lat = map(float, pair.split(','))
-                coords.append([lon, lat])
-            except ValueError:
-                pass
+        for pair in m.group(1).strip().split():
+            parts = pair.split(',')
+            if len(parts) == 2:
+                try:
+                    coords.append([float(parts[0]), float(parts[1])])
+                except ValueError:
+                    pass
         if coords:
             result[pid] = {"name": name, "coords": coords}
     return result
