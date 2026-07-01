@@ -231,6 +231,7 @@ def run_all():
                 log.info("     %s", r["failure_reason"])
             for detail in r.get("check_details", []):
                 log.info("     %s", detail)
+            log.info("")
 
             all_results.append({**ep, "group": group_name, **r})
 

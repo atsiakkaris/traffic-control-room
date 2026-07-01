@@ -82,17 +82,16 @@ def predefined_paths_count(response_text: str) -> dict:
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
-    paths = _find_by_local_name(root, "predefinedLocation")
+    paths = _find_by_local_name(root, "predefinedLocationReference")
     if not paths:
         child_tags = list({el.tag.split("}")[-1] for el in root.iter()})[:20]
         return {
             "passed": False,
-            "detail": f"No predefinedLocation elements found. Tags in response: {', '.join(child_tags)}"
+            "detail": f"No predefinedLocationReference elements found. Tags in response: {', '.join(child_tags)}"
         }
 
-    # Count unique IDs — each path appears twice in the XML (definition + reference)
     unique_ids = {el.get("id") for el in paths if el.get("id")}
-    count = len(unique_ids) if unique_ids else len(paths) // 2
+    count = len(unique_ids) if unique_ids else len(paths)
     return {
         "passed": count > 0,
         "detail": f"Total predefined paths: {count}"

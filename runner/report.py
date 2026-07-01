@@ -7,7 +7,7 @@ import re
 import json
 import yaml
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from zoneinfo import ZoneInfo
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history
@@ -434,7 +434,6 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         </tr>"""
 
     # Per-group good/total counts for dynamic bar
-    import json as _json
     group_stats = {"all": {"good": 0, "total": 0}}
     for s in sensors:
         g = s["group_name"]
@@ -447,7 +446,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         if is_good:
             group_stats[g]["good"] += 1
             group_stats["all"]["good"] += 1
-    group_stats_json = _json.dumps(group_stats)
+    group_stats_json = json.dumps(group_stats)
 
     return f"""
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
@@ -603,6 +602,128 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     </script>"""
 
 
+def _build_health_by_run(raw_health):
+    """Build {run_id: {group_name: pct, 'feed_issues': [...]}} from raw health rows."""
+    health_by_run = {}
+    for row in raw_health:
+        rid = row["run_id"]
+        if rid not in health_by_run:
+            health_by_run[rid] = {"feed_issues": []}
+        ep_info = HEALTH_ENDPOINTS.get(row["test_name"])
+        if ep_info:
+            cs = row.get("check_summary") or ""
+            grp = ep_info["group"]
+            health_by_run[rid][grp] = _extract_health_pct(cs, ep_info["check"])
+            if row["status"] != "pass":
+                health_by_run[rid]["feed_issues"].append(grp)
+    return health_by_run
+
+
+def _build_chart_data(chart_runs, health_by_run):
+    """Return (labels_json, chart_series_dict, x_min_json, x_max_json)."""
+    label_list = [_to_cyprus(r["run_at"]) for r in chart_runs]
+    chart_series = {
+        gname: json.dumps([
+            (lambda v: round(v, 1) if v is not None else None)(
+                health_by_run.get(r["run_id"], {}).get(gname)
+            )
+            for r in chart_runs
+        ])
+        for gname in GROUP_META
+    }
+    labels_json = json.dumps(label_list)
+    x_min = json.dumps(label_list[-30] if len(label_list) > 30 else label_list[0])
+    x_max = json.dumps(label_list[-1] if label_list else "")
+    return labels_json, chart_series, x_min, x_max
+
+
+def _build_sensor_trend_data(all_sensors):
+    """Return (trend_data_json, day_labels_json) for the per-sensor sparkline charts."""
+    today = datetime.now(timezone.utc).date()
+    days30 = [(today - timedelta(days=i)) for i in range(29, -1, -1)]
+    day_labels = [d.strftime("%d/%m") for d in days30]
+
+    daily = {}
+    for s in all_sensors:
+        key = f"{s['group_name']}|{s['sensor_id']}"
+        daily[key] = {}
+        for h in s["history"]:
+            day = h["run_at"][:10]
+            if day not in daily[key]:
+                daily[key][day] = {"good": 0, "total": 0}
+            daily[key][day]["total"] += 1
+            if h["status"] in GOOD_STATUSES:
+                daily[key][day]["good"] += 1
+
+    trend_data = {}
+    for s in all_sensors:
+        key = f"{s['group_name']}|{s['sensor_id']}"
+        row = []
+        for d in days30:
+            stats = daily.get(key, {}).get(d.isoformat(), {})
+            t = stats.get("total", 0)
+            row.append(round(stats.get("good", 0) / t * 100) if t else None)
+        trend_data[key] = row
+
+    return json.dumps(trend_data), json.dumps(day_labels)
+
+
+def _build_map_sensor_list(all_coords, live_data):
+    """Return list of sensor dicts for the Leaflet map."""
+    sensors = []
+    for group_name, sensors_dict in all_coords.items():
+        group_live = live_data.get(group_name, {})
+        for sid, c in sensors_dict.items():
+            entry = group_live.get(sid, {})
+            st = entry.get("status", "unknown")
+            if group_name == "Traffic Detection":
+                sc = c.get("site_code")
+                nm = c.get("name", sid)
+                display_name = f"{sc} ({nm})" if sc else nm
+            else:
+                display_name = c["name"]
+            sensors.append({
+                "id": sid, "group": group_name,
+                "group_display": GROUP_DISPLAY.get(group_name, group_name),
+                "name": c["name"], "display_name": display_name,
+                "lat": c["lat"], "lon": c["lon"],
+                "status": st,
+                "label": STATUS_LABEL.get(st, "Unknown"),
+                "color": STATUS_COLOR.get(st, "#6b7280"),
+                "data": entry.get("data", {}),
+            })
+    return sensors
+
+
+def _build_map_bt_path_list(all_bt_paths, live_data):
+    """Return list of BT path dicts for the Leaflet map."""
+    bt_group_live = live_data.get("Bluetooth Paths", {})
+    paths = []
+    for pid, p in all_bt_paths.items():
+        entry = bt_group_live.get(pid, {})
+        st = entry.get("status", "unknown")
+        paths.append({
+            "id": pid, "name": p["name"],
+            "coords": p["coords"], "status": st,
+            "color": STATUS_COLOR.get(st, "#6b7280"),
+            "data": entry.get("data", {}),
+        })
+    return paths
+
+
+def _build_history_playback(all_sensors):
+    """Return JSON string of the last 30 runs for the map playback slider."""
+    run_timeline = {}
+    for s in all_sensors:
+        for h in s["history"]:
+            rat = h["run_at"]
+            if rat not in run_timeline:
+                run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
+            run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
+    runs_sorted = sorted(run_timeline.values(), key=lambda r: r["run_at"])
+    return json.dumps(runs_sorted[-30:])
+
+
 def generate_report() -> str:
     REPORT_PATH.parent.mkdir(exist_ok=True)
 
@@ -632,28 +753,9 @@ def generate_report() -> str:
 
     # Sensor health history — build per-run lookup keyed by run_id → group_name
     raw_health = fetch_sensor_health_history(200, live_test_names=list(HEALTH_ENDPOINTS.keys()))
-    health_by_run = {}
-    for row in raw_health:
-        rid = row["run_id"]
-        if rid not in health_by_run:
-            health_by_run[rid] = {"feed_issues": []}
-        ep_info = HEALTH_ENDPOINTS.get(row["test_name"])
-        if ep_info:
-            cs = row.get("check_summary") or ""
-            grp = ep_info["group"]
-            health_by_run[rid][grp] = _extract_health_pct(cs, ep_info["check"])
-            if row["status"] != "pass":
-                health_by_run[rid]["feed_issues"].append(grp)
+    health_by_run = _build_health_by_run(raw_health)
 
-    def _pct_or_null(run_id, group_name):
-        v = health_by_run.get(run_id, {}).get(group_name)
-        return round(v, 1) if v is not None else None
-
-    # One JSON series per group for the trend chart
-    chart_series = {
-        gname: json.dumps([_pct_or_null(r["run_id"], gname) for r in chart_runs])
-        for gname in GROUP_META
-    }
+    chart_labels, chart_series, chart_x_min, chart_x_max = _build_chart_data(chart_runs, health_by_run)
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
@@ -968,36 +1070,7 @@ def generate_report() -> str:
     all_coords = fetch_sensor_coords()
     all_bt_paths = fetch_bt_path_coords()
 
-    # Build per-sensor daily health % for last 30 days (for trend charts)
-    from datetime import timedelta
-    _today = datetime.now(timezone.utc).date()
-    _days30 = [(_today - timedelta(days=i)) for i in range(29, -1, -1)]
-    _day_labels = [d.strftime("%d/%m") for d in _days30]
-
-    _daily: dict = {}
-    for s in all_sensors:
-        key = f"{s['group_name']}|{s['sensor_id']}"
-        _daily[key] = {}
-        for h in s["history"]:
-            day = h["run_at"][:10]
-            if day not in _daily[key]:
-                _daily[key][day] = {"good": 0, "total": 0}
-            _daily[key][day]["total"] += 1
-            if h["status"] in GOOD_STATUSES:
-                _daily[key][day]["good"] += 1
-
-    _trend_data: dict = {}
-    for s in all_sensors:
-        key = f"{s['group_name']}|{s['sensor_id']}"
-        row = []
-        for d in _days30:
-            stats = _daily.get(key, {}).get(d.isoformat(), {})
-            t = stats.get("total", 0)
-            row.append(round(stats.get("good", 0) / t * 100) if t else None)
-        _trend_data[key] = row
-
-    trend_data_json  = json.dumps(_trend_data)
-    day_labels_json  = json.dumps(_day_labels)
+    trend_data_json, day_labels_json = _build_sensor_trend_data(all_sensors)
 
     # Build set of active sensor keys from coord tables (which already filter active=1)
     _active_keys = set()
@@ -1013,57 +1086,11 @@ def generate_report() -> str:
     sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
-    # Build sensor list for map: includes live measurements for rich popups
-    map_sensors = []
-    for group_name_c, sensors_dict in all_coords.items():
-        group_live = live_data.get(group_name_c, {})
-        for sid, c in sensors_dict.items():
-            entry = group_live.get(sid, {})
-            st = entry.get("status", "unknown")
-            color = STATUS_COLOR.get(st, "#6b7280")
-            label = STATUS_LABEL.get(st, "Unknown")
-            # Compute human-readable display name for popup title/body
-            if group_name_c == "Traffic Detection":
-                sc = c.get("site_code")
-                nm = c.get("name", sid)
-                display_name = f"{sc} ({nm})" if sc else nm
-            else:
-                display_name = c["name"]
-            map_sensors.append({
-                "id": sid, "group": group_name_c,
-                "group_display": GROUP_DISPLAY.get(group_name_c, group_name_c),
-                "name": c["name"], "display_name": display_name,
-                "lat": c["lat"], "lon": c["lon"],
-                "status": st, "label": label, "color": color,
-                "data": entry.get("data", {}),
-            })
-
-    # Build BT path list with live speed/travel-time data
-    bt_group_live = live_data.get("Bluetooth Paths", {})
-    map_bt_paths = []
-    for pid, p in all_bt_paths.items():
-        entry = bt_group_live.get(pid, {})
-        st = entry.get("status", "unknown")
-        color = STATUS_COLOR.get(st, "#6b7280")
-        map_bt_paths.append({
-            "id": pid, "name": p["name"],
-            "coords": p["coords"], "status": st, "color": color,
-            "data": entry.get("data", {}),
-        })
-
+    map_sensors       = _build_map_sensor_list(all_coords, live_data)
+    map_bt_paths      = _build_map_bt_path_list(all_bt_paths, live_data)
     map_sensors_json  = json.dumps(map_sensors)
     map_bt_paths_json = json.dumps(map_bt_paths)
-
-    # Build per-run sensor status history for map playback (last 20 runs)
-    _run_timeline: dict = {}
-    for s in all_sensors:
-        for h in s["history"]:
-            rat = h["run_at"]
-            if rat not in _run_timeline:
-                _run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
-            _run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
-    _runs_sorted = sorted(_run_timeline.values(), key=lambda r: r["run_at"])
-    history_playback_json = json.dumps(_runs_sorted[-30:])
+    history_playback_json = _build_history_playback(all_sensors)
 
     # Pre-compute group-driven HTML/JS snippets so injection sites stay clean
     _bt_paths_label   = _UI.get("bt_paths_map_label", "Bluetooth Paths")
@@ -1108,25 +1135,9 @@ def generate_report() -> str:
         )
 
     run_time = _to_cyprus(latest_run["run_at"])
+    last_run_utc_iso = latest_run["run_at"]
+    staleness_threshold_hours = _UI.get("staleness_threshold_hours", 3)
 
-    # Staleness: warn if last run was more than 3 hours ago (1.5× the 2h schedule)
-    _last_run_dt = datetime.fromisoformat(latest_run["run_at"].replace("Z", "+00:00"))
-    if _last_run_dt.tzinfo is None:
-        _last_run_dt = _last_run_dt.replace(tzinfo=timezone.utc)
-    _age_hours = (datetime.now(timezone.utc) - _last_run_dt).total_seconds() / 3600
-    stale_banner = (
-        f'<div id="stale-banner" style="background:#7c3aed;color:#fff;text-align:center;'
-        f'padding:8px 16px;font-size:12px;font-weight:500">'
-        f'<i class="ti ti-alert-triangle" style="vertical-align:-2px;margin-right:6px"></i>'
-        f'Data may be outdated — last run was {_age_hours:.0f} hours ago. '
-        f'Monitoring may be disrupted.</div>'
-    ) if _age_hours > _UI.get("staleness_threshold_hours", 3) else ""
-
-    # Chart labels in Cyprus time
-    _chart_label_list = [_to_cyprus(r["run_at"]) for r in chart_runs]
-    chart_labels = json.dumps(_chart_label_list)
-    chart_x_min = json.dumps(_chart_label_list[-30] if len(_chart_label_list) > 30 else _chart_label_list[0])
-    chart_x_max = json.dumps(_chart_label_list[-1] if _chart_label_list else '')
 
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
@@ -1153,7 +1164,6 @@ def generate_report() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="1800">
 <title>{_UI.get('page_title', 'ITS Infrastructure Health')}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -1242,24 +1252,23 @@ def generate_report() -> str:
 <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
 <script>
   (function() {{
-    var secs = 1800;
-    var el = null;
-    function tick() {{
-      if (!el) el = document.getElementById('refresh-countdown');
-      if (el) el.textContent = Math.floor(secs/60) + ':' + ('0' + (secs%60)).slice(-2);
-      if (secs-- <= 0) return;
-      setTimeout(tick, 1000);
+    var lastRun = new Date("{last_run_utc_iso}").getTime();
+    var thresholdMs = {staleness_threshold_hours} * 3600 * 1000;
+    if (Date.now() - lastRun > thresholdMs) {{
+      document.addEventListener('DOMContentLoaded', function() {{
+        var b = document.getElementById('stale-banner');
+        if (b) b.style.display = '';
+      }});
     }}
-    document.addEventListener('DOMContentLoaded', tick);
   }})();
 </script>
 </head>
 <body>
-{stale_banner}
+<div id="stale-banner" style="display:none;background:#7c3aed;color:#fff;text-align:center;padding:8px 16px;font-size:12px;font-weight:500"><i class="ti ti-alert-triangle" style="vertical-align:-2px;margin-right:6px"></i>Data may be outdated — monitoring may be disrupted.</div>
 <header>
   <div>
     <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
-    <div class="meta">Last checked {run_time} Cyprus time &nbsp;·&nbsp; running since {first_run_date} &nbsp;·&nbsp; refreshes in <span id="refresh-countdown">30:00</span></div>
+    <div class="meta">Last checked {run_time} Cyprus time &nbsp;·&nbsp; running since {first_run_date}</div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">
