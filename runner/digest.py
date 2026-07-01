@@ -84,35 +84,67 @@ def fetch_active_sensors():
 
 def fetch_retired_this_week():
     """Return sensors that became inactive in the last 7 days."""
-    conn = get_connection()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    conn = get_connection()
 
-    inactive_sc = conn.execute(
-        "SELECT group_name, sensor_id FROM sensor_coords WHERE active=0"
-    ).fetchall()
+    sensor_rows = conn.execute("""
+        SELECT sc.group_name, sc.sensor_id, MAX(sr.run_at) AS last_seen
+        FROM sensor_coords sc
+        LEFT JOIN sensor_results sr ON sr.group_name = sc.group_name AND sr.sensor_id = sc.sensor_id
+        WHERE sc.active = 0
+        GROUP BY sc.group_name, sc.sensor_id
+        HAVING last_seen >= ?
+    """, (cutoff,)).fetchall()
 
-    retired = []
-    for r in inactive_sc:
-        last = conn.execute(
-            "SELECT MAX(run_at) as last_seen FROM sensor_results WHERE group_name=? AND sensor_id=?",
-            (r["group_name"], r["sensor_id"])
-        ).fetchone()
-        if last and last["last_seen"] and last["last_seen"] >= cutoff:
-            retired.append({"group": r["group_name"], "sensor_id": r["sensor_id"], "last_seen": last["last_seen"][:10]})
-
-    inactive_bt = conn.execute(
-        "SELECT path_id FROM bt_path_coords WHERE active=0"
-    ).fetchall()
-    for r in inactive_bt:
-        last = conn.execute(
-            "SELECT MAX(run_at) as last_seen FROM sensor_results WHERE group_name='Bluetooth Paths' AND sensor_id=?",
-            (r["path_id"],)
-        ).fetchone()
-        if last and last["last_seen"] and last["last_seen"] >= cutoff:
-            retired.append({"group": "Bluetooth Paths", "sensor_id": r["path_id"], "last_seen": last["last_seen"][:10]})
+    bt_rows = conn.execute("""
+        SELECT bt.path_id, MAX(sr.run_at) AS last_seen
+        FROM bt_path_coords bt
+        LEFT JOIN sensor_results sr ON sr.group_name = 'Bluetooth Paths' AND sr.sensor_id = bt.path_id
+        WHERE bt.active = 0
+        GROUP BY bt.path_id
+        HAVING last_seen >= ?
+    """, (cutoff,)).fetchall()
 
     conn.close()
+
+    retired = [
+        {"group": r["group_name"], "sensor_id": r["sensor_id"], "last_seen": r["last_seen"][:10]}
+        for r in sensor_rows
+    ]
+    retired += [
+        {"group": "Bluetooth Paths", "sensor_id": r["path_id"], "last_seen": r["last_seen"][:10]}
+        for r in bt_rows
+    ]
     return retired
+
+
+def _counts(stats):
+    return {
+        "total":        len(stats),
+        "always_on":    sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 100),
+        "healthy":      sum(1 for s in stats if s["this_pct"] is not None and 90 <= s["this_pct"] < 100),
+        "intermittent": sum(1 for s in stats if s["this_pct"] is not None and 70 <= s["this_pct"] < 90),
+        "unstable":     sum(1 for s in stats if s["this_pct"] is not None and 40 <= s["this_pct"] < 70),
+        "critical":     sum(1 for s in stats if s["this_pct"] is not None and 0 < s["this_pct"] < 40),
+        "offline":      sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 0),
+    }
+
+
+def _derive_check_frequency(daily, today):
+    """Estimate the check interval label from the number of runs per sensor this week."""
+    week_days = [(today - timedelta(days=i)).isoformat() for i in range(1, 8)]
+    totals = [
+        sum(days_data.get(d, {}).get("total", 0) for d in week_days)
+        for days_data in daily.values()
+        if any(days_data.get(d, {}).get("total", 0) for d in week_days)
+    ]
+    if not totals:
+        return "periodically"
+    runs_per_day = (sum(totals) / len(totals)) / 7
+    if runs_per_day >= 1:
+        hours = round(24 / runs_per_day)
+        return f"every {hours} hour{'s' if hours != 1 else ''}"
+    return "daily"
 
 
 def build_digest():
@@ -125,7 +157,6 @@ def build_digest():
     active = active_sensors | active_bt
     retired = fetch_retired_this_week()
 
-    # count total runs this week
     conn = get_connection()
     run_count = conn.execute(
         "SELECT COUNT(DISTINCT run_at) FROM sensor_results WHERE run_at >= ?",
@@ -133,23 +164,7 @@ def build_digest():
     ).fetchone()[0]
     conn.close()
 
-    # derive approximate check frequency from this week's run counts
-    this_week_totals = []
-    for key, days_data in daily.items():
-        week_total = sum(days_data.get(d, {}).get("total", 0)
-                        for d in [(today - timedelta(days=i)).isoformat() for i in range(1, 8)])
-        if week_total > 0:
-            this_week_totals.append(week_total)
-    if this_week_totals:
-        avg_runs = sum(this_week_totals) / len(this_week_totals)
-        runs_per_day = avg_runs / 7
-        if runs_per_day >= 1:
-            hours_between = round(24 / runs_per_day)
-            check_freq = f"every {hours_between} hour{'s' if hours_between != 1 else ''}"
-        else:
-            check_freq = "daily"
-    else:
-        check_freq = "periodically"
+    check_freq = _derive_check_frequency(daily, today)
 
     this_week_days = [(week_start      + timedelta(days=i)).isoformat() for i in range(7)]
     prev_week_days = [(prev_week_start + timedelta(days=i)).isoformat() for i in range(7)]
@@ -162,19 +177,17 @@ def build_digest():
             total += s.get("total", 0)
         return _health_pct(good, total)
 
-    sensor_stats = []
-    for key in active:
-        this_pct = week_pct(key, this_week_days)
-        prev_pct = week_pct(key, prev_week_days)
-        if this_pct is None and prev_pct is None:
-            continue
-        sensor_stats.append({
+    sensor_stats = [
+        {
             "group":     key[0],
             "sensor_id": key[1],
             "name":      sensor_names.get(key, str(key[1])),
-            "this_pct":  this_pct,
-            "prev_pct":  prev_pct,
-        })
+            "this_pct":  week_pct(key, this_week_days),
+            "prev_pct":  week_pct(key, prev_week_days),
+        }
+        for key in active
+        if week_pct(key, this_week_days) is not None or week_pct(key, prev_week_days) is not None
+    ]
 
     always_off = sorted(
         [s for s in sensor_stats if s["this_pct"] is not None and s["this_pct"] == 0],
@@ -187,39 +200,25 @@ def build_digest():
          and s["this_pct"] > 0],
         key=lambda x: x["this_pct"]
     )
-    degraded   = sorted(
+    degraded = sorted(
         [s for s in sensor_stats
          if s["this_pct"] is not None and s["prev_pct"] is not None
          and s["this_pct"] < s["prev_pct"] - 15
          and s not in always_off and s not in persistent],
         key=lambda x: x["this_pct"] - x["prev_pct"]
     )
-    recovered  = sorted(
+    recovered = sorted(
         [s for s in sensor_stats
          if s["this_pct"] is not None and s["prev_pct"] is not None
          and s["this_pct"] > s["prev_pct"] + 15],
         key=lambda x: -(x["this_pct"] - x["prev_pct"])
     )
 
-    non_bt_stats   = [s for s in sensor_stats if s["group"] != "Bluetooth Paths"]
-    bt_stats       = [s for s in sensor_stats if s["group"] == "Bluetooth Paths"]
-
-    def _counts(stats):
-        return {
-            "total":        len(stats),
-            "always_on":    sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 100),
-            "healthy":      sum(1 for s in stats if s["this_pct"] is not None and 90 <= s["this_pct"] < 100),
-            "intermittent": sum(1 for s in stats if s["this_pct"] is not None and 70 <= s["this_pct"] < 90),
-            "unstable":     sum(1 for s in stats if s["this_pct"] is not None and 40 <= s["this_pct"] < 70),
-            "critical":     sum(1 for s in stats if s["this_pct"] is not None and 0 < s["this_pct"] < 40),
-            "offline":      sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 0),
-        }
+    non_bt_stats = [s for s in sensor_stats if s["group"] != "Bluetooth Paths"]
+    bt_stats     = [s for s in sensor_stats if s["group"] == "Bluetooth Paths"]
 
     # per-group breakdown (non-BT), preserving natural order
-    group_names = []
-    for s in non_bt_stats:
-        if s["group"] not in group_names:
-            group_names.append(s["group"])
+    group_names = list(dict.fromkeys(s["group"] for s in non_bt_stats))
     groups = {g: _counts([s for s in non_bt_stats if s["group"] == g]) for g in group_names}
 
     return {

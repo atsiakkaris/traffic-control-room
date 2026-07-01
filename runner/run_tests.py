@@ -22,7 +22,6 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Make sure runner/ is on the path when called from repo root
 sys.path.insert(0, str(Path(__file__).parent))
 
 from db import (init_db, insert_run, insert_result, insert_sensor_result,
@@ -42,8 +41,30 @@ log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "endpoints.yaml"
 
-_STATUS_KEY = {"pass": "passed", "fail": "failed", "error": "errored"}
+_STATUS_KEY  = {"pass": "passed", "fail": "failed", "error": "errored"}
 _STATUS_ICON = {"pass": "✓", "fail": "✗", "error": "⚠"}
+
+# Maps coords_extract YAML value → (extract_fn, upsert_fn, retire_fn, entity_label)
+_COORDS_HANDLERS = {
+    "measurement_site": (
+        extract_measurement_site_coords,
+        lambda coords, group: upsert_sensor_coords(group, coords),
+        lambda coords, group: retire_missing_sensors(group, set(coords.keys())),
+        "sensors",
+    ),
+    "vms": (
+        extract_vms_coords,
+        lambda coords, group: upsert_sensor_coords(group, coords),
+        lambda coords, group: retire_missing_sensors(group, set(coords.keys())),
+        "controllers",
+    ),
+    "bt_paths": (
+        extract_bt_path_coords,
+        lambda coords, _group: upsert_bt_path_coords(coords),
+        lambda coords, _group: retire_missing_bt_paths(set(coords.keys())),
+        "paths",
+    ),
+}
 
 
 def load_config():
@@ -84,15 +105,12 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
 
             failures = []
 
-            # Status code check
             if resp.status_code != expected_status:
                 failures.append(f"Expected HTTP {expected_status}, got {resp.status_code}")
 
-            # Response time check
             if elapsed_ms > max_ms:
                 failures.append(f"Response time {elapsed_ms:.0f}ms > {max_ms}ms limit")
 
-            # Domain checks
             for check_name in check_names:
                 fn = REGISTRY.get(check_name)
                 if fn is None:
@@ -112,11 +130,9 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
                 except Exception as e:
                     failures.append(f"{check_name} raised exception: {e}")
 
+            result["status"] = "fail" if failures else "pass"
             if failures:
-                result["status"] = "fail"
                 result["failure_reason"] = " | ".join(failures)
-            else:
-                result["status"] = "pass"
 
             break  # success — no retry needed
 
@@ -137,9 +153,23 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
     return result
 
 
+def _process_coords(coords_type, response_text, group_name, run_status):
+    """Extract, upsert, and retire coordinates for a passed inventory endpoint."""
+    handler = _COORDS_HANDLERS.get(coords_type)
+    if handler is None:
+        return
+    extract_fn, upsert_fn, retire_fn, entity_label = handler
+    coords = extract_fn(response_text)
+    if run_status == "pass" and coords:
+        upsert_fn(coords, group_name)
+        retire_fn(coords, group_name)
+    elif run_status == "pass" and not coords:
+        log.warning("[%s] Inventory passed but returned no %s — skipping retire", group_name, entity_label)
+
+
 def run_all():
     base_url = os.environ.get("BASE_URL", "").strip()
-    swarco = os.environ.get("SWARCO", "").strip()
+    swarco   = os.environ.get("SWARCO", "").strip()
 
     if not base_url or not swarco:
         log.error("BASE_URL and SWARCO must be set as environment variables.")
@@ -150,6 +180,7 @@ def run_all():
 
     run_id = str(uuid.uuid4())
     run_at = datetime.now(timezone.utc).isoformat()
+    live_mode = os.environ.get("LIVE_MODE", "").lower() in ("1", "true", "yes")
 
     log.info("=" * 60)
     log.info("Run ID : %s", run_id)
@@ -181,39 +212,18 @@ def run_all():
                 failure_reason=r["failure_reason"],
                 check_summary=" | ".join(r.get("check_details", [])),
             )
+
             sensor_group = ep.get("sensor_group", group_name)
-            live_mode = os.environ.get("LIVE_MODE", "").lower() in ("1", "true", "yes")
             for sensor_id, s_status in r.get("sensors", {}).items():
                 mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
             # Extract and store coordinates from inventory endpoints.
-            # Only retire missing sensors when the feed explicitly passed — an
-            # empty coord set from a failed fetch must not wipe active sensors.
-            txt = r.get("response_text", "")
+            # Only retire when the feed explicitly passed — an empty coord set from a
+            # failed fetch must not wipe active sensors.
             coords_type = ep.get("coords_extract")
-            if txt and coords_type:
-                if coords_type == "measurement_site":
-                    coords = extract_measurement_site_coords(txt)
-                    if r["status"] == "pass" and coords:
-                        upsert_sensor_coords(group_name, coords)
-                        retire_missing_sensors(group_name, set(coords.keys()))
-                    elif r["status"] == "pass" and not coords:
-                        log.warning("[%s] Inventory passed but returned no sensors — skipping retire", group_name)
-                elif coords_type == "vms":
-                    coords = extract_vms_coords(txt)
-                    if r["status"] == "pass" and coords:
-                        upsert_sensor_coords(group_name, coords)
-                        retire_missing_sensors(group_name, set(coords.keys()))
-                    elif r["status"] == "pass" and not coords:
-                        log.warning("[%s] VMS inventory passed but returned no controllers — skipping retire", group_name)
-                elif coords_type == "bt_paths":
-                    paths = extract_bt_path_coords(txt)
-                    if r["status"] == "pass" and paths:
-                        upsert_bt_path_coords(paths)
-                        retire_missing_bt_paths(set(paths.keys()))
-                    elif r["status"] == "pass" and not paths:
-                        log.warning("[%s] BT paths inventory passed but returned no paths — skipping retire", group_name)
+            if r.get("response_text") and coords_type:
+                _process_coords(coords_type, r["response_text"], group_name, r["status"])
 
             icon = _STATUS_ICON.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])
@@ -221,6 +231,7 @@ def run_all():
                 log.info("     %s", r["failure_reason"])
             for detail in r.get("check_details", []):
                 log.info("     %s", detail)
+            log.info("")
 
             all_results.append({**ep, "group": group_name, **r})
 
@@ -231,11 +242,9 @@ def run_all():
              totals["passed"], totals["failed"], totals["errored"], totals["total"])
     log.info("=" * 60)
 
-    # Generate HTML report
     report_path = generate_report()
     log.info("Report written to %s", report_path)
 
-    # Exit non-zero if any failures (makes GitHub Actions mark the run red)
     if totals["failed"] > 0 or totals["errored"] > 0:
         sys.exit(1)
 

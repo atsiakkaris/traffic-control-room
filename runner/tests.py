@@ -9,14 +9,17 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 
-NS = "q1"  # the namespace prefix used in SWARCO DATEX II feeds
-
-
 def _parse_xml(text):
     try:
         return ET.fromstring(text.strip()), None
     except ET.ParseError as e:
         return None, str(e)
+
+
+def _find_by_local_name(root, local_name):
+    """Find all elements whose local name matches, namespace-agnostic."""
+    lower = local_name.lower()
+    return [el for el in root.iter() if el.tag.split("}")[-1].lower() == lower]
 
 
 # ─── Generic ─────────────────────────────────────────────────────────────────
@@ -37,9 +40,9 @@ def vms_controller_status(response_text: str) -> dict:
 
     controllers = root.findall(".//{*}vmsControllerStatus")
     working, not_working, no_status = [], [], []
-
     sensors_map = {}
     measurements_map = {}
+
     for ctrl in controllers:
         cid_el = ctrl.find("{*}vmsControllerReference")
         cid = cid_el.get("id", "unknown") if cid_el is not None else "unknown"
@@ -55,7 +58,6 @@ def vms_controller_status(response_text: str) -> dict:
             not_working.append(cid)
             sensors_map[cid] = "not_working"
 
-        # Extract text lines from the active VMS message
         lines = [el.text.strip() for el in ctrl.findall(".//{*}textLine/{*}textLine")
                  if el.text and el.text.strip()]
         measurements_map[cid] = {"message": " | ".join(lines) if lines else None}
@@ -65,7 +67,6 @@ def vms_controller_status(response_text: str) -> dict:
         f"Not working: {len(not_working)}" + (f" — IDs: {', '.join(not_working)}" if not_working else ""),
         f"No status: {len(no_status)}" + (f" — {', '.join(no_status)}" if no_status else ""),
     ]
-
     return {
         "passed": True,  # feed delivered data; health shown separately in dashboard
         "detail": " | ".join(detail_lines),
@@ -81,22 +82,16 @@ def predefined_paths_count(response_text: str) -> dict:
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
-    paths = root.findall(".//{*}predefinedLocation")
-    if not paths:
-        paths = [el for el in root.iter() if el.tag.split("}")[-1].lower() == "predefinedlocation"]
-    if not paths:
-        paths = [el for el in root.iter() if "predefinedlocation" in el.tag.split("}")[-1].lower()]
-
+    paths = _find_by_local_name(root, "predefinedLocationReference")
     if not paths:
         child_tags = list({el.tag.split("}")[-1] for el in root.iter()})[:20]
         return {
             "passed": False,
-            "detail": f"No predefinedLocation elements found. Tags in response: {', '.join(child_tags)}"
+            "detail": f"No predefinedLocationReference elements found. Tags in response: {', '.join(child_tags)}"
         }
 
-    # Count unique IDs — each path appears twice in the XML (definition + reference)
     unique_ids = {el.get("id") for el in paths if el.get("id")}
-    count = len(unique_ids) if unique_ids else len(paths) // 2
+    count = len(unique_ids) if unique_ids else len(paths)
     return {
         "passed": count > 0,
         "detail": f"Total predefined paths: {count}"
@@ -110,7 +105,6 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
 
     paths = root.findall(".//{*}predefinedLocationReference")
     total = len(paths)
-
     if total == 0:
         return {"passed": False, "detail": "No predefinedLocationReference elements found"}
 
@@ -123,7 +117,7 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
         ext = path.find(".//{*}_predefinedLocationExtension")
         speed_el = ext.find("obs_speed") if ext is not None else None
         ttime_el = ext.find("obs_t_time") if ext is not None else None
-        spd = _safe_float(speed_el)
+        spd   = _safe_float(speed_el)
         ttime = _safe_float(ttime_el)
 
         if spd and spd > 0:
@@ -135,7 +129,7 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
 
         sensors_map[pid] = "failing" if (not (spd and spd > 0) or not (ttime and ttime > 0)) else "ok"
         measurements_map[pid] = {
-            "speed_kmh": round(spd, 1) if spd is not None else None,
+            "speed_kmh":    round(spd,   1) if spd   is not None else None,
             "travel_time_s": round(ttime, 0) if ttime is not None else None,
         }
 
@@ -165,25 +159,19 @@ def sensor_speed_status(response_text: str) -> dict:
         sid = ref.get("id", "unknown") if ref is not None else "unknown"
 
         speed_val = None
-        flow_val = None
+        flow_val  = None
 
         for basic in sensor.findall(".//{*}basicData"):
             xsi_type = basic.get("{http://www.w3.org/2001/XMLSchema-instance}type", "")
-
             if "TrafficSpeed" in xsi_type and speed_val is None:
-                speed_el = basic.find(".//{*}speed")
-                speed_val = _safe_float(speed_el)
-
+                speed_val = _safe_float(basic.find(".//{*}speed"))
             if "TrafficFlow" in xsi_type and flow_val is None:
-                flow_el = basic.find(".//{*}vehicleFlowRate")
-                flow_val = _safe_float(flow_el)
+                flow_val = _safe_float(basic.find(".//{*}vehicleFlowRate"))
 
-        # Accumulate total flow across all sensors (ignore negative/malfunction values)
         if flow_val is not None and flow_val >= 0:
             total_flow += flow_val
             flow_count += 1
 
-        # Categorise by speed
         if speed_val is None:
             no_measurement.append(sid)
             sensor_status = "no_measurement"
@@ -196,15 +184,15 @@ def sensor_speed_status(response_text: str) -> dict:
         else:
             working.append(sid)
             sensor_status = "working"
+
         sensors_map[sid] = sensor_status
         measurements_map[sid] = {
-            "speed_kmh": round(speed_val, 1) if speed_val is not None else None,
-            "flow_veh_hr": round(flow_val, 0) if flow_val is not None else None,
+            "speed_kmh":    round(speed_val, 1) if speed_val is not None else None,
+            "flow_veh_hr":  round(flow_val,  0) if flow_val  is not None else None,
         }
 
-    total = len(sensors)
+    total    = len(sensors)
     avg_flow = round(total_flow / flow_count, 1) if flow_count > 0 else 0
-
     detail_parts = [
         f"Working: {len(working)}/{total}",
         f"No traffic (speed=0): {len(no_traffic)}",
@@ -221,11 +209,10 @@ def bt_site_count(response_text: str) -> dict:
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
-    sites = root.findall(".//{*}measurementSite")
-    count = len(sites)
-    passed = count > 0
-    detail = f"{count} Bluetooth device(s) reported by API" if passed else "No measurementSite elements found"
-    return {"passed": passed, "detail": detail, "count": count}
+    count = len(root.findall(".//{*}measurementSite"))
+    if count > 0:
+        return {"passed": True, "detail": f"{count} Bluetooth device(s) reported by API", "count": count}
+    return {"passed": False, "detail": "No measurementSite elements found", "count": 0}
 
 
 # ─── Data freshness ──────────────────────────────────────────────────────────
@@ -242,11 +229,10 @@ def feed_freshness(response_text: str, freshness_minutes: int = DEFAULT_FRESHNES
         return {"passed": False, "detail": "No publicationTime element found in feed"}
 
     try:
-        pub_dt = datetime.fromisoformat(pub_el.text.strip().replace("Z", "+00:00"))
+        pub_dt  = datetime.fromisoformat(pub_el.text.strip().replace("Z", "+00:00"))
         age_min = int((datetime.now(timezone.utc) - pub_dt).total_seconds() / 60)
-        passed = age_min <= freshness_minutes
-        label = f"Feed is {age_min} min old (limit: {freshness_minutes} min)"
-        return {"passed": passed, "detail": label}
+        passed  = age_min <= freshness_minutes
+        return {"passed": passed, "detail": f"Feed is {age_min} min old (limit: {freshness_minutes} min)"}
     except Exception as e:
         return {"passed": False, "detail": f"Could not parse publicationTime: {e}"}
 
@@ -262,19 +248,13 @@ def _safe_float(el):
         return None
 
 
-def _extract_namespaces(text):
-    """Return a dict of prefix→uri from the root element."""
-    import re
-    return dict(re.findall(r'xmlns:?(\w*)=["\']([^"\']+)["\']', text[:2000]))
-
-
 # Registry: maps check name (from YAML) → function
 REGISTRY = {
-    "valid_xml": valid_xml,
-    "feed_freshness": feed_freshness,
-    "vms_controller_status": vms_controller_status,
-    "predefined_paths_count": predefined_paths_count,
+    "valid_xml":                    valid_xml,
+    "feed_freshness":               feed_freshness,
+    "vms_controller_status":        vms_controller_status,
+    "predefined_paths_count":       predefined_paths_count,
     "bt_paths_speed_and_traveltime": bt_paths_speed_and_traveltime,
-    "bt_site_count": bt_site_count,
-    "sensor_speed_status": sensor_speed_status,
+    "bt_site_count":                bt_site_count,
+    "sensor_speed_status":          sensor_speed_status,
 }
