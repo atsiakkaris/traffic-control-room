@@ -980,7 +980,7 @@ def generate_report() -> str:
                     no_measurement_ids = sensor_data.get("no_measurement", [])
                     extra += f"""
                     <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
-                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detection (SWARCO) — {d['total']} total</div>
+                      <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detection Units — {d['total']} total</div>
                       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
                         <div style="flex:1;height:6px;background:var(--color-border-tertiary);border-radius:3px">
                           <div style="width:{td_pct}%;height:6px;background:{bar_color};border-radius:3px"></div>
@@ -1136,7 +1136,7 @@ def generate_report() -> str:
 
     run_time = _to_cyprus(latest_run["run_at"])
     last_run_utc_iso = latest_run["run_at"]
-    staleness_threshold_hours = _UI.get("staleness_threshold_hours", 3)
+    staleness_threshold_hours = _UI.get("staleness_threshold_hours", 9)
 
 
     # Per-panel progress bar percentages
@@ -1311,7 +1311,7 @@ def generate_report() -> str:
       <div>
         <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">VMS statuses</div>
         <div style="margin-bottom:4px"><span style="color:#1d9e75;font-weight:500">Working</span> — Controller is active and responding correctly.</div>
-        <div style="margin-bottom:4px"><span style="color:#e24b4a;font-weight:500">Not working</span> — Controller explicitly reported a fault; sign may be physically damaged.</div>
+        <div style="margin-bottom:4px"><span style="color:#e24b4a;font-weight:500">Not working</span> — Controller explicitly reported a fault; sign may be offline or damaged.</div>
         <div style="margin-bottom:4px"><span style="color:#9ca3af;font-weight:500">No status</span> — Controller exists in the system but sent no status in this run.</div>
       </div>
 
@@ -1324,7 +1324,7 @@ def generate_report() -> str:
       <div style="grid-column:span 2">
         <div style="font-weight:600;color:var(--color-text-primary);margin-bottom:6px">Sensor stability panel</div>
         <div style="margin-bottom:4px">Each row shows a sensor's last 20 checks as coloured bars — <span style="color:#1d9e75;font-weight:500">green</span> = good, <span style="color:#e24b4a;font-weight:500">red</span> = fault, <span style="color:#9ca3af;font-weight:500">grey</span> = no data or no traffic. Hover over a bar to see the exact timestamp and status.</div>
-        <div>The <strong>health badge</strong> (e.g. Healthy 95%) shows the percentage of checks that returned a good status over the past 30 days. Click any row to expand a daily trend chart.</div>
+        <div>The <strong>health badge</strong> (e.g. Healthy 95%) shows the percentage of all recorded checks that returned a good status since monitoring began. Click any row to expand a daily trend chart.</div>
       </div>
     </div>
   </details>
@@ -1384,8 +1384,8 @@ def generate_report() -> str:
     <div class="panel-body" id="b-p-history">
       <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 12px">
         Each row is one automated test run. The percentage columns show how many sensors in that group
-        returned a healthy status during that run. <strong>API response</strong> is the time in milliseconds
-        the server took to respond — high values may indicate server load issues.
+        returned a healthy status during that run. <strong>API response</strong> shows whether all endpoints
+        were reachable during that run.
       </p>
       <table>
         <thead><tr><th>Time (Cyprus)</th>{history_th_cells}<th>API response</th></tr></thead>

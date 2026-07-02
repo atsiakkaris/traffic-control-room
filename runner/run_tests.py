@@ -21,6 +21,7 @@ import httpx
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -32,11 +33,15 @@ from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+class _CyprusFormatter(logging.Formatter):
+    _tz = ZoneInfo("Asia/Nicosia")
+    def formatTime(self, record, datefmt=None):
+        ct = datetime.fromtimestamp(record.created, tz=self._tz)
+        return ct.strftime(datefmt or "%H:%M:%S")
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(_CyprusFormatter("%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%H:%M:%S"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "endpoints.yaml"

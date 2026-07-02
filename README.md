@@ -90,7 +90,7 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 ```
 ├── config/
 │   ├── endpoints.yaml          ← Endpoint definitions and checks
-│   └── ui_labels.yaml          ← UI label overrides (rename panels, columns, groups without touching code)
+│   └── ui_labels.yaml          ← UI label overrides and staleness threshold (rename panels, columns, groups without touching code)
 ├── runner/
 │   ├── run_tests.py            ← Entry point
 │   ├── tests.py                ← XML assertion logic per check type
