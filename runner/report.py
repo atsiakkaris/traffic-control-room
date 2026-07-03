@@ -9,10 +9,8 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from zoneinfo import ZoneInfo
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history
-
-CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
+from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for
 
 # Load UI labels from config — falls back to defaults if file is missing
 _LABELS_PATH    = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
@@ -141,8 +139,6 @@ STATUS_TOOLTIP = {
     "missing":        "Sensor was expected in the live feed based on the inventory, but was not present in this run.",
     "stale":          "The feed's publication timestamp is older than expected. Data may not reflect current conditions.",
 }
-
-GOOD_STATUSES = {"working", "ok"}
 
 CHECK_DESCRIPTION = {
     "Bluetooth Inventory":        "Checks for a valid response and reports the total device count.",
@@ -335,18 +331,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
         pct = round(good / total * 100) if total else 0
 
-        if pct == 100:
-            badge_bg, badge_color, badge_label, badge_tip = "#e1f5ee", "#085041", "Always on",   "100% of runs good"
-        elif pct >= 90:
-            badge_bg, badge_color, badge_label, badge_tip = "#c0dd97", "#27500a", "Healthy",     "90–99% of runs good"
-        elif pct >= 70:
-            badge_bg, badge_color, badge_label, badge_tip = "#faeeda", "#633806", "Intermittent","70–89% of runs good"
-        elif pct >= 40:
-            badge_bg, badge_color, badge_label, badge_tip = "#fac775", "#412402", "Unstable",    "40–69% of runs good"
-        elif pct > 0:
-            badge_bg, badge_color, badge_label, badge_tip = "#f09595", "#501313", "Critical",    "1–39% of runs good"
-        else:
-            badge_bg, badge_color, badge_label, badge_tip = "#e24b4a", "#ffffff", "Always off",  "0% of runs good"
+        tier = tier_for(pct)
+        badge_bg, badge_color, badge_label, badge_tip = tier.bg, tier.fg, tier.label, tier.tooltip
 
         # Sparkline: last 20 runs as tiny squares with rich tooltips
         sparks = ""

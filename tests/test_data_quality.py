@@ -13,7 +13,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch, call
+from unittest.mock import Mock
 
 import pytest
 
@@ -65,41 +65,59 @@ def test_fetch_sensor_ids_deduplicates(db):
     assert db.fetch_sensor_ids_for_run(run_id, "Traffic Detection") == {"99"}
 
 
-# ── retire_missing_sensors guard ─────────────────────────────────────────────
+# ── _process_coords retire guard ─────────────────────────────────────────────
+#
+# These call the real run_tests._process_coords, replacing the handler entry
+# with mocks so we can observe whether upsert/retire actually fire.
 
-def test_retire_not_called_when_feed_fails(db):
-    """When inventory status is 'fail', retire_missing_sensors must not be called."""
-    with patch("db.retire_missing_sensors") as mock_retire:
-        r_status = "fail"
-        coords = {}  # empty because feed failed
-        if r_status == "pass" and coords:
-            db.upsert_sensor_coords("Traffic Detection", coords)
-            db.retire_missing_sensors("Traffic Detection", set(coords.keys()))
-        mock_retire.assert_not_called()
+def _install_mock_handler(monkeypatch, coords):
+    """Replace the measurement_site handler; return (upsert_mock, retire_mock)."""
+    import run_tests
+    upsert = Mock()
+    retire = Mock()
+    monkeypatch.setitem(
+        run_tests._COORDS_HANDLERS, "measurement_site",
+        (lambda text: coords,
+         lambda c, g: upsert(g, c),
+         lambda c, g: retire(g, set(c.keys())),
+         "sensors"),
+    )
+    return run_tests, upsert, retire
 
 
-def test_retire_called_when_feed_passes_with_sensors(db):
-    """When inventory passes and returns sensors, retire should be called."""
+def test_retire_not_called_when_feed_fails(monkeypatch):
+    """When inventory status is 'fail', neither upsert nor retire may run."""
     coords = {"10": {"lat": 34.9, "lon": 33.0, "name": "A"}}
-    r_status = "pass"
+    run_tests, upsert, retire = _install_mock_handler(monkeypatch, coords)
 
-    with patch("db.retire_missing_sensors") as mock_retire:
-        with patch("db.upsert_sensor_coords"):
-            if r_status == "pass" and coords:
-                db.upsert_sensor_coords("Traffic Detection", coords)
-                db.retire_missing_sensors("Traffic Detection", set(coords.keys()))
-            mock_retire.assert_called_once_with("Traffic Detection", {"10"})
+    run_tests._process_coords("measurement_site", "<xml/>", "Traffic Detection", "fail")
+
+    upsert.assert_not_called()
+    retire.assert_not_called()
 
 
-def test_retire_not_called_when_feed_passes_with_zero_sensors(db):
-    """When inventory passes but returns no sensors, retire must be skipped."""
-    coords = {}
-    r_status = "pass"
+def test_retire_called_when_feed_passes_with_sensors(monkeypatch):
+    """When inventory passes and returns sensors, upsert and retire both run."""
+    coords = {"10": {"lat": 34.9, "lon": 33.0, "name": "A"}}
+    run_tests, upsert, retire = _install_mock_handler(monkeypatch, coords)
 
-    with patch("db.retire_missing_sensors") as mock_retire:
-        if r_status == "pass" and coords:
-            db.upsert_sensor_coords("Traffic Detection", coords)
-            db.retire_missing_sensors("Traffic Detection", set(coords.keys()))
-        elif r_status == "pass" and not coords:
-            pass  # warning would be logged here
-        mock_retire.assert_not_called()
+    run_tests._process_coords("measurement_site", "<xml/>", "Traffic Detection", "pass")
+
+    upsert.assert_called_once_with("Traffic Detection", coords)
+    retire.assert_called_once_with("Traffic Detection", {"10"})
+
+
+def test_retire_not_called_when_feed_passes_with_zero_sensors(monkeypatch):
+    """When inventory passes but extraction returns nothing, retire must be skipped."""
+    run_tests, upsert, retire = _install_mock_handler(monkeypatch, {})
+
+    run_tests._process_coords("measurement_site", "<xml/>", "Traffic Detection", "pass")
+
+    upsert.assert_not_called()
+    retire.assert_not_called()
+
+
+def test_unknown_coords_type_is_noop(monkeypatch):
+    """An unregistered coords_extract value must not raise."""
+    import run_tests
+    run_tests._process_coords("nonexistent_type", "<xml/>", "Traffic Detection", "pass")

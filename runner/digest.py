@@ -6,10 +6,10 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db import get_connection
+from stability import CYPRUS_TZ, GOOD_STATUSES, STABILITY_TIERS, tier_for, health_pct
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,31 +18,14 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
-GOOD_STATUSES = {"working", "ok"}
 DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/reports/latest.html"
-
-
-def _health_pct(good, total):
-    return round(good / total * 100) if total else None
 
 
 def _badge(pct):
     if pct is None:
         return '<span style="background:#e5e7eb;color:#6b7280;padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">No data</span>'
-    if pct == 100:
-        bg, fg, label = "#e1f5ee", "#085041", "Always on"
-    elif pct >= 90:
-        bg, fg, label = "#c0dd97", "#27500a", "Healthy"
-    elif pct >= 70:
-        bg, fg, label = "#faeeda", "#633806", "Intermittent"
-    elif pct >= 40:
-        bg, fg, label = "#fac775", "#412402", "Unstable"
-    elif pct > 0:
-        bg, fg, label = "#f09595", "#501313", "Critical"
-    else:
-        bg, fg, label = "#e24b4a", "#ffffff", "Always off"
-    return f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">{label} ({pct}%)</span>'
+    tier = tier_for(pct)
+    return f'<span style="background:{tier.bg};color:{tier.fg};padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">{tier.label} ({pct}%)</span>'
 
 
 def fetch_sensor_health_by_day(days_back):
@@ -119,15 +102,12 @@ def fetch_retired_this_week():
 
 
 def _counts(stats):
-    return {
-        "total":        len(stats),
-        "always_on":    sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 100),
-        "healthy":      sum(1 for s in stats if s["this_pct"] is not None and 90 <= s["this_pct"] < 100),
-        "intermittent": sum(1 for s in stats if s["this_pct"] is not None and 70 <= s["this_pct"] < 90),
-        "unstable":     sum(1 for s in stats if s["this_pct"] is not None and 40 <= s["this_pct"] < 70),
-        "critical":     sum(1 for s in stats if s["this_pct"] is not None and 0 < s["this_pct"] < 40),
-        "offline":      sum(1 for s in stats if s["this_pct"] is not None and s["this_pct"] == 0),
-    }
+    counts = {"total": len(stats)}
+    counts.update({tier.key: 0 for tier in STABILITY_TIERS})
+    for s in stats:
+        if s["this_pct"] is not None:
+            counts[tier_for(s["this_pct"]).key] += 1
+    return counts
 
 
 def _derive_check_frequency(daily, today):
@@ -175,7 +155,7 @@ def build_digest():
             s = daily.get(key, {}).get(d, {})
             good  += s.get("good", 0)
             total += s.get("total", 0)
-        return _health_pct(good, total)
+        return health_pct(good, total)
 
     sensor_stats = [
         {
