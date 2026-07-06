@@ -18,8 +18,8 @@ Tier = namedtuple("Tier", ["key", "label", "min_pct", "bg", "fg", "tooltip"])
 # Ordered highest tier first; tier_for() returns the first tier whose
 # min_pct the (integer) percentage meets. 100 and 0 are exact by construction.
 STABILITY_TIERS = [
-    Tier("always_on",    "Always on",    100, "#e1f5ee", "#085041", "100% of runs good"),
-    Tier("healthy",      "Healthy",       90, "#c0dd97", "#27500a", "90–99% of runs good"),
+    Tier("always_on",    "Always on",    99, "#e1f5ee", "#085041", "99% of runs good"),
+    Tier("healthy",      "Healthy",       90, "#c0dd97", "#27500a", "90–98% of runs good"),
     Tier("intermittent", "Intermittent",  70, "#faeeda", "#633806", "70–89% of runs good"),
     Tier("unstable",     "Unstable",      40, "#fac775", "#412402", "40–69% of runs good"),
     Tier("critical",     "Critical",       1, "#f09595", "#501313", "1–39% of runs good"),
