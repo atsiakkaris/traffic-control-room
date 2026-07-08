@@ -412,11 +412,15 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         else:
             sid_cell = display_sensor_id
 
-        # Project + accountability — who owns this sensor, so a failure has an owner to contact
+        # Project + accountability — who owns this sensor, so a failure has an owner to contact.
+        # Bluetooth paths are combinations of sensors, not owned equipment, so ownership
+        # doesn't apply to them at all.
         proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
         proj_name = proj_info["project"] if proj_info else None
         proj_acct = project_acct.get(proj_name, "supported") if proj_name else None
-        if proj_name and proj_acct == "out_of_support":
+        if s["group_name"] in _NON_OWNED_GROUPS:
+            project_cell = '<span title="Bluetooth paths are sensor combinations, not owned equipment" style="font-size:11px;color:#6b7280;cursor:help">n/a</span>'
+        elif proj_name and proj_acct == "out_of_support":
             project_cell = f'<span title="Out of support — failure expected, not actionable" style="font-size:11px;color:#7f8c8d;cursor:help">{proj_name}</span>'
         elif proj_name:
             project_cell = f'<span style="font-size:11px;color:var(--color-text-secondary)">{proj_name}</span>'
@@ -642,6 +646,10 @@ def _sensor_display_name(group_name, sensor_id, bt_path_names, all_sensor_coords
 # Tiers that mean a sensor needs attention: Unstable + Critical + Always off (< 70%).
 _ATTENTION_MAX_PCT = 70
 
+# Groups that are not individually-owned equipment and so have no project.
+# Bluetooth "paths" are computed from pairs of BT sensors, not physical devices.
+_NON_OWNED_GROUPS = {"Bluetooth Paths"}
+
 
 def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, sensor_projects, project_acct):
     """Group failing sensors (< 70% uptime) by project so the team can see who
@@ -655,6 +663,8 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
     # Collect problem sensors, bucketed by project name (None -> "Unassigned")
     buckets = {}   # project_name -> {"acct": str, "sensors": [ ... ]}
     for s in sensors:
+        if s["group_name"] in _NON_OWNED_GROUPS:
+            continue  # BT paths are sensor combinations, not owned equipment
         history = s["history"]
         total = len(history)
         if not total:
