@@ -358,15 +358,15 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         tier = tier_for(pct)
         badge_bg, badge_color, badge_label, badge_tip = tier.bg, tier.fg, tier.label, tier.tooltip
 
-        # Awaiting power: not yet electrified, so not expected to work. Override
-        # the health badge with a neutral one and mark the row so it can be
-        # excluded from the panel's health bar and sorting.
-        awaiting = _is_awaiting_power(sensor_projects, s["group_name"], s["sensor_id"])
-        if awaiting:
+        # Awaiting power / decommissioned: not expected to work. Override the
+        # health badge with a neutral one and mark the row so it can be excluded
+        # from the panel's health bar and sorting.
+        commissioning = _commissioning(sensor_projects, s["group_name"], s["sensor_id"])
+        excluded = commissioning in _EXCLUDED_COMMISSIONING
+        if excluded:
             badge_bg, badge_color = "#e5e7eb", "#6b7280"
-            badge_label = _AWAITING_POWER_LABEL
-            badge_tip = ("Marked pending power connection in the reference sheet — "
-                         "not expected to work yet, excluded from health statistics.")
+            badge_label = _COMMISSIONING_LABEL[commissioning]
+            badge_tip = _COMMISSIONING_TIP[commissioning]
 
         # Sparkline: last 20 runs as tiny squares with rich tooltips
         sparks = ""
@@ -441,7 +441,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         composite_id = f"{s['group_name']}|{s['sensor_id']}"
         safe_sid = composite_id.replace("'", "\\'")
         rows += f"""
-        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-pct="{'' if awaiting else pct}" data-awaiting="{'1' if awaiting else '0'}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
+        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-pct="{'' if excluded else pct}" data-awaiting="{'1' if excluded else '0'}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
           <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
@@ -473,7 +473,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     # excluded — they aren't expected to work, so they shouldn't drag the bar down.
     group_stats = {"all": {"good": 0, "total": 0}}
     for s in sensors:
-        if _is_awaiting_power(sensor_projects, s["group_name"], s["sensor_id"]):
+        if _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"]):
             continue
         g = s["group_name"]
         last_status = s["history"][-1]["status"] if s["history"] else "unknown"
@@ -663,15 +663,48 @@ _ATTENTION_MAX_PCT = 70
 # Bluetooth "paths" are computed from pairs of BT sensors, not physical devices.
 _NON_OWNED_GROUPS = {"Bluetooth Paths"}
 
-_AWAITING_POWER_LABEL = "Awaiting power"
+# Commissioning states that mean a sensor isn't expected to be working, so it's
+# excluded from health statistics and shown with a distinct neutral badge.
+_COMMISSIONING_LABEL = {
+    "not_electrified": "Awaiting power",
+    "decommissioned":  "Decommissioned",
+}
+_COMMISSIONING_TIP = {
+    "not_electrified": ("Marked pending power connection in the reference sheet — "
+                        "not expected to work yet, excluded from health statistics."),
+    "decommissioned":  ("Marked inactive / decommissioned in the reference sheet — "
+                        "excluded from health statistics."),
+}
+_EXCLUDED_COMMISSIONING = set(_COMMISSIONING_LABEL)
 
 
-def _is_awaiting_power(sensor_projects, group_name, sensor_id):
-    """True if the reference sheet marks this sensor as not yet electrified /
-    pending power. Such sensors are not expected to work and are excluded from
-    health statistics until their status is set back to active."""
+def _commissioning(sensor_projects, group_name, sensor_id):
+    """Commissioning state for a sensor: 'active' (default), 'not_electrified',
+    or 'decommissioned'. The latter two are excluded from health statistics."""
     info = (sensor_projects or {}).get(group_name, {}).get(sensor_id)
-    return bool(info) and info.get("commissioning") == "not_electrified"
+    return info.get("commissioning", "active") if info else "active"
+
+
+def _is_excluded_commissioning(sensor_projects, group_name, sensor_id):
+    """True if the sensor should be left out of health statistics because it is
+    awaiting power or decommissioned (not expected to be working)."""
+    return _commissioning(sensor_projects, group_name, sensor_id) in _EXCLUDED_COMMISSIONING
+
+
+def _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group):
+    """Grey '· N awaiting power · M decommissioned' suffix for a group card,
+    naming the sensors excluded from that group's working ratio."""
+    parts = []
+    aw = awaiting_by_group.get(group_name, 0)
+    de = decommissioned_by_group.get(group_name, 0)
+    if aw:
+        parts.append(f"{aw} awaiting power")
+    if de:
+        parts.append(f"{de} decommissioned")
+    if not parts:
+        return ""
+    return (f' <span title="Excluded from the working ratio" '
+            f'style="font-size:11px;color:#6b7280">· {" · ".join(parts)}</span>')
 
 
 def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, sensor_projects, project_acct):
@@ -688,8 +721,8 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
     for s in sensors:
         if s["group_name"] in _NON_OWNED_GROUPS:
             continue  # BT paths are sensor combinations, not owned equipment
-        if _is_awaiting_power(sensor_projects, s["group_name"], s["sensor_id"]):
-            continue  # not yet electrified — not a fault
+        if _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"]):
+            continue  # awaiting power or decommissioned — not a fault
         history = s["history"]
         total = len(history)
         if not total:
@@ -850,7 +883,9 @@ def _build_map_sensor_list(all_coords, live_data, sensor_projects=None):
             else:
                 display_name = c["name"]
             proj_info = sensor_projects.get(group_name, {}).get(sid)
-            awaiting = bool(proj_info) and proj_info.get("commissioning") == "not_electrified"
+            comm = proj_info.get("commissioning", "active") if proj_info else "active"
+            comm_label = {"not_electrified": "Awaiting power — not yet electrified",
+                          "decommissioned": "Decommissioned"}.get(comm)
             sensors.append({
                 "id": sid, "group": group_name,
                 "group_display": GROUP_DISPLAY.get(group_name, group_name),
@@ -858,10 +893,10 @@ def _build_map_sensor_list(all_coords, live_data, sensor_projects=None):
                 "lat": c["lat"], "lon": c["lon"],
                 "status": st,
                 "label": STATUS_LABEL.get(st, "Unknown"),
-                "color": "#9ca3af" if awaiting else STATUS_COLOR.get(st, "#6b7280"),
+                "color": "#9ca3af" if comm_label else STATUS_COLOR.get(st, "#6b7280"),
                 "data": entry.get("data", {}),
                 "project": proj_info["project"] if proj_info else None,
-                "awaiting": awaiting,
+                "comm_label": comm_label,
             })
     return sensors
 
@@ -935,13 +970,25 @@ def generate_report() -> str:
     # stability panel, map pop-ups, and the "attention needed" rollup.
     sensor_projects = fetch_sensor_projects()
     project_acct    = _load_project_accountability()
-    # Per-group count of sensors awaiting power (not yet electrified). These are
-    # excluded from health stats and surfaced separately in the group cards.
+    # Per-group counts of sensors excluded from health stats, by reason. Surfaced
+    # separately in the group cards so the reader sees why the live total is lower.
     awaiting_by_group = {}
+    decommissioned_by_group = {}
     for grp, sdict in sensor_projects.items():
-        n = sum(1 for info in sdict.values() if info.get("commissioning") == "not_electrified")
-        if n:
-            awaiting_by_group[grp] = n
+        aw = sum(1 for info in sdict.values() if info.get("commissioning") == "not_electrified")
+        de = sum(1 for info in sdict.values() if info.get("commissioning") == "decommissioned")
+        if aw:
+            awaiting_by_group[grp] = aw
+        if de:
+            decommissioned_by_group[grp] = de
+
+    def _live_total(group_name, reported_total, working):
+        """Reported group total minus its awaiting-power / decommissioned sensors,
+        so the working ratio covers only sensors expected to work. Clamped to at
+        least `working` — snapshot skew between the test tally and the persisted
+        commissioning counts must never make working exceed the denominator."""
+        excluded = awaiting_by_group.get(group_name, 0) + decommissioned_by_group.get(group_name, 0)
+        return max(reported_total - excluded, working)
 
 
     # Build group status cards
@@ -1060,26 +1107,22 @@ def generate_report() -> str:
             elif "sensor_speed_status" in cs:
                 m = re.search(r"Working: (\d+)/(\d+)", cs)
                 if m:
-                    awaiting = awaiting_by_group.get(group_name, 0)
-                    live_total = max(int(m.group(2)) - awaiting, 0)
-                    pct = int(m.group(1)) / live_total * 100 if live_total else 0
-                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{live_total} working</span>'
-                    if awaiting:
-                        name_suffix += (f' <span title="Not yet electrified — excluded from the ratio" '
-                                        f'style="font-size:11px;color:#6b7280">· {awaiting} awaiting power</span>')
+                    working = int(m.group(1))
+                    live_total = _live_total(group_name, int(m.group(2)), working)
+                    pct = working / live_total * 100 if live_total else 0
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
+                    name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
             elif "vms_controller_status" in cs:
                 w = re.search(r"Working: (\d+)", cs)
                 nw = re.search(r"Not working: (\d+)", cs)
                 ns = re.search(r"No status: (\d+)", cs)
                 if w:
-                    total = int(w.group(1)) + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
-                    awaiting = awaiting_by_group.get(group_name, 0)
-                    live_total = max(total - awaiting, 0)  # exclude not-yet-electrified from the ratio
-                    pct = int(w.group(1)) / live_total * 100 if live_total else 0
-                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {w.group(1)}/{live_total} working</span>'
-                    if awaiting:
-                        name_suffix += (f' <span title="Not yet electrified — excluded from the ratio" '
-                                        f'style="font-size:11px;color:#6b7280">· {awaiting} awaiting power</span>')
+                    working = int(w.group(1))
+                    total = working + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
+                    live_total = _live_total(group_name, total, working)
+                    pct = working / live_total * 100 if live_total else 0
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
+                    name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
             elif "bt_paths_speed_and_traveltime" in cs:
                 m = re.search(r"Speed OK: (\d+)/(\d+)", cs)
                 if m:
@@ -1349,7 +1392,7 @@ def generate_report() -> str:
     history_bar_color = _health_color(history_pct)
 
     _counted = [s for s in all_sensors
-                if not _is_awaiting_power(sensor_projects, s["group_name"], s["sensor_id"])]
+                if not _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"])]
     sensor_good = sum(1 for s in _counted if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
     sensor_total_count = len(_counted) or 1
     sensor_pct = round(sensor_good / sensor_total_count * 100)
@@ -1813,8 +1856,8 @@ function makeMarker(s) {
   if (s.group === 'VMS') {
     dataRows += popRow('Message', d.message || null);
   }
-  var statusCell = s.awaiting
-    ? popRow('Status', 'Awaiting power — not yet electrified', '#6b7280')
+  var statusCell = s.comm_label
+    ? popRow('Status', s.comm_label, '#6b7280')
     : popRow('Status', STATUS_LABELS[s.status]||s.status, s.color);
   var rows = popRow('ID', s.id)+popRow('Group', s.group_display||s.group)+
              popRow('Project', s.project || 'Unassigned', s.project?null:'#c0392b')+

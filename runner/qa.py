@@ -255,16 +255,16 @@ def _parse_rows(raw_rows):
         commissioning = 'active'
         if status_col:
             status_val = row.get(status_col, '').strip().lower()
-            # Not-electrified / awaiting-power rows are KEPT (so they still match an
-            # API sensor and carry the state through), just flagged. Truly inactive
-            # rows (removed/decommissioned/…) are dropped entirely.
-            # Substring match here so "pending power" also catches "pending power
-            # connection" etc.; _INACTIVE_VALUES stays exact (its values are short).
+            # Not-electrified and inactive rows are both KEPT (so they still match
+            # their API sensor and carry the state through), just flagged — the
+            # dashboard excludes both from health stats. Substring match for
+            # not-electrified so "pending power" catches "pending power connection";
+            # _INACTIVE_VALUES stays exact (its values are short).
             if any(k in status_val for k in _NOT_ELECTRIFIED):
                 not_electrified += 1
                 commissioning = 'not_electrified'
             elif status_val in _INACTIVE_VALUES:
-                continue
+                commissioning = 'decommissioned'
         # Prefer separate lat/lon columns over combined DMS column
         if lat_col and lon_col:
             try:
