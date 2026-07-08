@@ -1537,6 +1537,16 @@ def generate_report() -> str:
 </div><!-- end left column -->
 <div class="col-right">
 
+  <div class="panel" id="p-accountability">
+    <div class="panel-header" onclick="togglePanel('p-accountability')">
+      <span class="panel-title">Attention needed, by project</span>
+      <div class="panel-chevron open" id="c-p-accountability"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-body" id="b-p-accountability">
+      {accountability_html}
+    </div>
+  </div>
+
   <div class="panel" id="p-sensors">
     <div class="panel-header" onclick="togglePanel('p-sensors')">
       <span class="panel-title">{_lbl('panels', 'stability', 'Sensor stability')}</span>
@@ -1545,16 +1555,6 @@ def generate_report() -> str:
     <div class="panel-bar" id="sensorBarWrap" title="{sensor_pct}% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
     <div class="panel-body" id="b-p-sensors" style="overflow-x:auto">
       {sensor_stability_html}
-    </div>
-  </div>
-
-  <div class="panel" id="p-accountability">
-    <div class="panel-header" onclick="togglePanel('p-accountability')">
-      <span class="panel-title">Attention needed, by project</span>
-      <div class="panel-chevron open" id="c-p-accountability"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
-    </div>
-    <div class="panel-body" id="b-p-accountability">
-      {accountability_html}
     </div>
   </div>
 
