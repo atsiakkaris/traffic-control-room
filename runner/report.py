@@ -624,6 +624,115 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     </script>"""
 
 
+def _sensor_display_name(group_name, sensor_id, bt_path_names, all_sensor_coords):
+    """Human-readable sensor label, matching the stability panel's logic."""
+    if group_name == "Bluetooth Paths":
+        return bt_path_names.get(sensor_id, sensor_id)
+    if group_name == "Traffic Detection":
+        info = all_sensor_coords.get("Traffic Detection", {}).get(sensor_id, {})
+        sc, nm = info.get("site_code"), info.get("name", sensor_id)
+        return f"{sc} ({nm})" if sc else nm
+    if group_name == "VMS":
+        info = all_sensor_coords.get("VMS", {}).get(sensor_id, {})
+        nm = info.get("name", "")
+        return f"{nm} ({sensor_id})" if nm and nm != sensor_id else sensor_id
+    return sensor_id
+
+
+# Tiers that mean a sensor needs attention: Unstable + Critical + Always off (< 70%).
+_ATTENTION_MAX_PCT = 70
+
+
+def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, sensor_projects, project_acct):
+    """Group failing sensors (< 70% uptime) by project so the team can see who
+    is responsible for what. Actionable (in-support / unassigned) projects are
+    listed first; out-of-support projects — where a failure is expected and not
+    actionable — are shown separately, clearly marked."""
+    bt_path_names = bt_path_names or {}
+    sensor_projects = sensor_projects or {}
+    project_acct = project_acct or {}
+
+    # Collect problem sensors, bucketed by project name (None -> "Unassigned")
+    buckets = {}   # project_name -> {"acct": str, "sensors": [ ... ]}
+    for s in sensors:
+        history = s["history"]
+        total = len(history)
+        if not total:
+            continue
+        good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
+        pct = round(good / total * 100)
+        if pct >= _ATTENTION_MAX_PCT:
+            continue
+        tier = tier_for(pct)
+        proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
+        proj = proj_info["project"] if proj_info and proj_info["project"] else None
+        acct = project_acct.get(proj, "supported") if proj else "unassigned"
+        key = proj or "Unassigned"
+        buckets.setdefault(key, {"acct": acct, "sensors": []})
+        buckets[key]["sensors"].append({
+            "display": _sensor_display_name(s["group_name"], s["sensor_id"], bt_path_names, all_sensor_coords),
+            "group": GROUP_DISPLAY.get(s["group_name"], s["group_name"]),
+            "pct": pct, "tier": tier,
+        })
+
+    if not buckets:
+        return ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
+                'No sensors below 70% uptime — nothing needs attention. &#127881;</p>')
+
+    actionable = {k: v for k, v in buckets.items() if v["acct"] != "out_of_support"}
+    out_of_support = {k: v for k, v in buckets.items() if v["acct"] == "out_of_support"}
+
+    def _project_block(name, bucket, dim=False):
+        rows = sorted(bucket["sensors"], key=lambda x: x["pct"])
+        n = len(rows)
+        base_color = "var(--color-text-secondary)" if dim else "var(--color-text-primary)"
+        if name == "Unassigned":
+            tag = '<span style="font-size:10px;color:#c0392b;margin-left:8px">no owner known</span>'
+        elif dim:
+            tag = '<span style="font-size:10px;color:#7f8c8d;margin-left:8px">out of support — expected, not actionable</span>'
+        else:
+            tag = ''
+        body = ""
+        for r in rows:
+            t = r["tier"]
+            badge = (f'<span style="font-size:10px;font-weight:500;padding:1px 7px;border-radius:10px;'
+                     f'background:{t.bg};color:{t.fg}">{t.label} ({r["pct"]}%)</span>')
+            body += (f'<tr style="border-top:0.5px solid var(--color-border-tertiary)">'
+                     f'<td style="padding:5px 8px;font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{r["group"]}</td>'
+                     f'<td style="padding:5px 8px;font-size:12px;font-family:monospace;color:{base_color}">{r["display"]}</td>'
+                     f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{badge}</td>'
+                     f'</tr>')
+        return (f'<details style="margin-bottom:6px">'
+                f'<summary style="cursor:pointer;padding:7px 10px;border-radius:6px;'
+                f'background:var(--color-background-secondary);font-size:13px;font-weight:500;color:{base_color};'
+                f'display:flex;align-items:center;justify-content:space-between;list-style:none">'
+                f'<span>{name}{tag}</span>'
+                f'<span style="font-size:12px;color:{"#7f8c8d" if dim else "#e24b4a"};font-weight:600;white-space:nowrap">{n} down</span>'
+                f'</summary>'
+                f'<table style="width:100%;border-collapse:collapse;margin:2px 0 8px">{body}</table>'
+                f'</details>')
+
+    html = ""
+    if actionable:
+        for name in sorted(actionable, key=lambda k: (-len(actionable[k]["sensors"]), k)):
+            html += _project_block(name, actionable[name])
+    else:
+        html += ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
+                 'No actionable projects have failing sensors. &#9989;</p>')
+
+    if out_of_support:
+        oos_total = sum(len(v["sensors"]) for v in out_of_support.values())
+        html += (f'<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--color-border-tertiary)">'
+                 f'<div style="font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;'
+                 f'color:var(--color-text-secondary);margin-bottom:8px">'
+                 f'Out of support &middot; {oos_total} down &middot; failure expected, not actionable</div>')
+        for name in sorted(out_of_support, key=lambda k: (-len(out_of_support[k]["sensors"]), k)):
+            html += _project_block(name, out_of_support[name], dim=True)
+        html += '</div>'
+
+    return html
+
+
 def _build_health_by_run(raw_health):
     """Build {run_id: {group_name: pct, 'feed_issues': [...]}} from raw health rows."""
     health_by_run = {}
@@ -690,8 +799,9 @@ def _build_sensor_trend_data(all_sensors):
     return json.dumps(trend_data), json.dumps(day_labels)
 
 
-def _build_map_sensor_list(all_coords, live_data):
+def _build_map_sensor_list(all_coords, live_data, sensor_projects=None):
     """Return list of sensor dicts for the Leaflet map."""
+    sensor_projects = sensor_projects or {}
     sensors = []
     for group_name, sensors_dict in all_coords.items():
         group_live = live_data.get(group_name, {})
@@ -704,6 +814,7 @@ def _build_map_sensor_list(all_coords, live_data):
                 display_name = f"{sc} ({nm})" if sc else nm
             else:
                 display_name = c["name"]
+            proj_info = sensor_projects.get(group_name, {}).get(sid)
             sensors.append({
                 "id": sid, "group": group_name,
                 "group_display": GROUP_DISPLAY.get(group_name, group_name),
@@ -713,6 +824,7 @@ def _build_map_sensor_list(all_coords, live_data):
                 "label": STATUS_LABEL.get(st, "Unknown"),
                 "color": STATUS_COLOR.get(st, "#6b7280"),
                 "data": entry.get("data", {}),
+                "project": proj_info["project"] if proj_info else None,
             })
     return sensors
 
@@ -1103,13 +1215,19 @@ def generate_report() -> str:
         _active_keys.add(("Bluetooth Paths", pid))
     active_sensors = [s for s in all_sensors if (s["group_name"], s["sensor_id"]) in _active_keys]
 
+    # Project ownership + accountability — fetched once, shared by the stability
+    # panel, the map pop-ups, and the "attention needed, by project" rollup.
+    sensor_projects = fetch_sensor_projects()
+    project_acct    = _load_project_accountability()
+
     # Build stability html now that coord lookups are available
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
     sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths,
-                                                          sensor_projects=fetch_sensor_projects(), project_acct=_load_project_accountability())
+                                                          sensor_projects=sensor_projects, project_acct=project_acct)
+    accountability_html = build_accountability_rollup_html(active_sensors, _bt_path_names, all_coords, sensor_projects, project_acct)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
-    map_sensors       = _build_map_sensor_list(all_coords, live_data)
+    map_sensors       = _build_map_sensor_list(all_coords, live_data, sensor_projects)
     map_bt_paths      = _build_map_bt_path_list(all_bt_paths, live_data)
     map_sensors_json  = json.dumps(map_sensors)
     map_bt_paths_json = json.dumps(map_bt_paths)
@@ -1430,6 +1548,16 @@ def generate_report() -> str:
     </div>
   </div>
 
+  <div class="panel" id="p-accountability">
+    <div class="panel-header" onclick="togglePanel('p-accountability')">
+      <span class="panel-title">Attention needed, by project</span>
+      <div class="panel-chevron open" id="c-p-accountability"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-body" id="b-p-accountability">
+      {accountability_html}
+    </div>
+  </div>
+
 </div><!-- end right column -->
 </div><!-- end flex row -->
 </div><!-- end wrap -->
@@ -1630,6 +1758,7 @@ function makeMarker(s) {
     dataRows += popRow('Message', d.message || null);
   }
   var rows = popRow('ID', s.id)+popRow('Group', s.group_display||s.group)+
+             popRow('Project', s.project || 'Unassigned', s.project?null:'#c0392b')+
              popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
   m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
