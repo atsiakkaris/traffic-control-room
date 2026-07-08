@@ -439,6 +439,25 @@ def fetch_sensor_health_history(limit=30, live_test_names=None):
     return [dict(r) for r in rows]
 
 
+def fetch_sensor_status_counts(limit=200):
+    """Return {run_id: {group_name: {status: count}}} for the most recent `limit`
+    runs, aggregated from per-sensor rows. This is the authoritative source for
+    group health percentages — callers derive good/total from the counts instead
+    of re-parsing the human-readable check_summary text."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT sr.run_id, sr.group_name, sr.status, COUNT(*) AS n
+        FROM (SELECT run_id FROM runs ORDER BY run_at DESC LIMIT ?) r
+        JOIN sensor_results sr ON sr.run_id = r.run_id
+        GROUP BY sr.run_id, sr.group_name, sr.status
+    """, (limit,)).fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        result.setdefault(row["run_id"], {}).setdefault(row["group_name"], {})[row["status"]] = row["n"]
+    return result
+
+
 def fetch_sensor_ids_for_run(run_id, group_name):
     """Return the set of sensor IDs recorded for a given run and group."""
     conn = get_connection()

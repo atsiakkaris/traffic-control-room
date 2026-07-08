@@ -17,7 +17,7 @@ def _json_safe(obj):
     can't break out of the script element. Produces valid JSON/JS either way."""
     return json.dumps(obj).replace("<", "\\u003c")
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_projects
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects
 from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for, health_color, HEALTH_WARNING_PCT
 
 _PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
@@ -67,6 +67,9 @@ for _g in _ENDPOINTS_CONFIG.get("groups", []):
         if "health_check" in _ep:
             HEALTH_ENDPOINTS[_ep["name"]] = {
                 "group": _g["name"],
+                # DB group_name the per-sensor rows are stored under (may differ
+                # from the dashboard group, e.g. Bluetooth Paths within Bluetooth).
+                "sensor_group": _ep.get("sensor_group", _g["name"]),
                 "check": _ep["health_check"],
             }
 
@@ -244,28 +247,6 @@ def _map_layer_buttons(group_meta, bt_paths_label):
                 f'onclick="toggleLayer(this,\'paths\')">{bt_paths_label}</button>'
             )
     return "\n".join(buttons)
-
-
-def _extract_health_pct(check_summary, check_name):
-    """Extract a 0-100 health percentage from a check_summary string for a given sensor check."""
-    if not check_summary or check_name not in check_summary:
-        return None
-    if check_name == "sensor_speed_status":
-        m = re.search(r"Working: (\d+)/(\d+)", check_summary)
-        if m and int(m.group(2)) > 0:
-            return int(m.group(1)) / int(m.group(2)) * 100
-    elif check_name == "vms_controller_status":
-        w  = re.search(r"Working: (\d+)", check_summary)
-        nw = re.search(r"Not working: (\d+)", check_summary)
-        ns = re.search(r"No status: (\d+)", check_summary)
-        if w:
-            total = int(w.group(1)) + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
-            return int(w.group(1)) / total * 100 if total else None
-    elif check_name == "bt_paths_speed_and_traveltime":
-        m = re.search(r"Speed OK: (\d+)/(\d+)", check_summary)
-        if m and int(m.group(2)) > 0:
-            return int(m.group(1)) / int(m.group(2)) * 100
-    return None
 
 
 def _health_color(pct):
@@ -815,20 +796,38 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
     return html
 
 
-def _build_health_by_run(raw_health):
-    """Build {run_id: {group_name: pct, 'feed_issues': [...]}} from raw health rows."""
+def _pct_from_counts(counts):
+    """Health % from a {status: count} dict, or None when there are no sensors.
+    'good' = working/ok (stability.GOOD_STATUSES); everything else counts against.
+    This is the authoritative computation — no check_summary string parsing."""
+    if not counts:
+        return None
+    total = sum(counts.values())
+    if not total:
+        return None
+    good = sum(n for st, n in counts.items() if st in GOOD_STATUSES)
+    return good / total * 100
+
+
+def _build_health_by_run(raw_health, status_counts):
+    """Build {run_id: {group_name: pct, 'feed_issues': [...]}}.
+
+    Percentages come from per-sensor status counts (status_counts, keyed by the
+    sensor group_name); feed_issues come from the endpoint-level pass/fail in
+    raw_health (test_results). raw_health also determines which runs/groups the
+    chart covers."""
     health_by_run = {}
     for row in raw_health:
         rid = row["run_id"]
-        if rid not in health_by_run:
-            health_by_run[rid] = {"feed_issues": []}
+        entry = health_by_run.setdefault(rid, {"feed_issues": []})
         ep_info = HEALTH_ENDPOINTS.get(row["test_name"])
-        if ep_info:
-            cs = row.get("check_summary") or ""
-            grp = ep_info["group"]
-            health_by_run[rid][grp] = _extract_health_pct(cs, ep_info["check"])
-            if row["status"] != "pass":
-                health_by_run[rid]["feed_issues"].append(grp)
+        if not ep_info:
+            continue
+        grp = ep_info["group"]
+        counts = status_counts.get(rid, {}).get(ep_info["sensor_group"])
+        entry[grp] = _pct_from_counts(counts)
+        if row["status"] != "pass":
+            entry["feed_issues"].append(grp)
     return health_by_run
 
 
@@ -971,9 +970,12 @@ def generate_report() -> str:
     # Sensor stability (coord lookups fetched below with map data)
     all_sensors = fetch_sensor_stability()
 
-    # Sensor health history — build per-run lookup keyed by run_id → group_name
+    # Sensor health history — build per-run lookup keyed by run_id → group_name.
+    # Percentages derive from per-sensor status counts; feed_issues from the
+    # endpoint pass/fail carried in raw_health.
     raw_health = fetch_sensor_health_history(200, live_test_names=list(HEALTH_ENDPOINTS.keys()))
-    health_by_run = _build_health_by_run(raw_health)
+    status_counts = fetch_sensor_status_counts(200)
+    health_by_run = _build_health_by_run(raw_health, status_counts)
 
     chart_labels, chart_series, chart_x_min, chart_x_max = _build_chart_data(chart_runs, health_by_run)
 
@@ -1010,17 +1012,19 @@ def generate_report() -> str:
         all_pass = all(r["status"] == "pass" for r in results)
         any_error = any(r["status"] == "error" for r in results)
 
-        # Compute minimum sensor health across all endpoints in this group
+        # Compute minimum sensor health across all endpoints in this group,
+        # from the latest run's per-sensor status counts (authoritative).
+        latest_counts = status_counts.get(latest_run["run_id"], {})
         min_health_pct = None
         degraded_test_name = None
         for r in results:
-            cs = r.get("check_summary", "") or ""
-            for cn in SENSOR_CHECKS:
-                pct = _extract_health_pct(cs, cn)
-                if pct is not None:
-                    if min_health_pct is None or pct < min_health_pct:
-                        min_health_pct = pct
-                        degraded_test_name = r.get("test_name", cn)
+            ep_info = HEALTH_ENDPOINTS.get(r["test_name"])
+            if not ep_info:
+                continue
+            pct = _pct_from_counts(latest_counts.get(ep_info["sensor_group"]))
+            if pct is not None and (min_health_pct is None or pct < min_health_pct):
+                min_health_pct = pct
+                degraded_test_name = r.get("test_name")
 
         sensor_degraded = min_health_pct is not None and min_health_pct < HEALTH_WARNING_PCT
 
@@ -1080,11 +1084,8 @@ def generate_report() -> str:
                         else "✗ Feed check failed.")
                 dot_tip = base + ("\n\nChecks:\n" + "\n".join(check_lines) if check_lines else "")
             else:
-                h_pct = None
-                for cn in SENSOR_CHECKS:
-                    h_pct = _extract_health_pct(cs, cn)
-                    if h_pct is not None:
-                        break
+                ep_info = HEALTH_ENDPOINTS.get(r["test_name"])
+                h_pct = _pct_from_counts(latest_counts.get(ep_info["sensor_group"])) if ep_info else None
                 dot_color = _health_color(h_pct) if h_pct is not None else "#1d9e75"
                 if h_pct is not None:
                     status_word = "good" if h_pct >= 90 else "deteriorated"
