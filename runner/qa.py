@@ -856,7 +856,7 @@ tr.clickable:hover td{{background:#dceeff}}
   {'<div class="card amber"><div class="num">'+str(len(colocated))+'</div><div class="lbl">Co-located pairs</div></div>' if colocated else ''}
   {'<div class="card green"><div class="num">'+str(supported_uptime)+'%</div><div class="lbl">Supported uptime</div></div>' if supported_uptime is not None else ''}
   {'<div class="card grey"><div class="num">'+str(oos_total)+'</div><div class="lbl">Out of support (★ '+str(oos_bonus)+' still reporting)</div></div>' if oos_total else ''}
-  {'<div class="card grey"><div class="num">'+str(not_electrified)+'</div><div class="lbl">Not electrified (excluded)</div></div>' if not_electrified else ''}
+  {'<div class="card grey"><div class="num">'+str(not_electrified)+'</div><div class="lbl">Awaiting power (excluded from stats)</div></div>' if not_electrified else ''}
 </div>
 
 <div class="map-wrap">
