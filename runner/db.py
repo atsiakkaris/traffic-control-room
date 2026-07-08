@@ -78,15 +78,24 @@ _SCHEMA = """
 """
 
 
+# DB paths whose schema+migrations have already been applied in this process.
+# The schema is self-healing (any script that connects first gets an up-to-date
+# DB), but running the full CREATE-TABLE script + PRAGMA-based migration checks
+# on every single connection is pure overhead — run_tests.py opens dozens of
+# connections per run. Applying it once per path keeps the self-healing property
+# while skipping the repeated reflection. Keyed by path so tests that point
+# DB_PATH at a fresh file still get migrated.
+_SCHEMA_APPLIED = set()
+
+
 def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # Self-healing schema: any script that connects first (not just run_tests.py,
-    # which historically owned init_db()) still gets an up-to-date DB. Cheap and
-    # idempotent — every statement is CREATE TABLE IF NOT EXISTS / guarded ALTER.
-    conn.executescript(_SCHEMA)
-    _migrate(conn)
+    if DB_PATH not in _SCHEMA_APPLIED:
+        conn.executescript(_SCHEMA)
+        _migrate(conn)
+        _SCHEMA_APPLIED.add(DB_PATH)
     return conn
 
 
