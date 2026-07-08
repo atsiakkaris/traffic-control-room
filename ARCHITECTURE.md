@@ -22,7 +22,7 @@ email a weekly summary.
 
 Separately, and *not* part of the automated run, `runner/qa.py` /
 `runner/update_projects.py` let a human match sensors to an external
-ownership spreadsheet (`QA Locations.xlsx`, kept out of git) and persist that
+ownership spreadsheet and persist that
 mapping into the DB, so the dashboard can show who owns each sensor without
 ever reading the spreadsheet directly.
 
@@ -216,20 +216,12 @@ they intentionally answer different questions:
   string written at test time, to answer "what fraction of this group is
   healthy, right now / at this past run."
 
-**Why this split matters, and a bug it caused:** commissioning-excluded
+**Why this split matters:** commissioning-excluded
 sensors (awaiting power / decommissioned) must not count against a group's
 health %. The correct way to exclude them is **by sensor ID** — remove those
-specific IDs from both numerator and denominator. An earlier version
-subtracted a plain *count* of excluded sensors from the total instead; since
-VMS's genuinely-active sensor count fluctuates near that same count, the
-denominator kept collapsing to equal `working`, silently forcing every run to
-100% and erasing a real historical outage. `_extract_health_pct()` for
-`vms_controller_status` now parses the ID lists out of `check_summary` and
-excludes by ID, matching what the stability panel already did correctly. The
-lesson generalizes: **any aggregate health computation that needs to account
-for exclusions must exclude by ID, never by subtracting a count** — a count
-is only valid if the excluded population is fixed and disjoint from natural
-variation, which is rarely true for equipment with fluctuating uptime.
+specific IDs from both numerator and denominator. `_extract_health_pct()` for
+`vms_controller_status` parses the ID lists out of `check_summary` and
+excludes by ID, matching what the stability panel already did correctly.
 
 ### Panels, top to bottom
 
@@ -266,8 +258,7 @@ variation, which is rarely true for equipment with fluctuating uptime.
 The API can tell you a sensor exists and whether it's currently working — it
 can't tell you who owns it or whether it's even supposed to be working yet
 (e.g. installed but not yet connected to power). That information only
-exists in an external spreadsheet (`QA Locations.xlsx`, one sheet per group,
-kept out of git because it's the authority's live inventory, not test code).
+exists in an external spreadsheet.
 
 **Matching (`qa.py`):**
 
@@ -277,7 +268,7 @@ kept out of git because it's the authority's live inventory, not test code).
    against `_NOT_ELECTRIFIED` / `_INACTIVE_VALUES`).
 2. `match_sensors()` builds every (reference row, API sensor) pair within
    `max_dist` (default `COORD_MATCH_MAX_M`, overridden per-group — 300m for
-   Traffic Detection/Bluetooth, unlimited-ish for VMS), sorts all candidate
+   the sensors), sorts all candidate
    pairs by distance, and assigns **greedily shortest-first** — a global
    nearest-neighbor matching, not naive per-row nearest-match, so ambiguous
    cases resolve to the overall best pairing.
@@ -294,12 +285,9 @@ kept out of git because it's the authority's live inventory, not test code).
    separate junctions half a km apart that happen to share a street name),
    only the closest one matches — the others get neither a direct match nor
    a colocation twin, and surface as "Unassigned." Fixing this requires
-   adding the missing row(s) to the spreadsheet, not a code change —
-   `runner/diagnose_unmatched.py` (ad hoc diagnostic, not part of the
-   pipeline) finds these cases and exports their coordinates.
+   adding the missing row(s) to the spreadsheet, not a code change.
 
-4. The result is persisted, not just displayed: `update_projects.py` (or
-   `qa.py` when run standalone) writes `{sensor_id: {project, source,
+4. The result is persisted, not just displayed: `update_projects.py` writes `{sensor_id: {project, source,
    commissioning}}` into `sensor_projects` via `db.upsert_sensor_projects()`.
    Because `report.py` only ever reads the DB, the dashboard never depends on
    the spreadsheet being present at report-generation time (important, since
@@ -308,7 +296,7 @@ kept out of git because it's the authority's live inventory, not test code).
 **Workflow to update ownership:**
 ```
 1. Edit QA Locations.xlsx locally (the data owner's copy)
-2. python runner/update_projects.py   (or update_projects.bat)
+2. python runner/update_projects.py (or update_projects.bat)
    — matches offline against coordinates already in the DB, no API call
 3. git commit results/history.db && git push
 4. → next automated report shows the updated ownership
@@ -367,7 +355,7 @@ Both workflows are `workflow_dispatch`-only (no `on: schedule:` block) —
 they're triggered externally by **cron-job.org** hitting the GitHub Actions
 API on a schedule. This was a deliberate choice after GitHub's native cron
 scheduler proved unreliable for this project's cadence; cron-job.org pings
-`daily_tests.yml` roughly every 2 hours and `weekly_digest.yml` every Monday
+`daily_tests.yml` roughly every 6 hours and `weekly_digest.yml` every Monday
 07:30 EEST.
 
 `daily_tests.yml`: checkout → install deps → run `run_tests.py` → commit
@@ -381,20 +369,7 @@ step — it only sends an email.
 
 ---
 
-## 11. Local development
-
-- `run.bat` — loads `.env` and runs the full test suite locally (hits the
-  real API).
-- `report.bat` — regenerates `reports/latest.html` from whatever's already in
-  `results/history.db`, without hitting the API. Fast iteration on
-  `report.py` changes.
-- `update_projects.bat` — see §7.
-- `tests/` — `test_generate_report.py` (smoke tests for the HTML generator)
-  and `test_data_quality.py`, run with `pytest`.
-
----
-
-## 12. Extending the system
+## 11. Extending the system
 
 Both documented in `README.md`'s "Adding Endpoints and Groups" section, but
 in short: **adding an endpoint** to an existing group is a pure
