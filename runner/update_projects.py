@@ -43,7 +43,7 @@ WORKBOOK = REPO_ROOT / "QA Locations.xlsx"
 GROUPS = [
     ("Traffic Detection", "Traffic Detection", 300),
     ("Bluetooth",         "Bluetooth",         300),
-    ("VMS",               "VMS",               None),
+    ("VMS",               "VMS",               300),
 ]
 
 
