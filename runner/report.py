@@ -973,19 +973,31 @@ def generate_report() -> str:
     # Sensor health history — build per-run lookup keyed by run_id → group_name.
     # Percentages derive from per-sensor status counts; feed_issues from the
     # endpoint pass/fail carried in raw_health.
+    # Project ownership + commissioning — fetched once, shared by the group cards,
+    # stability panel, map pop-ups, the "attention needed" rollup, and (below)
+    # the health-percentage exclusion.
+    sensor_projects = fetch_sensor_projects()
+    project_acct    = _load_project_accountability()
+
+    # Sensors awaiting power / decommissioned aren't expected to be working, so
+    # they're dropped by ID from the health-percentage counts — otherwise e.g.
+    # 39 not-yet-electrified VMS would hold the group at <10%. Same exclusion the
+    # stability panel and the "X/Y working" line already apply.
+    excluded_health_ids = {
+        (grp, sid)
+        for grp, sdict in sensor_projects.items()
+        for sid, info in sdict.items()
+        if info.get("commissioning") in _EXCLUDED_COMMISSIONING
+    }
+
     raw_health = fetch_sensor_health_history(200, live_test_names=list(HEALTH_ENDPOINTS.keys()))
-    status_counts = fetch_sensor_status_counts(200)
+    status_counts = fetch_sensor_status_counts(200, excluded=excluded_health_ids)
     health_by_run = _build_health_by_run(raw_health, status_counts)
 
     chart_labels, chart_series, chart_x_min, chart_x_max = _build_chart_data(chart_runs, health_by_run)
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
-
-    # Project ownership + commissioning — fetched once, shared by the group cards,
-    # stability panel, map pop-ups, and the "attention needed" rollup.
-    sensor_projects = fetch_sensor_projects()
-    project_acct    = _load_project_accountability()
     # Per-group counts of sensors excluded from health stats, by reason. Surfaced
     # separately in the group cards so the reader sees why the live total is lower.
     awaiting_by_group = {}

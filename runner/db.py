@@ -439,22 +439,32 @@ def fetch_sensor_health_history(limit=30, live_test_names=None):
     return [dict(r) for r in rows]
 
 
-def fetch_sensor_status_counts(limit=200):
+def fetch_sensor_status_counts(limit=200, excluded=None):
     """Return {run_id: {group_name: {status: count}}} for the most recent `limit`
     runs, aggregated from per-sensor rows. This is the authoritative source for
     group health percentages — callers derive good/total from the counts instead
-    of re-parsing the human-readable check_summary text."""
+    of re-parsing the human-readable check_summary text.
+
+    excluded: optional set of (group_name, sensor_id) to leave out entirely —
+    e.g. sensors awaiting power or decommissioned, which aren't expected to work
+    and would otherwise drag the percentages down. Filtered by (group, id) pair
+    because sensor IDs are only unique within a group."""
+    excluded = excluded or set()
     conn = get_connection()
+    # Per-sensor rows (not pre-aggregated) so specific IDs can be excluded before
+    # counting — a plain GROUP BY can't drop individual sensors.
     rows = conn.execute("""
-        SELECT sr.run_id, sr.group_name, sr.status, COUNT(*) AS n
+        SELECT sr.run_id, sr.group_name, sr.sensor_id, sr.status
         FROM (SELECT run_id FROM runs ORDER BY run_at DESC LIMIT ?) r
         JOIN sensor_results sr ON sr.run_id = r.run_id
-        GROUP BY sr.run_id, sr.group_name, sr.status
     """, (limit,)).fetchall()
     conn.close()
     result = {}
     for row in rows:
-        result.setdefault(row["run_id"], {}).setdefault(row["group_name"], {})[row["status"]] = row["n"]
+        if (row["group_name"], row["sensor_id"]) in excluded:
+            continue
+        grp = result.setdefault(row["run_id"], {}).setdefault(row["group_name"], {})
+        grp[row["status"]] = grp.get(row["status"], 0) + 1
     return result
 
 
