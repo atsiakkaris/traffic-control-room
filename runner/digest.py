@@ -1,5 +1,6 @@
 import os
 import sys
+import html
 import logging
 import smtplib
 from datetime import datetime, timedelta, timezone
@@ -229,7 +230,7 @@ def _sensor_table(sensors, show_prev=False):
         prev_cell = f'<td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s["prev_pct"])}</td>' if show_prev else ""
         rows += f"""
         <tr style="border-bottom:1px solid #f3f4f6">
-          <td style="padding:6px 12px;font-size:13px">{s['name']}</td>
+          <td style="padding:6px 12px;font-size:13px">{html.escape(str(s['name']))}</td>
           <td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s['this_pct'])}</td>
           {prev_cell}
         </tr>"""

@@ -5,12 +5,20 @@ report.py - Generate a static HTML report from the SQLite history DB.
 import os
 import re
 import json
+import html as _html
 import yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
+
+def _json_safe(obj):
+    """json.dumps for embedding inside a <script> block. Escapes '<' so a
+    string like '</script>' in external data (sensor names, VMS messages)
+    can't break out of the script element. Produces valid JSON/JS either way."""
+    return json.dumps(obj).replace("<", "\\u003c")
+
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_projects
-from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for
+from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for, health_color, HEALTH_WARNING_PCT
 
 _PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
 
@@ -175,7 +183,8 @@ CHECK_DESCRIPTION = {
 GROUP_DISPLAY = {k: v.get("display", k) for k, v in GROUP_META.items()}
 
 SENSOR_CHECKS = {ep["check"] for ep in HEALTH_ENDPOINTS.values()}
-HEALTH_WARNING_PCT = 80
+# HEALTH_WARNING_PCT is imported from stability.py (single source of truth,
+# shared with qa.py) — re-exported here for the many local references below.
 
 
 # ── HTML/JS generation helpers (group-meta driven) ────────────────────────────
@@ -260,9 +269,8 @@ def _extract_health_pct(check_summary, check_name):
 
 
 def _health_color(pct):
-    if pct is None:
-        return "#9ca3af"
-    return "#1d9e75" if pct >= 90 else ("#e58e0a" if pct >= HEALTH_WARNING_PCT else "#e24b4a")
+    # Thin wrapper kept for the many call sites below; logic lives in stability.py.
+    return health_color(pct)
 
 
 def _humanize_failure(check_name, full_failure_reason):
@@ -337,6 +345,10 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
             display_sensor_id = f"{nm} ({s['sensor_id']})" if nm and nm != s["sensor_id"] else s["sensor_id"]
         else:
             display_sensor_id = s["sensor_id"]
+
+        # Names come from the external API inventory / reference sheet — escape
+        # before they land in any HTML text or attribute context below.
+        display_sensor_id = _html.escape(str(display_sensor_id))
 
         display_group = GROUP_DISPLAY.get(s["group_name"], s["group_name"])
 
@@ -428,12 +440,13 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
         proj_name = proj_info["project"] if proj_info else None
         proj_acct = project_acct.get(proj_name, "supported") if proj_name else None
+        proj_name_esc = _html.escape(str(proj_name)) if proj_name else ""  # external data
         if s["group_name"] in _NON_OWNED_GROUPS:
             project_cell = '<span title="Bluetooth paths are sensor combinations, not owned equipment" style="font-size:11px;color:#6b7280;cursor:help">n/a</span>'
         elif proj_name and proj_acct == "out_of_support":
-            project_cell = f'<span title="Out of support — failure expected, not actionable" style="font-size:11px;color:#7f8c8d;cursor:help">{proj_name}</span>'
+            project_cell = f'<span title="Out of support — failure expected, not actionable" style="font-size:11px;color:#7f8c8d;cursor:help">{proj_name_esc}</span>'
         elif proj_name:
-            project_cell = f'<span style="font-size:11px;color:var(--color-text-secondary)">{proj_name}</span>'
+            project_cell = f'<span style="font-size:11px;color:var(--color-text-secondary)">{proj_name_esc}</span>'
         else:
             project_cell = '<span title="Not matched to any reference spreadsheet row" style="font-size:11px;color:#9ca3af;cursor:help">—</span>'
 
@@ -738,7 +751,7 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
         key = proj or "Unassigned"
         buckets.setdefault(key, {"acct": acct, "sensors": []})
         buckets[key]["sensors"].append({
-            "display": _sensor_display_name(s["group_name"], s["sensor_id"], bt_path_names, all_sensor_coords),
+            "display": _html.escape(str(_sensor_display_name(s["group_name"], s["sensor_id"], bt_path_names, all_sensor_coords))),
             "group": GROUP_DISPLAY.get(s["group_name"], s["group_name"]),
             "pct": pct, "tier": tier,
         })
@@ -751,6 +764,7 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
     out_of_support = {k: v for k, v in buckets.items() if v["acct"] == "out_of_support"}
 
     def _project_block(name, bucket, dim=False):
+        name = _html.escape(str(name))  # project name originates from external data
         rows = sorted(bucket["sensors"], key=lambda x: x["pct"])
         n = len(rows)
         base_color = "var(--color-text-secondary)" if dim else "var(--color-text-primary)"
@@ -927,7 +941,7 @@ def _build_history_playback(all_sensors):
                 run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
             run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
     runs_sorted = sorted(run_timeline.values(), key=lambda r: r["run_at"])
-    return json.dumps(runs_sorted[-30:])
+    return _json_safe(runs_sorted[-30:])
 
 
 def generate_report() -> str:
@@ -1326,8 +1340,8 @@ def generate_report() -> str:
 
     map_sensors       = _build_map_sensor_list(all_coords, live_data, sensor_projects)
     map_bt_paths      = _build_map_bt_path_list(all_bt_paths, live_data)
-    map_sensors_json  = json.dumps(map_sensors)
-    map_bt_paths_json = json.dumps(map_bt_paths)
+    map_sensors_json  = _json_safe(map_sensors)   # carry names + VMS message text
+    map_bt_paths_json = _json_safe(map_bt_paths)   # carry route names
     history_playback_json = _build_history_playback(all_sensors)
 
     # Pre-compute group-driven HTML/JS snippets so injection sites stay clean

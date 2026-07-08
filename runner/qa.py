@@ -19,6 +19,7 @@ metadata and shown in the report.
 """
 
 import argparse
+import html
 import json
 import math
 import os
@@ -40,6 +41,7 @@ if _env_path.exists():
             _k, _, _v = _line.partition('=')
             os.environ.setdefault(_k.strip(), _v.strip())
 from db import get_connection, upsert_sensor_projects
+from stability import HEALTH_GOOD_PCT, HEALTH_WARNING_PCT
 
 REPORT_DIR      = Path(__file__).parent.parent / "reports"
 MATCH_THRESHOLD = 0.60   # minimum similarity to attempt a match
@@ -557,11 +559,13 @@ def match_sensors(ref_sensors, api_sensors, max_dist=None):
 # ── HTML generation ───────────────────────────────────────────────────────────
 
 def _badge_health(pct):
+    # Thresholds shared with the main dashboard via stability.py so the QA
+    # report and the public dashboard never disagree on the same percentage.
     if pct is None:
         return '<span class="badge grey">No data</span>'
-    if pct >= 90:
+    if pct >= HEALTH_GOOD_PCT:
         return f'<span class="badge green">{pct}%</span>'
-    if pct >= 70:
+    if pct >= HEALTH_WARNING_PCT:
         return f'<span class="badge amber">{pct}%</span>'
     return f'<span class="badge red">{pct}%</span>'
 
@@ -683,16 +687,16 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 fly = ''
             out.append(
                 f'<tr class="clickable" onclick="{fly}" title="Click to show on map">'
-                f'<td>&#128205; {ref["name"]}</td>'
-                f'<td>{api["name"]}</td>'
-                f'<td class="mono">{api["id"]}</td>'
+                f'<td>&#128205; {_h(ref["name"])}</td>'
+                f'<td>{_h(api["name"])}</td>'
+                f'<td class="mono">{_h(api["id"])}</td>'
                 f'<td>{_badge_dist(m["distance_m"])}</td>'
                 f'<td class="mono dim">{ref_coords}</td>'
                 f'<td class="mono dim">{api_coords}</td>'
                 f'<td>{_badge_health(api["health_pct"])}</td>'
                 f'<td>{"Active" if api["active"] else "<span class=badge red>Retired</span>"}</td>'
-                f'<td class="dim">{ref["source"]}</td>'
-                f'<td class="dim">{extra}</td>'
+                f'<td class="dim">{_h(ref["source"])}</td>'
+                f'<td class="dim">{_h(extra)}</td>'
                 f'</tr>'
             )
         return ''.join(out)
@@ -709,23 +713,28 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
             fly   = f"flyTo({ref['lat']},{ref['lon']},'{_esc(ref['name'])}')" if ref['lat'] else ''
             out.append(
                 f'<tr class="clickable" onclick="{fly}" title="Click to show on map">'
-                f'<td>&#128205; {ref["name"]}</td>'
+                f'<td>&#128205; {_h(ref["name"])}</td>'
                 f'<td class="mono">{coords}</td>'
-                f'<td class="dim">{ref["source"]}</td>'
-                f'<td class="dim">{notes}</td>'
-                f'<td class="dim">{note}</td>'
+                f'<td class="dim">{_h(ref["source"])}</td>'
+                f'<td class="dim">{_h(notes)}</td>'
+                f'<td class="dim">{_h(note)}</td>'
                 f'</tr>'
             )
         return ''.join(out)
 
     def _esc(s):
+        # JS string-literal escaping (for onclick handlers).
         return s.replace('\n', ' ').replace('\r', '').replace("'", "\\'") if s else ''
+
+    def _h(s):
+        # HTML text escaping for spreadsheet-/API-derived free text in table cells.
+        return html.escape(str(s)) if s is not None else ''
 
     def _fly_link(api):
         if not api['lat']:
-            return api['name']
+            return _h(api['name'])
         js = f"flyTo({api['lat']},{api['lon']},'{_esc(api['name'])}')"
-        return f'<span class="fly-link" onclick="{js}" title="Show on map">&#128205; {api["name"]}</span>'
+        return f'<span class="fly-link" onclick="{js}" title="Show on map">&#128205; {_h(api["name"])}</span>'
 
     def tr_api_only():
         out = []
@@ -754,7 +763,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<td class="mono">{api["id"]}</td>'
                 f'<td class="mono">{coords}</td>'
                 f'<td>{_badge_health(api["health_pct"])}</td>'
-                f'<td class="dim">Co-located with <b>{sib["name"]}</b> (ID {sib["id"]})</td>'
+                f'<td class="dim">Co-located with <b>{_h(sib["name"])}</b> (ID {_h(sib["id"])})</td>'
                 f'</tr>'
             )
         return ''.join(out)
