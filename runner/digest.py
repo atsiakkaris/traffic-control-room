@@ -20,6 +20,10 @@ log = logging.getLogger(__name__)
 
 DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/reports/latest.html"
 
+# Percentage ranges for the digest's badge labels, derived from stability.py's
+# tooltips so they can't drift out of sync with the actual tier thresholds.
+_TIER_RANGE = {t.key: t.tooltip.replace(" of runs good", "") for t in STABILITY_TIERS}
+
 
 def _badge(pct):
     if pct is None:
@@ -321,7 +325,7 @@ def build_html(d):
         one at 0% failed every check.
       </p>
       <div>
-        <span style="display:inline-block;background:#e1f5ee;color:#085041;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Always on — 100%</span>
+        <span style="display:inline-block;background:#e1f5ee;color:#085041;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Always on — {_TIER_RANGE['always_on']}</span>
         <span style="display:inline-block;background:#c0dd97;color:#27500a;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Healthy — 90–99%</span>
         <span style="display:inline-block;background:#faeeda;color:#633806;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Intermittent — 70–89%</span>
         <span style="display:inline-block;background:#fac775;color:#412402;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Unstable — 40–69%</span>
@@ -357,27 +361,27 @@ def build_html(d):
         </td>
         <td width="14%" style="background:#e1f5ee;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#085041">{d['always_on']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always on (100%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always on ({_TIER_RANGE['always_on']})</div>
         </td>
         <td width="14%" style="background:#ecfdf5;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#1d9e75">{d['healthy']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Healthy (90–99%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Healthy ({_TIER_RANGE['healthy']})</div>
         </td>
         <td width="14%" style="background:#faeeda;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#633806">{d['intermittent']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Intermittent (70–89%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Intermittent ({_TIER_RANGE['intermittent']})</div>
         </td>
         <td width="14%" style="background:#fffbeb;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#e58e0a">{d['unstable']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Unstable (40–69%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Unstable ({_TIER_RANGE['unstable']})</div>
         </td>
         <td width="14%" style="background:#fde8e8;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#9b1c1c">{d['critical']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Critical (1–39%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Critical ({_TIER_RANGE['critical']})</div>
         </td>
         <td width="14%" style="background:#fef2f2;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#e24b4a">{d['offline']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off (0%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off ({_TIER_RANGE['offline']})</div>
         </td>
       </tr>
     </table>
@@ -417,27 +421,27 @@ def build_html(d):
         </td>
         <td width="14%" style="background:#e1f5ee;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#085041">{d['bt']['always_on']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always on (100%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always on ({_TIER_RANGE['always_on']})</div>
         </td>
         <td width="14%" style="background:#ecfdf5;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#1d9e75">{d['bt']['healthy']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Healthy (90–99%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Healthy ({_TIER_RANGE['healthy']})</div>
         </td>
         <td width="14%" style="background:#faeeda;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#633806">{d['bt']['intermittent']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Intermittent (70–89%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Intermittent ({_TIER_RANGE['intermittent']})</div>
         </td>
         <td width="14%" style="background:#fffbeb;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#e58e0a">{d['bt']['unstable']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Unstable (40–69%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Unstable ({_TIER_RANGE['unstable']})</div>
         </td>
         <td width="14%" style="background:#fde8e8;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#9b1c1c">{d['bt']['critical']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Critical (1–39%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Critical ({_TIER_RANGE['critical']})</div>
         </td>
         <td width="14%" style="background:#fef2f2;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#e24b4a">{d['bt']['offline']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off (0%)</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off ({_TIER_RANGE['offline']})</div>
         </td>
       </tr>
     </table>

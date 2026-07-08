@@ -9,8 +9,30 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_projects
 from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for
+
+_PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
+
+
+def _load_project_accountability():
+    """Return {project_name: accountability} from config/projects.csv.
+
+    Sensor-to-project assignment is computed elsewhere (qa.py, matched
+    against the reference spreadsheet) and persisted to the sensor_projects
+    DB table — this report only needs the project's accountability, which is
+    a small tracked file, not the (gitignored) reference spreadsheet itself.
+    """
+    import csv as _csv
+    status = {}
+    if _PROJECTS_CSV.exists():
+        with open(_PROJECTS_CSV, newline='', encoding='utf-8-sig') as f:
+            for r in _csv.DictReader(f):
+                proj = (r.get('project') or '').strip()
+                acct = (r.get('accountability') or '').strip().lower()
+                if proj:
+                    status[proj] = acct or 'supported'
+    return status
 
 # Load UI labels from config — falls back to defaults if file is missing
 _LABELS_PATH    = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
@@ -275,7 +297,7 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
-def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null", bt_path_coords=None):
+def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null", bt_path_coords=None, sensor_projects=None, project_acct=None):
     """Build the sensor stability panel HTML with a group dropdown."""
     if not sensors:
         return "<p style='color:var(--color-text-secondary);font-size:13px'>No sensor data recorded yet.</p>"
@@ -283,6 +305,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     bt_path_names = bt_path_names or {}
     all_sensor_coords = all_sensor_coords or {}
     bt_path_coords = bt_path_coords or {}
+    sensor_projects = sensor_projects or {}
+    project_acct = project_acct or {}
 
     groups = sorted({s["group_name"] for s in sensors})
 
@@ -388,6 +412,17 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         else:
             sid_cell = display_sensor_id
 
+        # Project + accountability — who owns this sensor, so a failure has an owner to contact
+        proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
+        proj_name = proj_info["project"] if proj_info else None
+        proj_acct = project_acct.get(proj_name, "supported") if proj_name else None
+        if proj_name and proj_acct == "out_of_support":
+            project_cell = f'<span title="Out of support — failure expected, not actionable" style="font-size:11px;color:#7f8c8d;cursor:help">{proj_name}</span>'
+        elif proj_name:
+            project_cell = f'<span style="font-size:11px;color:var(--color-text-secondary)">{proj_name}</span>'
+        else:
+            project_cell = '<span title="Not matched to any reference spreadsheet row" style="font-size:11px;color:#9ca3af;cursor:help">—</span>'
+
         # Composite key avoids ID collisions when multiple groups share a sensor_id (e.g. TD and BT both have id "1")
         composite_id = f"{s['group_name']}|{s['sensor_id']}"
         safe_sid = composite_id.replace("'", "\\'")
@@ -396,6 +431,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
+          <td style="white-space:nowrap">{project_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td style="white-space:nowrap"><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
@@ -403,7 +439,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td>{first_seen_html}</td>
         </tr>
         <tr id="trend-{composite_id}" style="display:none">
-          <td colspan="9" style="padding:0">
+          <td colspan="10" style="padding:0">
             <div style="padding:14px 16px;background:var(--color-background-secondary);border-bottom:0.5px solid var(--color-border-tertiary)">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
                 <span style="font-size:12px;font-weight:500">Daily health % — {display_sensor_id or s['sensor_id']}</span>
@@ -454,7 +490,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
+      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>Project</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -1069,7 +1105,8 @@ def generate_report() -> str:
 
     # Build stability html now that coord lookups are available
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
-    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths)
+    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths,
+                                                          sensor_projects=fetch_sensor_projects(), project_acct=_load_project_accountability())
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
     map_sensors       = _build_map_sensor_list(all_coords, live_data)
@@ -1123,7 +1160,6 @@ def generate_report() -> str:
     run_time = _to_cyprus(latest_run["run_at"])
     last_run_utc_iso = latest_run["run_at"]
     staleness_threshold_hours = _UI.get("staleness_threshold_hours", 9)
-
 
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
