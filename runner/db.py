@@ -67,11 +67,12 @@ _SCHEMA = """
     );
 
     CREATE TABLE IF NOT EXISTS sensor_projects (
-        sensor_id  TEXT NOT NULL,
-        group_name TEXT NOT NULL,
-        project    TEXT,
-        source     TEXT,
-        updated_at TEXT,
+        sensor_id     TEXT NOT NULL,
+        group_name    TEXT NOT NULL,
+        project       TEXT,
+        source        TEXT,
+        commissioning TEXT NOT NULL DEFAULT 'active',
+        updated_at    TEXT,
         PRIMARY KEY (sensor_id, group_name)
     );
 """
@@ -143,14 +144,17 @@ def _migrate(conn):
     if not _has_table(conn, "sensor_projects"):
         conn.execute("""
             CREATE TABLE sensor_projects (
-                sensor_id  TEXT NOT NULL,
-                group_name TEXT NOT NULL,
-                project    TEXT,
-                source     TEXT,
-                updated_at TEXT,
+                sensor_id     TEXT NOT NULL,
+                group_name    TEXT NOT NULL,
+                project       TEXT,
+                source        TEXT,
+                commissioning TEXT NOT NULL DEFAULT 'active',
+                updated_at    TEXT,
                 PRIMARY KEY (sensor_id, group_name)
             )
         """)
+    elif not _has_column(conn, "sensor_projects", "commissioning"):
+        conn.execute("ALTER TABLE sensor_projects ADD COLUMN commissioning TEXT NOT NULL DEFAULT 'active'")
 
     conn.commit()
 
@@ -231,33 +235,40 @@ def upsert_bt_path_coords(paths_dict):
 
 
 def upsert_sensor_projects(group_name, projects_dict):
-    """projects_dict: {sensor_id: {project, source}}. project may be None to
-    clear a sensor's assignment (e.g. it no longer matches a reference row)."""
+    """projects_dict: {sensor_id: {project, source, commissioning?}}. project may
+    be None to clear a sensor's assignment (e.g. it no longer matches a reference
+    row). commissioning defaults to 'active' and is 'not_electrified' for sensors
+    the reference sheet marks as awaiting power / not yet commissioned."""
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
     for sid, p in projects_dict.items():
         conn.execute(
-            """INSERT INTO sensor_projects (sensor_id, group_name, project, source, updated_at)
-               VALUES (?,?,?,?,?)
+            """INSERT INTO sensor_projects (sensor_id, group_name, project, source, commissioning, updated_at)
+               VALUES (?,?,?,?,?,?)
                ON CONFLICT(sensor_id, group_name) DO UPDATE
-               SET project=excluded.project, source=excluded.source, updated_at=excluded.updated_at""",
-            (sid, group_name, p.get("project"), p.get("source"), now)
+               SET project=excluded.project, source=excluded.source,
+                   commissioning=excluded.commissioning, updated_at=excluded.updated_at""",
+            (sid, group_name, p.get("project"), p.get("source"),
+             p.get("commissioning") or "active", now)
         )
     conn.commit()
     conn.close()
 
 
 def fetch_sensor_projects():
-    """Return {group_name: {sensor_id: {project, source}}} for sensors with a known project."""
+    """Return {group_name: {sensor_id: {project, source, commissioning}}} for
+    sensors that have either a known project or a non-active commissioning state."""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT sensor_id, group_name, project, source FROM sensor_projects WHERE project IS NOT NULL"
+        "SELECT sensor_id, group_name, project, source, commissioning FROM sensor_projects "
+        "WHERE project IS NOT NULL OR commissioning != 'active'"
     ).fetchall()
     conn.close()
     result = {}
     for r in rows:
         result.setdefault(r["group_name"], {})[r["sensor_id"]] = {
             "project": r["project"], "source": r["source"],
+            "commissioning": r["commissioning"] or "active",
         }
     return result
 

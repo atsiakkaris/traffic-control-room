@@ -98,6 +98,7 @@ def annotate_accountability(api_sensors, matches, project_acct):
         s.setdefault('project', None)
         s.setdefault('accountability', ACCT_SUPPORTED)
         s.setdefault('project_source', None)
+        s.setdefault('commissioning', 'active')
 
     matched = []
     for m in matches:
@@ -108,6 +109,7 @@ def annotate_accountability(api_sensors, matches, project_acct):
         api['project']        = proj
         api['accountability']  = project_acct.get(proj, ACCT_SUPPORTED) if proj else ACCT_SUPPORTED
         api['project_source']  = 'matched'
+        api['commissioning']   = m['ref'].get('commissioning', 'active')
         matched.append(api)
 
     # Co-location propagation for unmatched sensors
@@ -125,6 +127,7 @@ def annotate_accountability(api_sensors, matches, project_acct):
             s['project']        = twin['project']
             s['accountability'] = twin['accountability']
             s['project_source'] = 'colocated'
+            s['commissioning']  = twin.get('commissioning', 'active')
     return api_sensors
 
 
@@ -215,7 +218,7 @@ def _detect_cols(headers, candidates):
     return [header_lower[c] for c in candidates if c in header_lower]
 
 
-_NOT_ELECTRIFIED = 'not electrified'
+_NOT_ELECTRIFIED = {'not electrified', 'pending power'}
 
 
 def _parse_rows(raw_rows):
@@ -249,12 +252,18 @@ def _parse_rows(raw_rows):
                 break
         if not name:
             continue
+        commissioning = 'active'
         if status_col:
             status_val = row.get(status_col, '').strip().lower()
-            if status_val == _NOT_ELECTRIFIED:
+            # Not-electrified / awaiting-power rows are KEPT (so they still match an
+            # API sensor and carry the state through), just flagged. Truly inactive
+            # rows (removed/decommissioned/…) are dropped entirely.
+            # Substring match here so "pending power" also catches "pending power
+            # connection" etc.; _INACTIVE_VALUES stays exact (its values are short).
+            if any(k in status_val for k in _NOT_ELECTRIFIED):
                 not_electrified += 1
-                continue
-            if status_val in _INACTIVE_VALUES:
+                commissioning = 'not_electrified'
+            elif status_val in _INACTIVE_VALUES:
                 continue
         # Prefer separate lat/lon columns over combined DMS column
         if lat_col and lon_col:
@@ -273,7 +282,7 @@ def _parse_rows(raw_rows):
                  if k not in used_cols and v and str(v).lower() not in ('nan', 'none', '')}
         sensors.append({
             'name': name, 'lat': lat, 'lon': lon,
-            'loc_raw': loc_raw, 'extra': extra,
+            'loc_raw': loc_raw, 'extra': extra, 'commissioning': commissioning,
         })
     return sensors, not_electrified
 
@@ -336,7 +345,7 @@ def load_reference(paths):
         sensors.extend(parsed)
         msg = f"  {source_label}: {len(parsed)} sensors loaded"
         if ne:
-            msg += f" ({ne} not electrified — excluded)"
+            msg += f" ({ne} awaiting power — flagged, kept for matching)"
         print(msg)
     return sensors, not_electrified
 
@@ -1229,7 +1238,7 @@ def main():
         ref_sensors, not_electrified = load_reference(args.ref)
         print(f"  ->{len(ref_sensors)} sensors total across {len(args.ref)} file(s)")
         if not_electrified:
-            print(f"  {not_electrified} sensor(s) excluded — not electrified")
+            print(f"  {not_electrified} sensor(s) awaiting power — flagged, excluded from health stats")
 
     matches = match_sensors(ref_sensors, api_sensors, max_dist=args.max_dist) if ref_sensors else []
 
@@ -1246,7 +1255,8 @@ def main():
     # (report.py, which doesn't have the reference spreadsheet) can show
     # who owns a failing sensor without re-running this matching step.
     if ref_sensors:
-        to_persist = {s['id']: {'project': s.get('project'), 'source': s.get('project_source')}
+        to_persist = {s['id']: {'project': s.get('project'), 'source': s.get('project_source'),
+                                'commissioning': s.get('commissioning', 'active')}
                       for s in api_sensors}
         upsert_sensor_projects(args.group, to_persist)
         _known = sum(1 for v in to_persist.values() if v['project'])
