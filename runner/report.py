@@ -9,8 +9,30 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_projects
 from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for
+
+_PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
+
+
+def _load_project_accountability():
+    """Return {project_name: accountability} from config/projects.csv.
+
+    Sensor-to-project assignment is computed elsewhere (qa.py, matched
+    against the reference spreadsheet) and persisted to the sensor_projects
+    DB table — this report only needs the project's accountability, which is
+    a small tracked file, not the (gitignored) reference spreadsheet itself.
+    """
+    import csv as _csv
+    status = {}
+    if _PROJECTS_CSV.exists():
+        with open(_PROJECTS_CSV, newline='', encoding='utf-8-sig') as f:
+            for r in _csv.DictReader(f):
+                proj = (r.get('project') or '').strip()
+                acct = (r.get('accountability') or '').strip().lower()
+                if proj:
+                    status[proj] = acct or 'supported'
+    return status
 
 # Load UI labels from config — falls back to defaults if file is missing
 _LABELS_PATH    = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
@@ -275,7 +297,7 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
-def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null", bt_path_coords=None):
+def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null", bt_path_coords=None, sensor_projects=None, project_acct=None):
     """Build the sensor stability panel HTML with a group dropdown."""
     if not sensors:
         return "<p style='color:var(--color-text-secondary);font-size:13px'>No sensor data recorded yet.</p>"
@@ -283,6 +305,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     bt_path_names = bt_path_names or {}
     all_sensor_coords = all_sensor_coords or {}
     bt_path_coords = bt_path_coords or {}
+    sensor_projects = sensor_projects or {}
+    project_acct = project_acct or {}
 
     groups = sorted({s["group_name"] for s in sensors})
 
@@ -333,6 +357,16 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 
         tier = tier_for(pct)
         badge_bg, badge_color, badge_label, badge_tip = tier.bg, tier.fg, tier.label, tier.tooltip
+
+        # Awaiting power / decommissioned: not expected to work. Override the
+        # health badge with a neutral one and mark the row so it can be excluded
+        # from the panel's health bar and sorting.
+        commissioning = _commissioning(sensor_projects, s["group_name"], s["sensor_id"])
+        excluded = commissioning in _EXCLUDED_COMMISSIONING
+        if excluded:
+            badge_bg, badge_color = "#e5e7eb", "#6b7280"
+            badge_label = _COMMISSIONING_LABEL[commissioning]
+            badge_tip = _COMMISSIONING_TIP[commissioning]
 
         # Sparkline: last 20 runs as tiny squares with rich tooltips
         sparks = ""
@@ -388,14 +422,30 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         else:
             sid_cell = display_sensor_id
 
+        # Project + accountability — who owns this sensor, so a failure has an owner to contact.
+        # Bluetooth paths are combinations of sensors, not owned equipment, so ownership
+        # doesn't apply to them at all.
+        proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
+        proj_name = proj_info["project"] if proj_info else None
+        proj_acct = project_acct.get(proj_name, "supported") if proj_name else None
+        if s["group_name"] in _NON_OWNED_GROUPS:
+            project_cell = '<span title="Bluetooth paths are sensor combinations, not owned equipment" style="font-size:11px;color:#6b7280;cursor:help">n/a</span>'
+        elif proj_name and proj_acct == "out_of_support":
+            project_cell = f'<span title="Out of support — failure expected, not actionable" style="font-size:11px;color:#7f8c8d;cursor:help">{proj_name}</span>'
+        elif proj_name:
+            project_cell = f'<span style="font-size:11px;color:var(--color-text-secondary)">{proj_name}</span>'
+        else:
+            project_cell = '<span title="Not matched to any reference spreadsheet row" style="font-size:11px;color:#9ca3af;cursor:help">—</span>'
+
         # Composite key avoids ID collisions when multiple groups share a sensor_id (e.g. TD and BT both have id "1")
         composite_id = f"{s['group_name']}|{s['sensor_id']}"
         safe_sid = composite_id.replace("'", "\\'")
         rows += f"""
-        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-pct="{pct}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
+        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-pct="{'' if excluded else pct}" data-awaiting="{'1' if excluded else '0'}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
           <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
+          <td style="white-space:nowrap">{project_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td style="white-space:nowrap"><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
@@ -403,7 +453,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td>{first_seen_html}</td>
         </tr>
         <tr id="trend-{composite_id}" style="display:none">
-          <td colspan="9" style="padding:0">
+          <td colspan="10" style="padding:0">
             <div style="padding:14px 16px;background:var(--color-background-secondary);border-bottom:0.5px solid var(--color-border-tertiary)">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
                 <span style="font-size:12px;font-weight:500">Daily health % — {display_sensor_id or s['sensor_id']}</span>
@@ -419,9 +469,12 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           </td>
         </tr>"""
 
-    # Per-group good/total counts for dynamic bar
+    # Per-group good/total counts for dynamic bar. Awaiting-power sensors are
+    # excluded — they aren't expected to work, so they shouldn't drag the bar down.
     group_stats = {"all": {"good": 0, "total": 0}}
     for s in sensors:
+        if _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"]):
+            continue
         g = s["group_name"]
         last_status = s["history"][-1]["status"] if s["history"] else "unknown"
         is_good = last_status in GOOD_STATUSES
@@ -454,7 +507,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
+      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>Project</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -588,6 +641,166 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     </script>"""
 
 
+def _sensor_display_name(group_name, sensor_id, bt_path_names, all_sensor_coords):
+    """Human-readable sensor label, matching the stability panel's logic."""
+    if group_name == "Bluetooth Paths":
+        return bt_path_names.get(sensor_id, sensor_id)
+    if group_name == "Traffic Detection":
+        info = all_sensor_coords.get("Traffic Detection", {}).get(sensor_id, {})
+        sc, nm = info.get("site_code"), info.get("name", sensor_id)
+        return f"{sc} ({nm})" if sc else nm
+    if group_name == "VMS":
+        info = all_sensor_coords.get("VMS", {}).get(sensor_id, {})
+        nm = info.get("name", "")
+        return f"{nm} ({sensor_id})" if nm and nm != sensor_id else sensor_id
+    return sensor_id
+
+
+# Tiers that mean a sensor needs attention: Unstable + Critical + Always off (< 70%).
+_ATTENTION_MAX_PCT = 70
+
+# Groups that are not individually-owned equipment and so have no project.
+# Bluetooth "paths" are computed from pairs of BT sensors, not physical devices.
+_NON_OWNED_GROUPS = {"Bluetooth Paths"}
+
+# Commissioning states that mean a sensor isn't expected to be working, so it's
+# excluded from health statistics and shown with a distinct neutral badge.
+_COMMISSIONING_LABEL = {
+    "not_electrified": "Awaiting power",
+    "decommissioned":  "Decommissioned",
+}
+_COMMISSIONING_TIP = {
+    "not_electrified": ("Marked pending power connection in the reference sheet — "
+                        "not expected to work yet, excluded from health statistics."),
+    "decommissioned":  ("Marked inactive / decommissioned in the reference sheet — "
+                        "excluded from health statistics."),
+}
+_EXCLUDED_COMMISSIONING = set(_COMMISSIONING_LABEL)
+
+
+def _commissioning(sensor_projects, group_name, sensor_id):
+    """Commissioning state for a sensor: 'active' (default), 'not_electrified',
+    or 'decommissioned'. The latter two are excluded from health statistics."""
+    info = (sensor_projects or {}).get(group_name, {}).get(sensor_id)
+    return info.get("commissioning", "active") if info else "active"
+
+
+def _is_excluded_commissioning(sensor_projects, group_name, sensor_id):
+    """True if the sensor should be left out of health statistics because it is
+    awaiting power or decommissioned (not expected to be working)."""
+    return _commissioning(sensor_projects, group_name, sensor_id) in _EXCLUDED_COMMISSIONING
+
+
+def _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group):
+    """Grey '· N awaiting power · M decommissioned' suffix for a group card,
+    naming the sensors excluded from that group's working ratio."""
+    parts = []
+    aw = awaiting_by_group.get(group_name, 0)
+    de = decommissioned_by_group.get(group_name, 0)
+    if aw:
+        parts.append(f"{aw} awaiting power")
+    if de:
+        parts.append(f"{de} decommissioned")
+    if not parts:
+        return ""
+    return (f' <span title="Excluded from the working ratio" '
+            f'style="font-size:11px;color:#6b7280">· {" · ".join(parts)}</span>')
+
+
+def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, sensor_projects, project_acct):
+    """Group failing sensors (< 70% uptime) by project so the team can see who
+    is responsible for what. Actionable (in-support / unassigned) projects are
+    listed first; out-of-support projects — where a failure is expected and not
+    actionable — are shown separately, clearly marked."""
+    bt_path_names = bt_path_names or {}
+    sensor_projects = sensor_projects or {}
+    project_acct = project_acct or {}
+
+    # Collect problem sensors, bucketed by project name (None -> "Unassigned")
+    buckets = {}   # project_name -> {"acct": str, "sensors": [ ... ]}
+    for s in sensors:
+        if s["group_name"] in _NON_OWNED_GROUPS:
+            continue  # BT paths are sensor combinations, not owned equipment
+        if _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"]):
+            continue  # awaiting power or decommissioned — not a fault
+        history = s["history"]
+        total = len(history)
+        if not total:
+            continue
+        good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
+        pct = round(good / total * 100)
+        if pct >= _ATTENTION_MAX_PCT:
+            continue
+        tier = tier_for(pct)
+        proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
+        proj = proj_info["project"] if proj_info and proj_info["project"] else None
+        acct = project_acct.get(proj, "supported") if proj else "unassigned"
+        key = proj or "Unassigned"
+        buckets.setdefault(key, {"acct": acct, "sensors": []})
+        buckets[key]["sensors"].append({
+            "display": _sensor_display_name(s["group_name"], s["sensor_id"], bt_path_names, all_sensor_coords),
+            "group": GROUP_DISPLAY.get(s["group_name"], s["group_name"]),
+            "pct": pct, "tier": tier,
+        })
+
+    if not buckets:
+        return ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
+                'No sensors below 70% uptime — nothing needs attention. &#127881;</p>')
+
+    actionable = {k: v for k, v in buckets.items() if v["acct"] != "out_of_support"}
+    out_of_support = {k: v for k, v in buckets.items() if v["acct"] == "out_of_support"}
+
+    def _project_block(name, bucket, dim=False):
+        rows = sorted(bucket["sensors"], key=lambda x: x["pct"])
+        n = len(rows)
+        base_color = "var(--color-text-secondary)" if dim else "var(--color-text-primary)"
+        if name == "Unassigned":
+            tag = '<span style="font-size:10px;color:#c0392b;margin-left:8px">no owner known</span>'
+        elif dim:
+            tag = '<span style="font-size:10px;color:#7f8c8d;margin-left:8px">out of support — expected, not actionable</span>'
+        else:
+            tag = ''
+        body = ""
+        for r in rows:
+            t = r["tier"]
+            badge = (f'<span style="font-size:10px;font-weight:500;padding:1px 7px;border-radius:10px;'
+                     f'background:{t.bg};color:{t.fg}">{t.label} ({r["pct"]}%)</span>')
+            body += (f'<tr style="border-top:0.5px solid var(--color-border-tertiary)">'
+                     f'<td style="padding:5px 8px;font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{r["group"]}</td>'
+                     f'<td style="padding:5px 8px;font-size:12px;font-family:monospace;color:{base_color}">{r["display"]}</td>'
+                     f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{badge}</td>'
+                     f'</tr>')
+        return (f'<details style="margin-bottom:6px">'
+                f'<summary style="cursor:pointer;padding:7px 10px;border-radius:6px;'
+                f'background:var(--color-background-secondary);font-size:13px;font-weight:500;color:{base_color};'
+                f'display:flex;align-items:center;justify-content:space-between;list-style:none">'
+                f'<span>{name}{tag}</span>'
+                f'<span style="font-size:12px;color:{"#7f8c8d" if dim else "#e24b4a"};font-weight:600;white-space:nowrap">{n} down</span>'
+                f'</summary>'
+                f'<table style="width:100%;border-collapse:collapse;margin:2px 0 8px">{body}</table>'
+                f'</details>')
+
+    html = ""
+    if actionable:
+        for name in sorted(actionable, key=lambda k: (-len(actionable[k]["sensors"]), k)):
+            html += _project_block(name, actionable[name])
+    else:
+        html += ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
+                 'No actionable projects have failing sensors. &#9989;</p>')
+
+    if out_of_support:
+        oos_total = sum(len(v["sensors"]) for v in out_of_support.values())
+        html += (f'<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--color-border-tertiary)">'
+                 f'<div style="font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;'
+                 f'color:var(--color-text-secondary);margin-bottom:8px">'
+                 f'Out of support &middot; {oos_total} down &middot; failure expected, not actionable</div>')
+        for name in sorted(out_of_support, key=lambda k: (-len(out_of_support[k]["sensors"]), k)):
+            html += _project_block(name, out_of_support[name], dim=True)
+        html += '</div>'
+
+    return html
+
+
 def _build_health_by_run(raw_health):
     """Build {run_id: {group_name: pct, 'feed_issues': [...]}} from raw health rows."""
     health_by_run = {}
@@ -654,8 +867,9 @@ def _build_sensor_trend_data(all_sensors):
     return json.dumps(trend_data), json.dumps(day_labels)
 
 
-def _build_map_sensor_list(all_coords, live_data):
+def _build_map_sensor_list(all_coords, live_data, sensor_projects=None):
     """Return list of sensor dicts for the Leaflet map."""
+    sensor_projects = sensor_projects or {}
     sensors = []
     for group_name, sensors_dict in all_coords.items():
         group_live = live_data.get(group_name, {})
@@ -668,6 +882,10 @@ def _build_map_sensor_list(all_coords, live_data):
                 display_name = f"{sc} ({nm})" if sc else nm
             else:
                 display_name = c["name"]
+            proj_info = sensor_projects.get(group_name, {}).get(sid)
+            comm = proj_info.get("commissioning", "active") if proj_info else "active"
+            comm_label = {"not_electrified": "Awaiting power — not yet electrified",
+                          "decommissioned": "Decommissioned"}.get(comm)
             sensors.append({
                 "id": sid, "group": group_name,
                 "group_display": GROUP_DISPLAY.get(group_name, group_name),
@@ -675,8 +893,10 @@ def _build_map_sensor_list(all_coords, live_data):
                 "lat": c["lat"], "lon": c["lon"],
                 "status": st,
                 "label": STATUS_LABEL.get(st, "Unknown"),
-                "color": STATUS_COLOR.get(st, "#6b7280"),
+                "color": "#9ca3af" if comm_label else STATUS_COLOR.get(st, "#6b7280"),
                 "data": entry.get("data", {}),
+                "project": proj_info["project"] if proj_info else None,
+                "comm_label": comm_label,
             })
     return sensors
 
@@ -745,6 +965,30 @@ def generate_report() -> str:
 
     # Per-sensor statuses for the latest run (used for full ID lists in cards)
     latest_sensor_statuses = fetch_sensor_statuses_for_run(latest_run["run_id"])
+
+    # Project ownership + commissioning — fetched once, shared by the group cards,
+    # stability panel, map pop-ups, and the "attention needed" rollup.
+    sensor_projects = fetch_sensor_projects()
+    project_acct    = _load_project_accountability()
+    # Per-group counts of sensors excluded from health stats, by reason. Surfaced
+    # separately in the group cards so the reader sees why the live total is lower.
+    awaiting_by_group = {}
+    decommissioned_by_group = {}
+    for grp, sdict in sensor_projects.items():
+        aw = sum(1 for info in sdict.values() if info.get("commissioning") == "not_electrified")
+        de = sum(1 for info in sdict.values() if info.get("commissioning") == "decommissioned")
+        if aw:
+            awaiting_by_group[grp] = aw
+        if de:
+            decommissioned_by_group[grp] = de
+
+    def _live_total(group_name, reported_total, working):
+        """Reported group total minus its awaiting-power / decommissioned sensors,
+        so the working ratio covers only sensors expected to work. Clamped to at
+        least `working` — snapshot skew between the test tally and the persisted
+        commissioning counts must never make working exceed the denominator."""
+        excluded = awaiting_by_group.get(group_name, 0) + decommissioned_by_group.get(group_name, 0)
+        return max(reported_total - excluded, working)
 
 
     # Build group status cards
@@ -863,16 +1107,22 @@ def generate_report() -> str:
             elif "sensor_speed_status" in cs:
                 m = re.search(r"Working: (\d+)/(\d+)", cs)
                 if m:
-                    pct = int(m.group(1)) / int(m.group(2)) * 100
-                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} working</span>'
+                    working = int(m.group(1))
+                    live_total = _live_total(group_name, int(m.group(2)), working)
+                    pct = working / live_total * 100 if live_total else 0
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
+                    name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
             elif "vms_controller_status" in cs:
                 w = re.search(r"Working: (\d+)", cs)
                 nw = re.search(r"Not working: (\d+)", cs)
                 ns = re.search(r"No status: (\d+)", cs)
                 if w:
-                    total = int(w.group(1)) + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
-                    pct = int(w.group(1)) / total * 100 if total else 0
-                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {w.group(1)}/{total} working</span>'
+                    working = int(w.group(1))
+                    total = working + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
+                    live_total = _live_total(group_name, total, working)
+                    pct = working / live_total * 100 if live_total else 0
+                    name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
+                    name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
             elif "bt_paths_speed_and_traveltime" in cs:
                 m = re.search(r"Speed OK: (\d+)/(\d+)", cs)
                 if m:
@@ -1069,10 +1319,12 @@ def generate_report() -> str:
 
     # Build stability html now that coord lookups are available
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
-    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths)
+    sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths,
+                                                          sensor_projects=sensor_projects, project_acct=project_acct)
+    accountability_html = build_accountability_rollup_html(active_sensors, _bt_path_names, all_coords, sensor_projects, project_acct)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
-    map_sensors       = _build_map_sensor_list(all_coords, live_data)
+    map_sensors       = _build_map_sensor_list(all_coords, live_data, sensor_projects)
     map_bt_paths      = _build_map_bt_path_list(all_bt_paths, live_data)
     map_sensors_json  = json.dumps(map_sensors)
     map_bt_paths_json = json.dumps(map_bt_paths)
@@ -1124,7 +1376,6 @@ def generate_report() -> str:
     last_run_utc_iso = latest_run["run_at"]
     staleness_threshold_hours = _UI.get("staleness_threshold_hours", 9)
 
-
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
     overall_pct = round(latest_run["passed"] / latest_total * 100)
@@ -1140,8 +1391,10 @@ def generate_report() -> str:
     history_pct = round(sum(latest_hvals) / len(latest_hvals)) if latest_hvals else overall_pct
     history_bar_color = _health_color(history_pct)
 
-    sensor_good = sum(1 for s in all_sensors if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
-    sensor_total_count = len(all_sensors) or 1
+    _counted = [s for s in all_sensors
+                if not _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"])]
+    sensor_good = sum(1 for s in _counted if s["history"] and s["history"][-1]["status"] in GOOD_STATUSES)
+    sensor_total_count = len(_counted) or 1
     sensor_pct = round(sensor_good / sensor_total_count * 100)
     sensor_bar_color = "#1d9e75" if sensor_pct >= 90 else ("#e58e0a" if sensor_pct >= 55 else "#e24b4a")
 
@@ -1383,6 +1636,16 @@ def generate_report() -> str:
 </div><!-- end left column -->
 <div class="col-right">
 
+  <div class="panel" id="p-accountability">
+    <div class="panel-header" onclick="togglePanel('p-accountability')">
+      <span class="panel-title">Attention needed, by project</span>
+      <div class="panel-chevron open" id="c-p-accountability"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+    </div>
+    <div class="panel-body" id="b-p-accountability">
+      {accountability_html}
+    </div>
+  </div>
+
   <div class="panel" id="p-sensors">
     <div class="panel-header" onclick="togglePanel('p-sensors')">
       <span class="panel-title">{_lbl('panels', 'stability', 'Sensor stability')}</span>
@@ -1593,8 +1856,12 @@ function makeMarker(s) {
   if (s.group === 'VMS') {
     dataRows += popRow('Message', d.message || null);
   }
+  var statusCell = s.comm_label
+    ? popRow('Status', s.comm_label, '#6b7280')
+    : popRow('Status', STATUS_LABELS[s.status]||s.status, s.color);
   var rows = popRow('ID', s.id)+popRow('Group', s.group_display||s.group)+
-             popRow('Status', STATUS_LABELS[s.status]||s.status, s.color)+dataRows;
+             popRow('Project', s.project || 'Unassigned', s.project?null:'#c0392b')+
+             statusCell+dataRows;
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
   m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
   return m;

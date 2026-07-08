@@ -9,11 +9,84 @@ from datetime import datetime, timezone
 
 DB_PATH = os.environ.get("DB_PATH", "results/history.db")
 
+_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS runs (
+        run_id  TEXT PRIMARY KEY,
+        run_at  TEXT NOT NULL,
+        total   INTEGER DEFAULT 0,
+        passed  INTEGER DEFAULT 0,
+        failed  INTEGER DEFAULT 0,
+        errored INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS test_results (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id         TEXT NOT NULL,
+        group_name     TEXT NOT NULL,
+        test_name      TEXT NOT NULL,
+        endpoint       TEXT NOT NULL,
+        method         TEXT NOT NULL DEFAULT 'GET',
+        status         TEXT NOT NULL,
+        status_code    INTEGER,
+        expected_code  INTEGER DEFAULT 200,
+        response_ms    REAL,
+        failure_reason TEXT,
+        check_summary  TEXT,
+        FOREIGN KEY (run_id) REFERENCES runs(run_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sensor_results (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id     TEXT NOT NULL,
+        run_at     TEXT NOT NULL,
+        group_name TEXT NOT NULL,
+        sensor_id  TEXT NOT NULL,
+        status     TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sensor_results_sensor
+        ON sensor_results (group_name, sensor_id, run_at);
+
+    CREATE TABLE IF NOT EXISTS sensor_coords (
+        sensor_id  TEXT NOT NULL,
+        group_name TEXT NOT NULL,
+        lat        REAL NOT NULL,
+        lon        REAL NOT NULL,
+        name       TEXT,
+        site_code  TEXT,
+        active     INTEGER NOT NULL DEFAULT 1,
+        last_seen  TEXT,
+        PRIMARY KEY (sensor_id, group_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS bt_path_coords (
+        path_id TEXT PRIMARY KEY,
+        name    TEXT,
+        coords  TEXT,
+        active  INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS sensor_projects (
+        sensor_id     TEXT NOT NULL,
+        group_name    TEXT NOT NULL,
+        project       TEXT,
+        source        TEXT,
+        commissioning TEXT NOT NULL DEFAULT 'active',
+        updated_at    TEXT,
+        PRIMARY KEY (sensor_id, group_name)
+    );
+"""
+
 
 def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Self-healing schema: any script that connects first (not just run_tests.py,
+    # which historically owned init_db()) still gets an up-to-date DB. Cheap and
+    # idempotent — every statement is CREATE TABLE IF NOT EXISTS / guarded ALTER.
+    conn.executescript(_SCHEMA)
+    _migrate(conn)
     return conn
 
 
@@ -68,70 +141,29 @@ def _migrate(conn):
     elif not _has_column(conn, "bt_path_coords", "active"):
         conn.execute("ALTER TABLE bt_path_coords ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
 
+    if not _has_table(conn, "sensor_projects"):
+        conn.execute("""
+            CREATE TABLE sensor_projects (
+                sensor_id     TEXT NOT NULL,
+                group_name    TEXT NOT NULL,
+                project       TEXT,
+                source        TEXT,
+                commissioning TEXT NOT NULL DEFAULT 'active',
+                updated_at    TEXT,
+                PRIMARY KEY (sensor_id, group_name)
+            )
+        """)
+    elif not _has_column(conn, "sensor_projects", "commissioning"):
+        conn.execute("ALTER TABLE sensor_projects ADD COLUMN commissioning TEXT NOT NULL DEFAULT 'active'")
+
     conn.commit()
 
 
 def init_db():
-    conn = get_connection()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS runs (
-            run_id  TEXT PRIMARY KEY,
-            run_at  TEXT NOT NULL,
-            total   INTEGER DEFAULT 0,
-            passed  INTEGER DEFAULT 0,
-            failed  INTEGER DEFAULT 0,
-            errored INTEGER DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS test_results (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id         TEXT NOT NULL,
-            group_name     TEXT NOT NULL,
-            test_name      TEXT NOT NULL,
-            endpoint       TEXT NOT NULL,
-            method         TEXT NOT NULL DEFAULT 'GET',
-            status         TEXT NOT NULL,
-            status_code    INTEGER,
-            expected_code  INTEGER DEFAULT 200,
-            response_ms    REAL,
-            failure_reason TEXT,
-            check_summary  TEXT,
-            FOREIGN KEY (run_id) REFERENCES runs(run_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS sensor_results (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id     TEXT NOT NULL,
-            run_at     TEXT NOT NULL,
-            group_name TEXT NOT NULL,
-            sensor_id  TEXT NOT NULL,
-            status     TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_sensor_results_sensor
-            ON sensor_results (group_name, sensor_id, run_at);
-
-        CREATE TABLE IF NOT EXISTS sensor_coords (
-            sensor_id  TEXT NOT NULL,
-            group_name TEXT NOT NULL,
-            lat        REAL NOT NULL,
-            lon        REAL NOT NULL,
-            name       TEXT,
-            site_code  TEXT,
-            active     INTEGER NOT NULL DEFAULT 1,
-            last_seen  TEXT,
-            PRIMARY KEY (sensor_id, group_name)
-        );
-
-        CREATE TABLE IF NOT EXISTS bt_path_coords (
-            path_id TEXT PRIMARY KEY,
-            name    TEXT,
-            coords  TEXT,
-            active  INTEGER NOT NULL DEFAULT 1
-        );
-    """)
-    _migrate(conn)
-    conn.close()
+    # get_connection() already applies _SCHEMA + _migrate; kept as an explicit
+    # entry point for callers (e.g. run_tests.py) that want to ensure the DB
+    # exists before doing anything else.
+    get_connection().close()
 
 
 def insert_run(run_id, run_at, totals):
@@ -200,6 +232,45 @@ def upsert_bt_path_coords(paths_dict):
         )
     conn.commit()
     conn.close()
+
+
+def upsert_sensor_projects(group_name, projects_dict):
+    """projects_dict: {sensor_id: {project, source, commissioning?}}. project may
+    be None to clear a sensor's assignment (e.g. it no longer matches a reference
+    row). commissioning defaults to 'active' and is 'not_electrified' for sensors
+    the reference sheet marks as awaiting power / not yet commissioned."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    for sid, p in projects_dict.items():
+        conn.execute(
+            """INSERT INTO sensor_projects (sensor_id, group_name, project, source, commissioning, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(sensor_id, group_name) DO UPDATE
+               SET project=excluded.project, source=excluded.source,
+                   commissioning=excluded.commissioning, updated_at=excluded.updated_at""",
+            (sid, group_name, p.get("project"), p.get("source"),
+             p.get("commissioning") or "active", now)
+        )
+    conn.commit()
+    conn.close()
+
+
+def fetch_sensor_projects():
+    """Return {group_name: {sensor_id: {project, source, commissioning}}} for
+    sensors that have either a known project or a non-active commissioning state."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT sensor_id, group_name, project, source, commissioning FROM sensor_projects "
+        "WHERE project IS NOT NULL OR commissioning != 'active'"
+    ).fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        result.setdefault(r["group_name"], {})[r["sensor_id"]] = {
+            "project": r["project"], "source": r["source"],
+            "commissioning": r["commissioning"] or "active",
+        }
+    return result
 
 
 def retire_missing_sensors(group_name, active_ids):
