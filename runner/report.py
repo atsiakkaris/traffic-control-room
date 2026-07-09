@@ -1010,13 +1010,25 @@ def generate_report() -> str:
         if de:
             decommissioned_by_group[grp] = de
 
-    def _live_total(group_name, reported_total, working):
-        """Reported group total minus its awaiting-power / decommissioned sensors,
-        so the working ratio covers only sensors expected to work. Clamped to at
-        least `working` — snapshot skew between the test tally and the persisted
-        commissioning counts must never make working exceed the denominator."""
-        excluded = awaiting_by_group.get(group_name, 0) + decommissioned_by_group.get(group_name, 0)
-        return max(reported_total - excluded, working)
+    # Fetched here (rather than later with the rest of the map data) because
+    # _live_total needs the registered active-sensor count below.
+    all_coords = fetch_sensor_coords()
+
+    def _live_total(group_name, working):
+        """Count of registered active sensors for this group that are expected
+        to work — i.e. active in sensor_coords AND not awaiting-power /
+        decommissioned. Counts the intersection directly rather than subtracting
+        commissioning tallies: a sensor can be decommissioned in sensor_projects
+        yet already dropped from active coords, so subtracting the two counts
+        would exclude it twice. Uses the registered count (not the count that
+        reported in this run's feed) so a sensor that goes dark shows as a
+        numerator drop against a stable denominator. Clamped to at least
+        `working` as a final safety net against stale data."""
+        expected = sum(
+            1 for sid in all_coords.get(group_name, {})
+            if not _is_excluded_commissioning(sensor_projects, group_name, sid)
+        )
+        return max(expected, working)
 
 
     # Build group status cards
@@ -1135,7 +1147,7 @@ def generate_report() -> str:
                 m = re.search(r"Working: (\d+)/(\d+)", cs)
                 if m:
                     working = int(m.group(1))
-                    live_total = _live_total(group_name, int(m.group(2)), working)
+                    live_total = _live_total(group_name, working)
                     pct = working / live_total * 100 if live_total else 0
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
                     name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
@@ -1145,8 +1157,7 @@ def generate_report() -> str:
                 ns = re.search(r"No status: (\d+)", cs)
                 if w:
                     working = int(w.group(1))
-                    total = working + (int(nw.group(1)) if nw else 0) + (int(ns.group(1)) if ns else 0)
-                    live_total = _live_total(group_name, total, working)
+                    live_total = _live_total(group_name, working)
                     pct = working / live_total * 100 if live_total else 0
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
                     name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
@@ -1329,8 +1340,7 @@ def generate_report() -> str:
           {feed_cell}
         </tr>"""
 
-    # Map data
-    all_coords = fetch_sensor_coords()
+    # Map data (all_coords fetched earlier — needed by _live_total above)
     all_bt_paths = fetch_bt_path_coords()
 
     trend_data_json, day_labels_json = _build_sensor_trend_data(all_sensors)
