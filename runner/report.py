@@ -333,6 +333,31 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
+def _unassigned_tooltip(source):
+    """Plain-language reason a sensor has no project, from sensor_projects.source.
+
+    The two cases need different responses: a missing reference row is a
+    data-entry task, while a row claimed by a nearer sensor may be a mis-mapping.
+    Written for readers who have never seen the spreadsheet.
+    """
+    src = source or ""
+    dist = src.partition(":")[2]
+    metres = f"{int(dist):,}".replace(",", " ") if dist.isdigit() else None
+
+    if src.startswith("unmatched_no_ref"):
+        near = f" The nearest one is {metres} m away." if metres else ""
+        return ("No row for this sensor in the reference spreadsheet, so nobody is "
+                f"recorded as owning it.{near} Add it to QA Locations.xlsx.")
+    if src.startswith("unmatched_ref_taken"):
+        near = f" {metres} m away" if metres else " nearby"
+        return (f"A reference row sits{near}, but a closer sensor already claimed it — "
+                "each row can own only one sensor. This site probably needs its own "
+                "row in QA Locations.xlsx.")
+    if src == "unmatched_no_coords":
+        return "The API reports no coordinates for this sensor, so it cannot be matched to a reference row."
+    return "Not matched to any reference spreadsheet row."
+
+
 def _search_tokens(display_sensor_id):
     """Identifiers a row can be reached by in an exact (quoted) search, sorted.
 
@@ -504,7 +529,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         elif proj_name:
             project_cell = f'<span style="font-size:11px;color:var(--color-text-secondary)">{proj_name_esc}</span>'
         else:
-            project_cell = '<span title="Not matched to any reference spreadsheet row" style="font-size:11px;color:#9ca3af;cursor:help">—</span>'
+            reason = _html.escape(_unassigned_tooltip(proj_info["source"] if proj_info else None))
+            project_cell = f'<span title="{reason}" style="font-size:11px;color:#9ca3af;cursor:help">—</span>'
 
         # Composite key avoids ID collisions when multiple groups share a sensor_id (e.g. TD and BT both have id "1")
         composite_id = f"{s['group_name']}|{s['sensor_id']}"

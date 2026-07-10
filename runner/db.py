@@ -265,12 +265,16 @@ def upsert_sensor_projects(group_name, projects_dict):
 
 
 def fetch_sensor_projects():
-    """Return {group_name: {sensor_id: {project, source, commissioning}}} for
-    sensors that have either a known project or a non-active commissioning state."""
+    """Return {group_name: {sensor_id: {project, source, commissioning}}}.
+
+    Includes sensors with no project when 'source' explains why they went
+    unassigned, so the dashboard can tell a missing reference row apart from a
+    row that a nearer sensor claimed. Those rows still carry project=None."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT sensor_id, group_name, project, source, commissioning FROM sensor_projects "
-        "WHERE project IS NOT NULL OR commissioning != 'active'"
+        "WHERE project IS NOT NULL OR commissioning != 'active' "
+        "   OR source LIKE 'unmatched%'"
     ).fetchall()
     conn.close()
     result = {}

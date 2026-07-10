@@ -241,3 +241,38 @@ def test_search_tokens_keep_sensor_id_when_it_is_displayed():
 def test_search_tokens_deduplicate_repeated_values():
     import report
     assert report._search_tokens("1040 (1040)") == ["1040"]
+
+
+# ── Unassigned-project tooltips ───────────────────────────────────────────────
+
+def test_unassigned_tooltip_missing_row_tells_the_user_to_add_it():
+    import report
+    tip = report._unassigned_tooltip("unmatched_no_ref:1320")
+    assert "No row for this sensor" in tip
+    assert "1 320 m" in tip          # thin-space grouped, not "1,320"
+    assert "QA Locations.xlsx" in tip
+
+
+def test_unassigned_tooltip_claimed_row_explains_the_contention():
+    import report
+    tip = report._unassigned_tooltip("unmatched_ref_taken:21")
+    assert "closer sensor already claimed it" in tip
+    assert "21 m" in tip
+
+
+def test_unassigned_tooltip_handles_missing_coordinates():
+    import report
+    assert "no coordinates" in report._unassigned_tooltip("unmatched_no_coords")
+
+
+def test_unassigned_tooltip_falls_back_when_source_is_absent():
+    """Rows written before this field existed must still render something sane."""
+    import report
+    assert report._unassigned_tooltip(None) == "Not matched to any reference spreadsheet row."
+    assert report._unassigned_tooltip("matched") == "Not matched to any reference spreadsheet row."
+
+
+def test_unassigned_tooltip_tolerates_a_malformed_distance():
+    import report
+    tip = report._unassigned_tooltip("unmatched_no_ref:")
+    assert "No row for this sensor" in tip and "m away" not in tip

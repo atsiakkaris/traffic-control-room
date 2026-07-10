@@ -121,3 +121,52 @@ def test_unknown_coords_type_is_noop(monkeypatch):
     """An unregistered coords_extract value must not raise."""
     import run_tests
     run_tests._process_coords("nonexistent_type", "<xml/>", "Traffic Detection", "pass")
+
+
+# ── match_sensors: reference rows are identified by row, not by name ──────────
+#
+# Two distinct sites can legitimately share a name (two points on Georgiou Griva
+# Digeni Avenue). Keying claimed rows on the name made the first match swallow
+# the second row: it could never match, and it was dropped from the results too.
+
+def _ref(name, lat, lon, project="P"):
+    return {"name": name, "lat": lat, "lon": lon, "extra": {"project": project}}
+
+
+def _api(sid, lat, lon):
+    return {"id": sid, "lat": lat, "lon": lon, "name": f"api-{sid}"}
+
+
+def test_duplicate_reference_names_each_match_their_own_sensor():
+    import qa
+    refs = [_ref("Digeni Avenue", 35.1641184, 33.3506207),
+            _ref("Digeni Avenue", 35.1609086, 33.3424934)]
+    apis = [_api("21", 35.16413, 33.35085), _api("109", 35.16090, 33.34250)]
+
+    matches = qa.match_sensors(refs, apis, max_dist=300)
+    matched = {m["api"]["id"] for m in matches if m["type"] == "match"}
+    assert matched == {"21", "109"}, "each duplicate-named row must claim its own sensor"
+
+
+def test_every_reference_row_is_accounted_for_exactly_once():
+    """A row must surface as either a 'match' or a 'ref_only' — never vanish."""
+    import qa
+    refs = [_ref("Shared Name", 35.1641184, 33.3506207),
+            _ref("Shared Name", 35.9000000, 33.9000000)]   # far from any sensor
+    apis = [_api("21", 35.16413, 33.35085)]
+
+    matches = qa.match_sensors(refs, apis, max_dist=300)
+    accounted = sum(1 for m in matches if m["type"] in ("match", "ref_only"))
+    assert accounted == len(refs)
+
+
+def test_closest_sensor_still_wins_a_contested_row():
+    """The greedy shortest-first rule is unchanged: nearest sensor claims the row."""
+    import qa
+    refs = [_ref("Only Row", 35.0, 33.0)]
+    apis = [_api("far", 35.0018, 33.0), _api("near", 35.00005, 33.0)]
+
+    matches = qa.match_sensors(refs, apis, max_dist=300)
+    match = [m for m in matches if m["type"] == "match"]
+    assert len(match) == 1 and match[0]["api"]["id"] == "near"
+    assert {m["api"]["id"] for m in matches if m["type"] == "api_only"} == {"far"}

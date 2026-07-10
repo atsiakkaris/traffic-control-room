@@ -68,7 +68,7 @@ def main():
 
         ref_sensors, _not_electrified = load_reference([f"{WORKBOOK}::{sheet}"])
         matches = match_sensors(ref_sensors, api_sensors, max_dist=max_dist)
-        annotate_accountability(api_sensors, matches, project_acct)
+        annotate_accountability(api_sensors, matches, project_acct, max_dist=max_dist)
 
         # Persist every API sensor: matched ones carry their project, the rest
         # get project=None so a removed/edited assignment is cleared, not stale.

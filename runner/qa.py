@@ -81,7 +81,7 @@ def load_project_accountability():
     return status
 
 
-def annotate_accountability(api_sensors, matches, project_acct):
+def annotate_accountability(api_sensors, matches, project_acct, max_dist=None):
     """Attach 'project', 'accountability', and 'project_source' to each API sensor.
 
     Project is taken from the matched reference sensor's 'project' column;
@@ -94,8 +94,16 @@ def annotate_accountability(api_sensors, matches, project_acct):
     project_source records how the project was determined:
       'matched'   — directly matched to a reference row
       'colocated' — inherited from a co-located matched twin
-      None        — no project known (defaults to 'supported', i.e. actionable)
+
+    When no project is found, project_source records *why*, so the dashboard can
+    tell a missing spreadsheet row apart from a row that a nearer sensor claimed:
+      'unmatched_no_ref:<m>'     — nearest reference row is <m> metres away, beyond
+                                   the match threshold; the row does not exist
+      'unmatched_ref_taken:<m>'  — a reference row sits <m> metres away, inside the
+                                   threshold, but a closer sensor already claimed it
+      'unmatched_no_coords'      — the sensor has no coordinates to match on
     """
+    threshold = max_dist if max_dist is not None else COORD_MATCH_MAX_M
     for s in api_sensors:
         s.setdefault('project', None)
         s.setdefault('accountability', ACCT_SUPPORTED)
@@ -130,6 +138,23 @@ def annotate_accountability(api_sensors, matches, project_acct):
             s['accountability'] = twin['accountability']
             s['project_source'] = 'colocated'
             s['commissioning']  = twin.get('commissioning', 'active')
+
+    # Record why the stragglers went unassigned. Every reference row appears in
+    # matches as either a 'match' or a 'ref_only', so this is the full sheet.
+    all_refs = [m['ref'] for m in matches
+                if m.get('ref') and m['ref'].get('lat') is not None]
+    for s in api_sensors:
+        if s['project_source'] is not None:
+            continue
+        if s['lat'] is None:
+            s['project_source'] = 'unmatched_no_coords'
+            continue
+        if not all_refs:
+            s['project_source'] = 'unmatched_no_ref:'
+            continue
+        dist = min(_haversine_m(s['lat'], s['lon'], r['lat'], r['lon']) for r in all_refs)
+        kind = 'unmatched_ref_taken' if dist <= threshold else 'unmatched_no_ref'
+        s['project_source'] = f'{kind}:{round(dist)}'
     return api_sensors
 
 
@@ -494,34 +519,37 @@ def match_sensors(ref_sensors, api_sensors, max_dist=None):
 
     threshold = max_dist if max_dist is not None else COORD_MATCH_MAX_M
 
-    # Build all pairs within threshold, sorted by distance
+    # Build all pairs within threshold, sorted by distance. Rows are tracked by
+    # position, not by name: two distinct sites can legitimately share a name
+    # (e.g. two points on Georgiou Griva Digeni Avenue), and keying on the name
+    # would let the first match swallow the second row's identity.
     candidates = []
-    for ref in refs_with_coords:
+    for ri, ref in enumerate(refs_with_coords):
         for api in api_with_coords:
             dist = _haversine_m(ref['lat'], ref['lon'], api['lat'], api['lon'])
             if dist <= threshold:
-                candidates.append((dist, ref, api))
-    candidates.sort(key=lambda x: x[0])
+                candidates.append((dist, ri, api))
+    candidates.sort(key=lambda x: (x[0], x[1]))
 
-    matched_ref_names = set()
-    matched_api_ids   = set()
+    matched_ref_idx  = set()
+    matched_api_ids  = set()
     results = []
 
-    for dist, ref, api in candidates:
-        if ref['name'] in matched_ref_names or api['id'] in matched_api_ids:
+    for dist, ri, api in candidates:
+        if ri in matched_ref_idx or api['id'] in matched_api_ids:
             continue
-        matched_ref_names.add(ref['name'])
+        matched_ref_idx.add(ri)
         matched_api_ids.add(api['id'])
         results.append({
             'type':       'match',
             'confidence': None,
-            'ref':        ref,
+            'ref':        refs_with_coords[ri],
             'api':        api,
             'distance_m': round(dist, 1),
         })
 
-    for ref in refs_with_coords:
-        if ref['name'] not in matched_ref_names:
+    for ri, ref in enumerate(refs_with_coords):
+        if ri not in matched_ref_idx:
             # Find nearest API sensor for the note, even if beyond threshold
             nearest = min(api_with_coords,
                           key=lambda a: _haversine_m(ref['lat'], ref['lon'], a['lat'], a['lon']),
@@ -1254,7 +1282,7 @@ def main():
     # Accountability: API sensors inherit it via the matched reference row;
     # reference sensors get it directly from their own Project column.
     project_acct = load_project_accountability()
-    annotate_accountability(api_sensors, matches, project_acct)
+    annotate_accountability(api_sensors, matches, project_acct, max_dist=args.max_dist)
     annotate_ref_accountability(ref_sensors, project_acct)
     _oos = sum(1 for s in api_sensors if s['accountability'] == ACCT_OUT_OF_SUPPORT)
     if _oos:
