@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from db import get_connection
+from labels import sensor_display_name, with_id
 from stability import CYPRUS_TZ, GOOD_STATUSES, STABILITY_TIERS, tier_for, health_pct
 
 logging.basicConfig(
@@ -72,13 +73,18 @@ def fetch_sensor_health_by_day(days_back):
 def fetch_active_sensors():
     """Return (sensors, bt_paths) as sets of (group_name, sensor_id), plus a name lookup dict."""
     conn = get_connection()
-    sc = conn.execute("SELECT group_name, sensor_id, name FROM sensor_coords WHERE active=1").fetchall()
+    sc = conn.execute("SELECT group_name, sensor_id, name, site_code FROM sensor_coords WHERE active=1").fetchall()
     bt = conn.execute("SELECT path_id, name FROM bt_path_coords WHERE active=1").fetchall()
     conn.close()
     sensors  = {(r["group_name"], r["sensor_id"]) for r in sc}
     bt_paths = {("Bluetooth Paths", r["path_id"]) for r in bt}
-    names    = {(r["group_name"], r["sensor_id"]): r["name"] or r["sensor_id"] for r in sc}
-    names   |= {("Bluetooth Paths", r["path_id"]): r["name"] or r["path_id"] for r in bt}
+    # Same label the dashboard shows, so a sensor never appears under two names.
+    names    = {(r["group_name"], r["sensor_id"]):
+                sensor_display_name(r["group_name"], r["sensor_id"], r["name"], r["site_code"])
+                for r in sc}
+    names   |= {("Bluetooth Paths", r["path_id"]):
+                sensor_display_name("Bluetooth Paths", r["path_id"], r["name"])
+                for r in bt}
     return sensors, bt_paths, names
 
 
@@ -88,7 +94,7 @@ def fetch_retired_this_week():
     conn = get_connection()
 
     sensor_rows = conn.execute("""
-        SELECT sc.group_name, sc.sensor_id, MAX(sr.run_at) AS last_seen
+        SELECT sc.group_name, sc.sensor_id, sc.name, sc.site_code, MAX(sr.run_at) AS last_seen
         FROM sensor_coords sc
         LEFT JOIN sensor_results sr ON sr.group_name = sc.group_name AND sr.sensor_id = sc.sensor_id
         WHERE sc.active = 0
@@ -97,7 +103,7 @@ def fetch_retired_this_week():
     """, (cutoff,)).fetchall()
 
     bt_rows = conn.execute("""
-        SELECT bt.path_id, MAX(sr.run_at) AS last_seen
+        SELECT bt.path_id, bt.name, MAX(sr.run_at) AS last_seen
         FROM bt_path_coords bt
         LEFT JOIN sensor_results sr ON sr.group_name = 'Bluetooth Paths' AND sr.sensor_id = bt.path_id
         WHERE bt.active = 0
@@ -108,14 +114,23 @@ def fetch_retired_this_week():
     conn.close()
 
     retired = [
-        {"group": r["group_name"], "sensor_id": r["sensor_id"], "last_seen": r["last_seen"][:10]}
+        {"group": r["group_name"], "sensor_id": r["sensor_id"], "name": r["name"],
+         "site_code": r["site_code"], "last_seen": r["last_seen"][:10]}
         for r in sensor_rows
     ]
     retired += [
-        {"group": "Bluetooth Paths", "sensor_id": r["path_id"], "last_seen": r["last_seen"][:10]}
+        {"group": "Bluetooth Paths", "sensor_id": r["path_id"], "name": r["name"],
+         "site_code": None, "last_seen": r["last_seen"][:10]}
         for r in bt_rows
     ]
     return retired
+
+
+def _retired_label(row):
+    """Same label as the dashboard, with the raw id kept for quoting to the contractor."""
+    label = sensor_display_name(row["group"], row["sensor_id"],
+                                row.get("name"), row.get("site_code"))
+    return with_id(html.escape(label), row["sensor_id"])
 
 
 def _counts(stats):
@@ -315,16 +330,16 @@ def build_html(d):
         </div>"""
 
     retired_rows = "".join(
-        f'<tr><td style="padding:5px 12px;font-size:12px;color:#6b7280">{r["group"]}</td>'
-        f'<td style="padding:5px 12px;font-family:monospace;font-size:13px">{r["sensor_id"]}</td>'
-        f'<td style="padding:5px 12px;font-size:12px;color:#6b7280">{r["last_seen"]}</td></tr>'
+        f'<tr><td style="padding:5px 12px;font-size:12px;color:#6b7280;white-space:nowrap">{r["group"]}</td>'
+        f'<td style="padding:5px 12px;font-size:13px">{_retired_label(r)}</td>'
+        f'<td style="padding:5px 12px;font-size:12px;color:#6b7280;white-space:nowrap">{r["last_seen"]}</td></tr>'
         for r in d["retired"]
     )
     retired_table = f"""
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">
         <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Group</th>
-        <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">ID</th>
+        <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Sensor</th>
         <th style="padding:5px 12px;text-align:left;font-weight:500;color:#6b7280;font-size:12px">Last seen</th>
       </tr></thead><tbody>{retired_rows}</tbody>
     </table>""" if d["retired"] else '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'

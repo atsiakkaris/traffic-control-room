@@ -281,6 +281,13 @@ exists in an external spreadsheet.
    pairs by distance, and assigns **greedily shortest-first** — a global
    nearest-neighbor matching, not naive per-row nearest-match, so ambiguous
    cases resolve to the overall best pairing.
+
+   Claimed rows are tracked by **row position, not by name**. Two rows can
+   legitimately share a name — two distinct points on Georgiou Griva Digeni
+   Avenue. Keying on the name let the first match swallow the second row: it
+   could never match, *and* the `ref_only` pass skipped it, so it disappeared
+   from the results entirely. Every reference row now surfaces exactly once,
+   as either a `match` or a `ref_only`.
 3. `annotate_accountability()` gives every matched API sensor its reference
    row's `project` + `commissioning`, then **propagates to co-located
    twins**: many road installations have two physical sensors pointed in
@@ -289,12 +296,28 @@ exists in an external spreadsheet.
    `COLOCATION_M` (15m) of an already-matched one inherits that sensor's
    project — same installation, same contract.
 
-   **Known gap:** if the spreadsheet has only one row near a location where
-   the API actually has *multiple, non-co-located* installations (e.g. two
-   separate junctions half a km apart that happen to share a street name),
-   only the closest one matches — the others get neither a direct match nor
-   a colocation twin, and surface as "Unassigned." Fixing this requires
-   adding the missing row(s) to the spreadsheet, not a code change.
+   `match_sensors()` reads the same `COLOCATION_M` when it labels a sensor
+   `colocated`. It once used a local 10m, so a sensor 12m from its twin
+   inherited the project but was still reported as `api_only` in the QA view.
+   One constant, both paths.
+
+   **Known gap:** a sensor the spreadsheet has no row for at all cannot be
+   matched, and surfaces as "Unassigned." This is a data task, not a code one
+   — add the row and re-run `update_projects.py`. Two separate junctions that
+   share a street name are *not* an instance of this: each needs its own row,
+   and once both rows exist the matcher pairs them correctly (see step 2).
+
+   Unassigned sensors record *why* in `sensor_projects.source`, so the
+   dashboard can tell the two cases apart in a tooltip rather than showing one
+   undifferentiated grey dash:
+
+   | `source` | Meaning |
+   |---|---|
+   | `matched` | Paired directly with a reference row |
+   | `colocated` | Inherited from a co-located matched twin |
+   | `unmatched_no_ref:<m>` | Nearest row is `<m>` metres away, beyond threshold — the row does not exist |
+   | `unmatched_ref_taken:<m>` | A row sits `<m>` metres away, inside threshold, but a closer sensor claimed it |
+   | `unmatched_no_coords` | The API reports no coordinates for this sensor |
 
 4. The result is persisted, not just displayed: `update_projects.py` writes `{sensor_id: {project, source,
    commissioning}}` into `sensor_projects` via `db.upsert_sensor_projects()`.
@@ -310,6 +333,27 @@ exists in an external spreadsheet.
 3. git commit results/history.db && git push
 4. → next automated report shows the updated ownership
 ```
+
+---
+
+## 7a. Sensor names (`runner/labels.py`)
+
+Single source of truth for how a sensor is shown to a human, shared by
+`report.py` and `digest.py` so the same sensor never appears under two names.
+
+`sensor_display_name(group, sensor_id, name, site_code)`:
+
+| Group | Label | Why |
+|---|---|---|
+| Traffic Detection | `1040 (100)`, `1010 (Gr. Dhigeni Ave. (TCC))` | 22 of 104 loops have a NULL `name` but *all* carry a `site_code`; a bare id names no road |
+| VMS | `A1 Highway Limassol-Nicosia (Alambra) (8)` | VMS have names, never site codes |
+| Bluetooth Paths | `1004->1008` | falls back to the bare id — a few paths are unnamed in the feed |
+
+Feed names arrive with embedded newlines (`"Gr. Dhigeni Ave.\n (TCC)"`), which
+previously landed inside a `data-display` HTML attribute. The helper collapses
+whitespace. `with_id(label, id)` appends the raw id for quoting to a contractor,
+matching on digit boundaries so sensor `23` isn't judged "already present" by
+site code `1023`.
 
 ---
 

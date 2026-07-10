@@ -189,3 +189,44 @@ def test_qa_html_escaper_works_inside_generate_html_scope():
     import qa
     # _h is nested; exercise the module-level escaping it relies on.
     assert qa.html.escape('<script>&"') == '&lt;script&gt;&amp;&quot;'
+
+
+# ── Co-location radius is one constant, used by both code paths ───────────────
+#
+# match_sensors() labelled a sensor 'colocated' within a local 10m, while
+# annotate_accountability() inherited the project within COLOCATION_M (15m).
+# A sensor 12m from its twin therefore inherited ownership but was reported as
+# "api_only" in the QA view. Both now read the same constant.
+
+def _twin_at(metres):
+    """Two API sensors `metres` apart; only the first matches a reference row."""
+    import qa
+    lat_offset = metres / 111_320.0          # ~metres per degree of latitude
+    refs = [_ref("Site", 35.0, 33.0)]
+    apis = [_api("matched", 35.0, 33.0), _api("twin", 35.0 + lat_offset, 33.0)]
+    return qa.match_sensors(refs, apis, max_dist=300)
+
+
+def test_twin_inside_the_colocation_radius_is_reported_colocated():
+    import qa
+    types = {m["api"]["id"]: m["type"] for m in _twin_at(qa.COLOCATION_M - 3)}
+    assert types["twin"] == "colocated"
+
+
+def test_twin_beyond_the_colocation_radius_is_reported_api_only():
+    import qa
+    types = {m["api"]["id"]: m["type"] for m in _twin_at(qa.COLOCATION_M + 5)}
+    assert types["twin"] == "api_only"
+
+
+def test_twin_at_12m_is_colocated_not_api_only():
+    """The exact divergence: 12m was inside annotate's 15m but outside the old 10m."""
+    types = {m["api"]["id"]: m["type"] for m in _twin_at(12)}
+    assert types["twin"] == "colocated", "QA report must agree with project inheritance"
+
+
+def test_match_sensors_uses_the_shared_constant_not_a_local_one():
+    import inspect, qa
+    src = inspect.getsource(qa.match_sensors)
+    assert "COLOC_M" not in src, "local radius reintroduced; use COLOCATION_M"
+    assert "COLOCATION_M" in src

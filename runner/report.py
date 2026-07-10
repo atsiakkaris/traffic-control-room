@@ -18,6 +18,7 @@ def _json_safe(obj):
     return json.dumps(obj).replace("<", "\\u003c")
 
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects
+from labels import sensor_display_name
 from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS
 
 _PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
@@ -395,20 +396,16 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
             return (x["group_name"], x["sensor_id"])
 
     for s in sorted(sensors, key=_sensor_sort_key):
-        # Compute human-readable display ID
-        if s["group_name"] == "Bluetooth Paths":
-            display_sensor_id = bt_path_names.get(s["sensor_id"], s["sensor_id"])
-        elif s["group_name"] == "Traffic Detection":
-            td_info = all_sensor_coords.get("Traffic Detection", {}).get(s["sensor_id"], {})
-            sc = td_info.get("site_code")
-            nm = td_info.get("name", s["sensor_id"])
-            display_sensor_id = f"{sc} ({nm})" if sc else nm
-        elif s["group_name"] == "VMS":
-            vms_info = all_sensor_coords.get("VMS", {}).get(s["sensor_id"], {})
-            nm = vms_info.get("name", "")
-            display_sensor_id = f"{nm} ({s['sensor_id']})" if nm and nm != s["sensor_id"] else s["sensor_id"]
+        # Human-readable display ID — shared with the weekly digest via labels.py
+        # so the same sensor never appears under two different names.
+        group = s["group_name"]
+        if group == "Bluetooth Paths":
+            display_sensor_id = sensor_display_name(group, s["sensor_id"],
+                                                    bt_path_names.get(s["sensor_id"]))
         else:
-            display_sensor_id = s["sensor_id"]
+            info = all_sensor_coords.get(group, {}).get(s["sensor_id"], {})
+            display_sensor_id = sensor_display_name(group, s["sensor_id"],
+                                                    info.get("name"), info.get("site_code"))
 
         tokens_attr = _html.escape(" ".join(_search_tokens(display_sensor_id)))
 

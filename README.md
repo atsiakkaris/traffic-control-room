@@ -104,10 +104,10 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 **Sensor Health Trend** — one line per sensor group showing health % across the last 30 runs.
 
-**Attention needed, by project** — lists every sensor that is **not reporting right now**, grouped by the project/contractor that owns it and ordered by **how long it has been down** (longest outage first), so the strongest case comes to the top. Each sensor also carries its lifetime badge as context — is this a new fault, or a repeat offender? A sensor repaired yesterday drops off the list; one that died this morning appears however good its record was. Out-of-support projects (where a failure is expected and non-actionable) are shown in a separate, clearly-marked section; sensors not matched to any project surface as *Unassigned — no owner known*. Awaiting-power and decommissioned sensors are excluded (they aren't faults).
+**Attention needed, by project** — lists every sensor that is **not reporting right now**, grouped by the project/contractor that owns it and ordered by **how long it has been down** (longest outage first), so the strongest case comes to the top. Each sensor also carries its lifetime badge as context — is this a new fault, or a repeat offender? A sensor repaired yesterday drops off the list; one that died this morning appears however good its record was. Out-of-support projects (where a failure is expected and non-actionable) are shown in a separate, clearly-marked section; sensors not matched to any project surface as *Unassigned — no owner known*. Hovering an unassigned sensor's project cell explains **why** it has no owner: either the reference spreadsheet has no row for it (a data-entry task — add the row and re-run `update_projects.bat`), or a nearer sensor claimed the only nearby row (a possible mis-mapping). Awaiting-power and decommissioned sensors are excluded (they aren't faults).
 
 **Sensor Stability** — per-sensor table with a **Current state** cell (Working / Down *N*d / Never worked), a sparkline of the last 20 runs, the **lifetime** stability badge, the **project owner**, and timestamps for last working / last issue.
-- Live search input to filter by sensor name or ID
+- Live search input to filter by sensor name or ID. Wrap the term in double quotes for an **exact match** — `"10"` finds sensor 10 only, not 1001 or 1040. Exact match tests each identifier shown on the row (site code, name words, and both endpoints of a Bluetooth path)
 - Group dropdown filter
 - Sort dropdown — Default, Worst first, or Best first
 - 📍 icon on each row — click to fly the map to that sensor or BT path and open its popup
@@ -124,7 +124,7 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 Tests run every 6 hours (triggered via cron-job.org). The workflow can also be triggered manually from the GitHub Actions tab.
 
-A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging sensors with **no good runs that week**, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. Because the digest scores a single week, its zero tier reads *"No good runs"* rather than the dashboard's lifetime *"Always off"*.
+A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging sensors with **no good runs that week**, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. Sensors are named exactly as the dashboard names them (via `runner/labels.py`), with the raw ID alongside for quoting to a contractor. Because the digest scores a single week, its zero tier reads *"No good runs"* rather than the dashboard's lifetime *"Always off"*.
 
 ---
 
@@ -141,6 +141,8 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   ├── db.py                   ← SQLite helpers (schema, queries, migrations)
 │   ├── geo.py                  ← Coordinate extraction from DATEX II inventory feeds
 │   ├── report.py               ← HTML dashboard generator
+│   ├── stability.py            ← Shared health thresholds + the six stability tiers
+│   ├── labels.py               ← Shared human-readable sensor names (report + digest)
 │   ├── qa.py                   ← Reference-sheet ↔ API coordinate matching (ownership + commissioning)
 │   ├── update_projects.py      ← Refresh sensor→project + commissioning in the DB after editing the workbook
 │   └── digest.py               ← Weekly digest email builder and sender
@@ -150,13 +152,17 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   └── latest.html             ← Generated dashboard (auto-committed after each run)
 ├── QA Locations.xlsx           ← Reference equipment inventory (gitignored — local/cloud only)
 ├── .github/workflows/
-│   ├── daily_tests.yml         ← GitHub Actions workflow (triggered frequently)
+│   ├── daily_tests.yml         ← GitHub Actions workflow (runs pytest, then the API tests)
 │   └── weekly_digest.yml       ← Weekly digest email (Mondays 07:30 EEST, triggered via cron-job.org)
 ├── tests/
-│   └── test_generate_report.py ← Smoke tests for the HTML report generator
+│   ├── test_generate_report.py ← Dashboard generator: current state, fault age, search tokens
+│   ├── test_stability.py       ← Tier boundaries and health percentages
+│   ├── test_labels.py          ← Shared sensor-name rules
+│   └── test_data_quality.py    ← Coordinate matching and the retire guard
 ├── run.bat                     ← Local run script (double-click, loads .env automatically)
 ├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
 ├── update_projects.bat         ← Refresh ownership/commissioning in the DB from QA Locations.xlsx
+├── qa_tdu.bat / qa_bt.bat / qa_vms.bat  ← Open the per-group QA matching report (needs QA Locations.xlsx)
 └── requirements.txt
 ```
 

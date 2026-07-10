@@ -562,8 +562,9 @@ def match_sensors(ref_sensors, api_sensors, max_dist=None):
         results.append({'type': 'ref_only', 'ref': ref, 'api': None,
                         'note': 'No coordinates in reference file'})
 
-    # Detect co-located pairs: unmatched API sensors within COLOC_M of a matched one
-    COLOC_M = 10
+    # Detect co-located pairs: unmatched API sensors within COLOCATION_M of a matched
+    # one. Same radius annotate_accountability() uses to inherit a project, so the QA
+    # report can never label a sensor "api_only" while it silently inherits ownership.
     matched_api_list = [r['api'] for r in results if r['type'] == 'match']
     for api in api_sensors:
         if api['id'] in matched_api_ids:
@@ -573,7 +574,7 @@ def match_sensors(ref_sensors, api_sensors, max_dist=None):
             continue
         sibling = next(
             (m for m in matched_api_list
-             if _haversine_m(api['lat'], api['lon'], m['lat'], m['lon']) <= COLOC_M),
+             if _haversine_m(api['lat'], api['lon'], m['lat'], m['lon']) <= COLOCATION_M),
             None
         )
         if sibling:
