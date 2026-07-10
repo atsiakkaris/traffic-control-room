@@ -333,6 +333,17 @@ def _humanize_failure(check_name, full_failure_reason):
     return m.group(1).strip() if m else fr
 
 
+def _search_tokens(display_sensor_id):
+    """Identifiers a row can be reached by in an exact (quoted) search, sorted.
+
+    Tokens come from the rendered label only — the site code, the name words, and
+    for Bluetooth paths either endpoint. The raw sensor_id is deliberately excluded:
+    it is often not on screen (BT path 100 renders as "Strovolou-30881"), so matching
+    it would return rows with no visible connection to the query.
+    """
+    return sorted({t for t in re.split(r"[^0-9a-z]+", str(display_sensor_id).lower()) if t})
+
+
 def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=None, trend_data_json="null", day_labels_json="null", bt_path_coords=None, sensor_projects=None, project_acct=None):
     """Build the sensor stability panel HTML with a group dropdown."""
     if not sensors:
@@ -373,6 +384,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
             display_sensor_id = f"{nm} ({s['sensor_id']})" if nm and nm != s["sensor_id"] else s["sensor_id"]
         else:
             display_sensor_id = s["sensor_id"]
+
+        tokens_attr = _html.escape(" ".join(_search_tokens(display_sensor_id)))
 
         # Names come from the external API inventory / reference sheet — escape
         # before they land in any HTML text or attribute context below.
@@ -497,7 +510,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         composite_id = f"{s['group_name']}|{s['sensor_id']}"
         safe_sid = composite_id.replace("'", "\\'")
         rows += f"""
-        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-pct="{'' if excluded else pct}" data-awaiting="{'1' if excluded else '0'}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
+        <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-tokens="{tokens_attr}" data-pct="{'' if excluded else pct}" data-awaiting="{'1' if excluded else '0'}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
           <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
@@ -545,7 +558,8 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 
     return f"""
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-      <input id="stabilitySearch" type="text" placeholder="Search sensors…"
+      <input id="stabilitySearch" type="text" placeholder="Search sensors… (use &quot;10&quot; for an exact match)"
+             title="Type any part of a sensor ID to filter. Wrap it in double quotes for an exact match &mdash; &quot;10&quot; finds sensor 10 only, not 1001 or 1040."
              oninput="_applyStabilityFilters()"
              style="font-size:13px;padding:5px 10px;border-radius:8px;border:0.5px solid var(--color-border-tertiary);
                     background:var(--color-background-primary);color:var(--color-text-primary);min-width:180px;flex:1"/>
@@ -578,6 +592,10 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       var sort   = document.getElementById('sortOrder').value;
       var tbody  = document.querySelector('#sensorTable tbody');
 
+      // "10" (quoted) means exact match, so searching for sensor 10 doesn't also return 1001, 1040...
+      var exact = search.length > 1 && search.charAt(0) === '"' && search.charAt(search.length - 1) === '"';
+      if (exact) search = search.slice(1, -1).trim();
+
       // sort sensor rows if needed
       if (sort !== 'default') {{
         var sensorRows = Array.from(tbody.querySelectorAll('tr[data-group]'));
@@ -598,7 +616,10 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       tbody.querySelectorAll('tr').forEach(function(tr) {{
         if (!tr.dataset.group) return;
         var groupMatch  = group === 'all' || tr.dataset.group === group;
-        var searchMatch = !search || (tr.dataset.display || '').indexOf(search) !== -1;
+        var display     = tr.dataset.display || '';
+        var searchMatch = !search || (exact
+          ? (' ' + (tr.dataset.tokens || '') + ' ').indexOf(' ' + search + ' ') !== -1
+          : display.indexOf(search) !== -1);
         var visible = groupMatch && searchMatch;
         tr.style.display = visible ? '' : 'none';
         var sid = tr.getAttribute('onclick') && tr.getAttribute('onclick').match(/'([^']+)'/);

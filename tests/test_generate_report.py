@@ -205,3 +205,39 @@ def test_history_playback_keeps_the_newest_30_runs():
     # Newest run kept, oldest dropped; strictly increasing overall.
     assert runs[-1]["run_at"][:8] == "24/07/26"
     assert runs[0]["run_at"][:8] == "25/06/26"
+
+
+# ── Exact ("quoted") search tokens ────────────────────────────────────────────
+
+def test_search_tokens_split_site_code_and_name():
+    import report
+    assert report._search_tokens("1004 (Severi (TCC))") == ["1004", "severi", "tcc"]
+
+
+def test_search_tokens_include_both_bluetooth_path_endpoints():
+    import report
+    assert report._search_tokens("1008->1016") == ["1008", "1016"]
+
+
+def test_exact_search_for_10_does_not_match_1001_or_1040():
+    """The reported bug: substring search for '10' dragged in 1001, 1040, 1008..."""
+    import report
+    for display in ("1001 (Elaionon (ACC))", "1040 (99)", "1008->1016"):
+        assert "10" not in report._search_tokens(display)
+
+
+def test_search_tokens_ignore_raw_sensor_id_when_not_displayed():
+    """BT path with sensor_id 100 renders as 'Strovolou-30881' — "100" must not hit it."""
+    import report
+    assert report._search_tokens("Strovolou-30881") == ["30881", "strovolou"]
+
+
+def test_search_tokens_keep_sensor_id_when_it_is_displayed():
+    """TD sensor 100 renders as '1040 (100)', so both 100 and 1040 are addressable."""
+    import report
+    assert report._search_tokens("1040 (100)") == ["100", "1040"]
+
+
+def test_search_tokens_deduplicate_repeated_values():
+    import report
+    assert report._search_tokens("1040 (1040)") == ["1040"]
