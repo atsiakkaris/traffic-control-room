@@ -18,7 +18,7 @@ def _json_safe(obj):
     return json.dumps(obj).replace("<", "\\u003c")
 
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects
-from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for, health_color, HEALTH_WARNING_PCT
+from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS
 
 _PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
 
@@ -254,6 +254,53 @@ def _health_color(pct):
     return health_color(pct)
 
 
+def _fault_streak_start(history):
+    """The earliest run in the sensor's *current* unbroken run of bad statuses,
+    or None if its latest run was good. That run is when the outage was first
+    detected — the number a contractor can be held to."""
+    if not history or history[-1]["status"] in GOOD_STATUSES:
+        return None
+    start = history[-1]
+    for h in reversed(history):
+        if h["status"] in GOOD_STATUSES:
+            break
+        start = h
+    return start
+
+
+def _current_state(history):
+    """(label, colour, tooltip, down_days) describing what the sensor is doing NOW.
+
+    Deliberately separate from the lifetime stability tier: a sensor can be
+    'Critical' on its record yet 'Working' today, and vice versa. The control
+    room acts on this column; the tier says whether the sensor can be trusted.
+    """
+    if not history:
+        return ("No data", "#9ca3af", "No runs recorded", None)
+
+    last = history[-1]
+    if last["status"] in GOOD_STATUSES:
+        return ("Working", "#1d9e75",
+                f"Reporting normally as of {_to_cyprus(last['run_at'])}", 0)
+
+    start = _fault_streak_start(history)
+    started_at = datetime.fromisoformat(start["run_at"].replace("Z", "+00:00"))
+    down_days = (datetime.now(timezone.utc) - started_at).days
+    reason = STATUS_LABEL.get(last["status"], last["status"])
+
+    if not any(h["status"] in GOOD_STATUSES for h in history):
+        # Never once produced a good reading since we started watching it.
+        return (f"Never worked ({down_days}d)" if down_days else "Never worked",
+                "#a32d2d",
+                f"No good reading since first seen {_to_cyprus(history[0]['run_at'])} — currently {reason}",
+                down_days)
+
+    label = "Down <1d" if down_days < 1 else f"Down {down_days}d"
+    return (label, "#e24b4a",
+            f"Failing since {_to_cyprus(start['run_at'])} — currently {reason}",
+            down_days)
+
+
 def _humanize_failure(check_name, full_failure_reason):
     """Return a short, plain-English explanation of a check failure.
     Receives the full failure_reason string so regexes can find sub-parts
@@ -344,16 +391,34 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         has_bt_path = bool(bt_path_line and bt_path_line.get("coords"))
 
         history = s["history"]
-        total = len(history)
-        good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
-        pct = round(good / total * 100) if total else 0
+        statuses = [h["status"] for h in history]
+        # The tier is a LIFETIME rating: "can I trust this sensor?" It is
+        # deliberately insensitive to recent noise. Whether the sensor is down
+        # *right now* is a different question, answered by the Current state
+        # column below — never by this badge.
+        total_runs = len(statuses)
+        good_runs = sum(1 for st in statuses if st in GOOD_STATUSES)
+        pct = health_pct(good_runs, total_runs) or 0
+        tier = tier_for_counts(good_runs, total_runs)
 
-        tier = tier_for(pct)
-        badge_bg, badge_color, badge_label, badge_tip = tier.bg, tier.fg, tier.label, tier.tooltip
+        badge_bg, badge_color, badge_label = tier.bg, tier.fg, tier.label
+        badge_tip = f"{tier.tooltip} · {good_runs} of {total_runs} runs good (lifetime)"
+
+        # Too few runs to rate confidently — show a neutral "collecting data"
+        # badge instead of a falsely precise tier.
+        if total_runs < TIER_MIN_RUNS:
+            badge_bg, badge_color = "#e5e7eb", "#6b7280"
+            badge_label = "Collecting data"
+            badge_tip = f"Only {total_runs} run(s) recorded — need {TIER_MIN_RUNS} for a reliable lifetime rating."
+
+        # Current operational state: is it working right now, and if not, for
+        # how long has it been down? This is what the control room acts on.
+        state_label, state_color, state_tip, _down_days = _current_state(history)
+        state_cell = f'<span title="{_html.escape(state_tip)}" style="font-size:11px;color:{state_color};cursor:help;white-space:nowrap">{state_label}</span>'
 
         # Awaiting power / decommissioned: not expected to work. Override the
         # health badge with a neutral one and mark the row so it can be excluded
-        # from the panel's health bar and sorting.
+        # from the panel's health bar and sorting. Wins over "collecting data".
         commissioning = _commissioning(sensor_projects, s["group_name"], s["sensor_id"])
         excluded = commissioning in _EXCLUDED_COMMISSIONING
         if excluded:
@@ -391,9 +456,6 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
             last_good_html = f'<span style="font-size:11px;color:var(--color-text-secondary)">{_to_cyprus(last_good["run_at"])}</span>'
         else:
             last_good_html = '<span style="font-size:11px;color:#e24b4a">Never</span>'
-
-        # First seen: earliest recorded run for this sensor
-        first_seen_html = f'<span style="font-size:11px;color:var(--color-text-secondary)">{_to_cyprus(history[0]["run_at"])}</span>'
 
         if has_coords:
             lat_v = coord_info["lat"]
@@ -440,14 +502,14 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
           <td style="white-space:nowrap">{project_cell}</td>
+          <td style="white-space:nowrap">{state_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td style="white-space:nowrap"><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
           <td>{last_issue_html}</td>
           <td>{last_good_html}</td>
-          <td>{first_seen_html}</td>
         </tr>
         <tr id="trend-{composite_id}" style="display:none">
-          <td colspan="10" style="padding:0">
+          <td colspan="9" style="padding:0">
             <div style="padding:14px 16px;background:var(--color-background-secondary);border-bottom:0.5px solid var(--color-border-tertiary)">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
                 <span style="font-size:12px;font-weight:500">Daily health % — {display_sensor_id or s['sensor_id']}</span>
@@ -501,7 +563,11 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>Project</th><th>History (last 20 runs)</th><th>Stability</th><th>Last issue</th><th>Last working</th><th>First seen</th></tr></thead>
+      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>Project</th>
+        <th title="What the sensor is doing right now, and how long it has been failing">Current state</th>
+        <th>History (last 20 runs)</th>
+        <th title="Lifetime reliability across every run ever recorded — how much this sensor can be trusted">Stability (lifetime)</th>
+        <th>Last issue</th><th>Last working</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
     <script>
@@ -650,9 +716,6 @@ def _sensor_display_name(group_name, sensor_id, bt_path_names, all_sensor_coords
     return sensor_id
 
 
-# Tiers that mean a sensor needs attention: Unstable + Critical + Always off (< 70%).
-_ATTENTION_MAX_PCT = 70
-
 # Groups that are not individually-owned equipment and so have no project.
 # Bluetooth "paths" are computed from pairs of BT sensors, not physical devices.
 _NON_OWNED_GROUPS = {"Bluetooth Paths"}
@@ -702,15 +765,19 @@ def _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group):
 
 
 def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, sensor_projects, project_acct):
-    """Group failing sensors (< 70% uptime) by project so the team can see who
-    is responsible for what. Actionable (in-support / unassigned) projects are
-    listed first; out-of-support projects — where a failure is expected and not
-    actionable — are shown separately, clearly marked."""
+    """Group sensors that are DOWN RIGHT NOW by the project responsible for them,
+    longest outage first — the list you act on today.
+
+    Deliberately keyed off current state, not the lifetime tier: a sensor that
+    was repaired yesterday must drop off this list, and one that died this
+    morning must appear on it however good its record used to be. The lifetime
+    tier rides along only as context ("is this a repeat offender?").
+    """
     bt_path_names = bt_path_names or {}
     sensor_projects = sensor_projects or {}
     project_acct = project_acct or {}
 
-    # Collect problem sensors, bucketed by project name (None -> "Unassigned")
+    # Collect currently-failing sensors, bucketed by project name (None -> "Unassigned")
     buckets = {}   # project_name -> {"acct": str, "sensors": [ ... ]}
     for s in sensors:
         if s["group_name"] in _NON_OWNED_GROUPS:
@@ -718,14 +785,16 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
         if _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"]):
             continue  # awaiting power or decommissioned — not a fault
         history = s["history"]
-        total = len(history)
-        if not total:
+        if not history:
             continue
-        good = sum(1 for h in history if h["status"] in GOOD_STATUSES)
-        pct = round(good / total * 100)
-        if pct >= _ATTENTION_MAX_PCT:
-            continue
-        tier = tier_for(pct)
+        if history[-1]["status"] in GOOD_STATUSES:
+            continue  # working right now — nothing to chase
+
+        state_label, _color, state_tip, down_days = _current_state(history)
+        statuses = [h["status"] for h in history]
+        good_runs = sum(1 for st in statuses if st in GOOD_STATUSES)
+        tier = tier_for_counts(good_runs, len(statuses))
+
         proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
         proj = proj_info["project"] if proj_info and proj_info["project"] else None
         acct = project_acct.get(proj, "supported") if proj else "unassigned"
@@ -734,19 +803,21 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
         buckets[key]["sensors"].append({
             "display": _html.escape(str(_sensor_display_name(s["group_name"], s["sensor_id"], bt_path_names, all_sensor_coords))),
             "group": GROUP_DISPLAY.get(s["group_name"], s["group_name"]),
-            "pct": pct, "tier": tier,
+            "state": state_label, "state_tip": state_tip,
+            "down_days": down_days or 0, "tier": tier,
         })
 
     if not buckets:
         return ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
-                'No sensors below 70% uptime — nothing needs attention. &#127881;</p>')
+                'Every sensor is reporting right now — nothing needs attention. &#127881;</p>')
 
     actionable = {k: v for k, v in buckets.items() if v["acct"] != "out_of_support"}
     out_of_support = {k: v for k, v in buckets.items() if v["acct"] == "out_of_support"}
 
     def _project_block(name, bucket, dim=False):
         name = _html.escape(str(name))  # project name originates from external data
-        rows = sorted(bucket["sensors"], key=lambda x: x["pct"])
+        # Longest outage first — the strongest case to put to a contractor.
+        rows = sorted(bucket["sensors"], key=lambda x: -x["down_days"])
         n = len(rows)
         base_color = "var(--color-text-secondary)" if dim else "var(--color-text-primary)"
         if name == "Unassigned":
@@ -758,13 +829,26 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
         body = ""
         for r in rows:
             t = r["tier"]
-            badge = (f'<span style="font-size:10px;font-weight:500;padding:1px 7px;border-radius:10px;'
-                     f'background:{t.bg};color:{t.fg}">{t.label} ({r["pct"]}%)</span>')
+            # Outage duration drives the case; the lifetime tier is context —
+            # "has this one always been trouble, or is this a new fault?"
+            down = (f'<span title="{_html.escape(r["state_tip"])}" style="font-size:11px;font-weight:600;'
+                    f'color:{"#7f8c8d" if dim else "#e24b4a"};cursor:help;white-space:nowrap">{r["state"]}</span>')
+            badge = (f'<span title="Lifetime record: {t.tooltip}" style="font-size:10px;font-weight:500;padding:1px 7px;'
+                     f'border-radius:10px;background:{t.bg};color:{t.fg};cursor:help">{t.label}</span>')
             body += (f'<tr style="border-top:0.5px solid var(--color-border-tertiary)">'
                      f'<td style="padding:5px 8px;font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{r["group"]}</td>'
                      f'<td style="padding:5px 8px;font-size:12px;font-family:monospace;color:{base_color}">{r["display"]}</td>'
+                     f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{down}</td>'
                      f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{badge}</td>'
                      f'</tr>')
+        th = ("padding:4px 8px;font-size:10px;font-weight:500;letter-spacing:0.04em;"
+              "text-transform:uppercase;color:var(--color-text-secondary)")
+        head = (f'<thead><tr>'
+                f'<th style="{th};text-align:left" title="Which sensor system this device belongs to">Group</th>'
+                f'<th style="{th};text-align:left" title="The sensor that is not reporting">Sensor</th>'
+                f'<th style="{th};text-align:right" title="How long it has been failing continuously.">Down for</th>'
+                f'<th style="{th};text-align:right" title="Its reliability across every run ever recorded — is this a new fault or a repeat offender?">Lifetime record</th>'
+                f'</tr></thead>')
         return (f'<details style="margin-bottom:6px">'
                 f'<summary style="cursor:pointer;padding:7px 10px;border-radius:6px;'
                 f'background:var(--color-background-secondary);font-size:13px;font-weight:500;color:{base_color};'
@@ -772,12 +856,19 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
                 f'<span>{name}{tag}</span>'
                 f'<span style="font-size:12px;color:{"#7f8c8d" if dim else "#e24b4a"};font-weight:600;white-space:nowrap">{n} down</span>'
                 f'</summary>'
-                f'<table style="width:100%;border-collapse:collapse;margin:2px 0 8px">{body}</table>'
+                f'<table style="width:100%;border-collapse:collapse;margin:2px 0 8px">{head}<tbody>{body}</tbody></table>'
                 f'</details>')
+
+    def _project_sort_key(name, group):
+        """Worst first: the project with the longest-running outage, then the
+        one with the most sensors down, then alphabetical for stability."""
+        rows = group[name]["sensors"]
+        longest = max((r["down_days"] for r in rows), default=0)
+        return (-longest, -len(rows), name)
 
     html = ""
     if actionable:
-        for name in sorted(actionable, key=lambda k: (-len(actionable[k]["sensors"]), k)):
+        for name in sorted(actionable, key=lambda k: _project_sort_key(k, actionable)):
             html += _project_block(name, actionable[name])
     else:
         html += ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
@@ -789,7 +880,7 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
                  f'<div style="font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;'
                  f'color:var(--color-text-secondary);margin-bottom:8px">'
                  f'Out of support &middot; {oos_total} down &middot; failure expected, not actionable</div>')
-        for name in sorted(out_of_support, key=lambda k: (-len(out_of_support[k]["sensors"]), k)):
+        for name in sorted(out_of_support, key=lambda k: _project_sort_key(k, out_of_support)):
             html += _project_block(name, out_of_support[name], dim=True)
         html += '</div>'
 
@@ -939,7 +1030,9 @@ def _build_history_playback(all_sensors):
             if rat not in run_timeline:
                 run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
             run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
-    runs_sorted = sorted(run_timeline.values(), key=lambda r: r["run_at"])
+    # Sort by the raw ISO timestamp key — NOT the formatted dd/mm/yy display
+    # string, which sorts wrongly across month boundaries ("01/07" < "30/06").
+    runs_sorted = [run_timeline[rat] for rat in sorted(run_timeline)]
     return _json_safe(runs_sorted[-30:])
 
 
@@ -1487,8 +1580,10 @@ def generate_report() -> str:
   .panel-bar-fill {{ height: 3px; }}
   .panel-body {{ padding: 16px 20px 18px; }}
   .col-layout {{ display:flex; gap:20px; align-items:flex-start; }}
-  .col-left   {{ flex:0 0 60%; min-width:0; }}
-  .col-right  {{ flex:0 0 40%; min-width:0; position:sticky; top:20px; max-height:calc(100vh - 40px); overflow-y:auto; }}
+  /* 55/45 split. Grow factors on a zero basis divide the space *after* the gap;
+     a fixed 55%/45% basis plus the 20px gap would overflow the container. */
+  .col-left   {{ flex:55 1 0; min-width:0; }}
+  .col-right  {{ flex:45 1 0; min-width:0; position:sticky; top:20px; max-height:calc(100vh - 40px); overflow-y:auto; }}
   @media (max-width: 900px) {{
     .col-layout {{ flex-direction:column; }}
     .col-left, .col-right {{ flex:none; width:100%; max-height:none; position:static; }}
@@ -1679,6 +1774,11 @@ def generate_report() -> str:
       <div class="panel-chevron open" id="c-p-accountability"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
     <div class="panel-body" id="b-p-accountability">
+      <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 10px">
+        Sensors that are <strong>not reporting right now</strong>, grouped by the project responsible
+        and ordered by how long they have been down. The badge shows each sensor's lifetime record,
+        for context.
+      </p>
       {accountability_html}
     </div>
   </div>
@@ -1690,6 +1790,11 @@ def generate_report() -> str:
     </div>
     <div class="panel-bar" id="sensorBarWrap" title="{sensor_pct}% of sensors had a good status in the last run" style="cursor:help"><div class="panel-bar-fill" id="sensorBarFill" style="width:{sensor_pct}%;background:{sensor_bar_color}"></div></div>
     <div class="panel-body" id="b-p-sensors" style="overflow-x:auto">
+      <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 10px">
+        <strong>Current state</strong> is what the sensor is doing right now.
+        <strong>Stability</strong> is its lifetime record across every run ever taken —
+        how much the sensor can be trusted. A sensor can be down today but have a good record, or vice versa.
+      </p>
       {sensor_stability_html}
     </div>
   </div>

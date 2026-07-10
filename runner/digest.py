@@ -21,16 +21,28 @@ log = logging.getLogger(__name__)
 
 DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/reports/latest.html"
 
-# Percentage ranges for the digest's badge labels, derived from stability.py's
-# tooltips so they can't drift out of sync with the actual tier thresholds.
-_TIER_RANGE = {t.key: t.tooltip.replace(" of runs good", "") for t in STABILITY_TIERS}
+# Percentage ranges for the digest's badge labels, taken straight from the tier
+# definitions so they can't drift out of sync with the actual thresholds.
+_TIER_RANGE = {t.key: t.range_label for t in STABILITY_TIERS}
+
+# The shared tiers are LIFETIME-scoped on the dashboard, where "Always off" is a
+# claim that the sensor has never once worked. The digest recomputes them over a
+# single week, so that label would be a different (and much stronger) statement
+# than the data supports. Rename the zero tier for this surface only.
+_WEEK_TIER_LABEL = {"offline": "No good runs"}
+_TIER_RANGE["offline"] = "0% this week"
+
+
+def _tier_label(tier):
+    """Week-scoped label for a shared tier — see _WEEK_TIER_LABEL."""
+    return _WEEK_TIER_LABEL.get(tier.key, tier.label)
 
 
 def _badge(pct):
     if pct is None:
         return '<span style="background:#e5e7eb;color:#6b7280;padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">No data</span>'
     tier = tier_for(pct)
-    return f'<span style="background:{tier.bg};color:{tier.fg};padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">{tier.label} ({pct}%)</span>'
+    return f'<span style="background:{tier.bg};color:{tier.fg};padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">{_tier_label(tier)} ({pct}%)</span>'
 
 
 def fetch_sensor_health_by_day(days_back):
@@ -331,7 +343,7 @@ def build_html(d):
         <span style="display:inline-block;background:#faeeda;color:#633806;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Intermittent — 70–89%</span>
         <span style="display:inline-block;background:#fac775;color:#412402;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Unstable — 40–69%</span>
         <span style="display:inline-block;background:#f09595;color:#501313;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Critical — 1–39%</span>
-        <span style="display:inline-block;background:#e24b4a;color:#ffffff;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Always off — 0%</span>
+        <span style="display:inline-block;background:#e24b4a;color:#ffffff;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">No good runs — 0%</span>
       </div>
     </div>"""
 
@@ -382,7 +394,7 @@ def build_html(d):
         </td>
         <td width="14%" style="background:#fef2f2;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#e24b4a">{d['offline']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off ({_TIER_RANGE['offline']})</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">No good runs ({_TIER_RANGE['offline']})</div>
         </td>
       </tr>
     </table>
@@ -396,7 +408,7 @@ def build_html(d):
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#633806">Intermittent</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e58e0a">Unstable</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#9b1c1c">Critical</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e24b4a">Always off</th>
+          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e24b4a">No good runs</th>
         </tr>
       </thead>
       <tbody>
@@ -442,12 +454,12 @@ def build_html(d):
         </td>
         <td width="14%" style="background:#fef2f2;border-radius:10px;padding:12px 8px;text-align:center">
           <div style="font-size:20px;font-weight:700;color:#e24b4a">{d['bt']['offline']}</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:2px">Always off ({_TIER_RANGE['offline']})</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px">No good runs ({_TIER_RANGE['offline']})</div>
         </td>
       </tr>
     </table>
 
-    {section("🔴 Always off this week",
+    {section("🔴 No good runs this week",
              "#e24b4a",
              _always_off_summary(d['always_off']),
              _split_table(d['always_off']) if d['always_off'] else "")}

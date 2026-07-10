@@ -128,11 +128,12 @@ The two that matter most for per-sensor health:
   classifies each as `working` / `no_traffic` (speed=0) / `malfunctioning`
   (speed=-1) / `no_measurement` (missing).
 
-Both return a `sensors_map` used by `run_tests.py` to populate
-`sensor_results`, and both bake a human-readable summary string (e.g.
-`"Working: 4 | Not working: 32 — IDs: 12, 14, ... | No status: 7 — 17, 21..."`)
-into `check_summary` — that summary string is later re-parsed by
-`report.py` to compute health percentages (see §6, and the caveat below).
+Both return a `sensors_map` used by `run_tests.py` to populate `sensor_results`
+— the authoritative record every health number is computed from. They also bake
+a human-readable summary string (e.g. `"Working: 4 | Not working: 32 — IDs: 12,
+14, ... | No status: 7 — 17, 21..."`) into `check_summary`, but that string is
+for **display only** (the group-card detail breakdowns). No percentage is ever
+derived from it — see §6.
 
 `REGISTRY` at the bottom of the file maps check names (as used in
 `endpoints.yaml`) to these functions.
@@ -201,53 +202,61 @@ for the trend chart), and others.
    generated, aside from small inline `<script>` blocks for interactivity
    (map, search/sort/filter on the stability table, chart zoom/pan).
 
-### Health percentage: two different computations, on purpose
+### Everything numeric comes from `sensor_results`
 
-There are two independent ways a "percent healthy" number gets computed, and
-they intentionally answer different questions:
+Every health number on the dashboard is derived from the per-sensor, per-run
+rows in `sensor_results` — never from re-parsing the human-readable
+`check_summary` text that `tests.py` wrote. Two shapes of the same source:
 
-- **Per-sensor history (`sensor_results`-driven)** — used by the Sensor
-  Stability panel and the "Attention needed, by project" rollup. Exact,
-  because it's keyed by sensor ID: a sensor's own status history determines
-  its tier (`stability.py`'s six tiers, `GOOD_STATUSES = {"working", "ok"}`).
-- **Group-level snapshot / trend (`check_summary`-text-driven)** —
-  `_extract_health_pct()` parses the aggregate counts (and, for VMS, the
-  actual not-working/no-status **ID lists**) out of the `check_summary`
-  string written at test time, to answer "what fraction of this group is
-  healthy, right now / at this past run."
+- **Group-level, per run** — `db.fetch_sensor_status_counts()` aggregates
+  `{run_id: {group: {status: count}}}`; `_pct_from_counts()` turns that into a
+  percentage (`good / total`, `GOOD_STATUSES = {"working", "ok"}`). Feeds the
+  System Overview badges and the Health Trend chart.
+- **Per-sensor history** — `db.fetch_sensor_stability()` returns each sensor's
+  full status history. Feeds the stability tier, the sparkline, and the current
+  fault age.
 
-**Why this split matters:** commissioning-excluded
-sensors (awaiting power / decommissioned) must not count against a group's
-health %. The correct way to exclude them is **by sensor ID** — remove those
-specific IDs from both numerator and denominator. `_extract_health_pct()` for
-`vms_controller_status` parses the ID lists out of `check_summary` and
-excludes by ID, matching what the stability panel already did correctly.
+Commissioning-excluded sensors (awaiting power / decommissioned) must not count
+against a group's health, and they are removed **by `(group, sensor_id)`**
+before counting — `fetch_sensor_status_counts(excluded=...)`. Excluding by a
+*count* rather than by ID was a real bug: because the number of genuinely-active
+VMS fluctuated near the excluded count, the denominator kept collapsing to equal
+`working`, silently forcing every run to 100% and erasing a real outage.
+
+`check_summary` survives only for **display**: the group-card detail breakdowns
+(`parse_vms_detail` / `parse_bt_detail` / `parse_sensor_detail`) and
+`_humanize_failure`. Nothing that produces a percentage reads it. Reintroducing
+a regex over that string to compute a number would be a regression — it is an
+implicit, untested contract with `tests.py`'s message wording.
 
 ### Panels, top to bottom
 
 - **System Overview** — one card per group. `group_status_card()` computes
-  `min_health_pct` across that group's checks (via `_extract_health_pct`) and
-  picks a status word: `Operational` (≥90%), `Deteriorated` (≥80%, i.e.
-  `HEALTH_WARNING_PCT`), or `Feed issue`/`Degraded` if the endpoint itself
+  `min_health_pct` across that group's checks (from the latest run's status
+  counts) and picks a status word: `Operational` (≥90%), `Deteriorated` (≥80%,
+  i.e. `HEALTH_WARNING_PCT`), or `Feed issue`/`Degraded` if the endpoint itself
   failed regardless of sensor %. `_live_total()` subtracts commissioning-
   excluded counts from the "X/Y working" display (clamped to never show
-  working > total — a display-only safety clamp, not used for the percentage
-  itself anymore).
+  working > total — a display-only safety clamp, not used for the percentage).
 - **Sensor Map** — Leaflet.js, built from `_build_map_sensor_list()` (points)
   and `bt_path_coords` (polylines). Marker color encodes status; commissioning-
   excluded sensors render grey regardless of last status. Historical playback
-  scrubs through the last 30 runs using per-run sensor status snapshots.
+  scrubs through the last 30 runs, sorted by the raw ISO timestamp (sorting the
+  formatted `dd/mm/yy` label instead put 01/07 before 30/06).
 - **Sensors Health Trend** — one line per group, `_build_chart_data()` +
-  `_build_health_by_run()`, using the check_summary-text health computation
-  above (with ID-based commissioning exclusion for VMS).
-- **Attention needed, by project** — `build_accountability_rollup_html()`
-  groups every sensor below 70% (from the exact per-sensor `sensor_results`
-  history) by its `sensor_projects.project`, out-of-support projects
-  separated out, commissioning-excluded sensors filtered out entirely,
-  unmatched sensors bucketed under "Unassigned."
-- **Sensor Stability** — per-sensor table driven by `fetch_sensor_stability()`
-  (exact per-sensor history), one row per sensor with a sparkline, stability
-  tier badge (`stability.py`), and project owner.
+  `_build_health_by_run()`, from the per-run status counts above.
+- **Attention needed, by project** — `build_accountability_rollup_html()` lists
+  only sensors **failing right now** (`history[-1]` not in `GOOD_STATUSES`),
+  grouped by `sensor_projects.project` and sorted by fault age, longest outage
+  first. The lifetime tier rides along as context. Out-of-support projects are
+  separated out, commissioning-excluded sensors filtered entirely, unmatched
+  sensors bucketed under "Unassigned." Keying this off current state rather than
+  the lifetime tier is deliberate: a sensor repaired yesterday must drop off the
+  list, and one that died this morning must appear however good its record.
+- **Sensor Stability** — per-sensor table driven by `fetch_sensor_stability()`,
+  one row per sensor with a **Current state** cell (`_current_state()`: Working /
+  Down Nd / Never worked), a 20-run sparkline, the **lifetime** stability tier
+  (`tier_for_counts()`), and the project owner.
 - **Run History** — last 30 runs, one row each, per-group % + overall API
   response status.
 
@@ -309,18 +318,60 @@ exists in an external spreadsheet.
 Single source of truth for the six-tier badge system, shared by both
 `report.py` and `digest.py` so a threshold change can't drift between them:
 
-| Tier | Threshold | 
+| Tier | Threshold (lifetime, raw ratio) |
 |---|---|
 | Always on | ≥99% |
 | Healthy | ≥90% |
 | Intermittent | ≥70% |
 | Unstable | ≥40% |
-| Critical | ≥1% |
-| Always off | 0% |
+| Critical | >0% — has worked at least once |
+| Always off | `good_runs == 0` — never once reported |
+
+The digest reuses these tiers but computes them over a **single week**, so it
+relabels the zero tier as **"No good runs"** (`_WEEK_TIER_LABEL`): "Always off"
+is a lifetime claim and would overstate a week's data.
 
 `GOOD_STATUSES = {"working", "ok"}` — anything else (`not_working`,
 `malfunctioning`, `no_status`, `no_traffic`, `no_measurement`, `failing`) counts
 as bad for tiering purposes, regardless of which group it came from.
+
+### Two metrics, deliberately separate
+
+The dashboard answers two different questions and must never conflate them:
+
+| | Question | Where it lives |
+|---|---|---|
+| **Stability tier** | "Can I trust this sensor?" | `tier_for_counts()` over the sensor's **whole lifetime** |
+| **Current state / fault age** | "Is it down *now*, and for how long?" | `report._current_state()` |
+
+The tier is a lifetime average and is *intentionally* slow to move — a sensor
+repaired yesterday still reads badly. That is correct for a trust rating and
+wrong for an action list, so the **"Attention needed" rollup is keyed off current
+state**, not the tier: only sensors failing right now appear, sorted by outage
+length, with the tier riding along as context.
+
+`tier_for_counts(good, total)` gets two things right that a bare percentage
+cannot:
+
+* **"Always off" means `good == 0`** — never once reported. That is a defensible
+  claim to put to a contractor, unlike a percentage that merely rounds to zero.
+  One good run ever ⇒ `Critical`, not `Always off`.
+* **The ratio is compared unrounded.** Rounding first created a cliff at 0.5%:
+  2 good runs in 500 (0.40%) landed in `Always off` while 3 in 500 (0.60%)
+  landed in `Critical`.
+
+`tier_for(pct)` remains for `digest.py`, which only ever holds a percentage
+(computed per week, so its rounding cannot reach a false zero).
+
+Below `TIER_MIN_RUNS` (5) recorded runs the badge shows a neutral "Collecting
+data" rather than a falsely precise tier.
+
+> A rolling 20-run window was tried and reverted: it was **cadence-dependent**
+> (20 runs = ~5 days at 6-hourly but ~1.7 days at 2-hourly), so changing the cron
+> frequency silently changed what every badge meant. A lifetime tier plus an
+> explicit fault age has no window to tune.
+
+Covered by `tests/test_stability.py`.
 
 ---
 

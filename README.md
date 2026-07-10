@@ -35,16 +35,25 @@ The monitor uses a two-tier health model:
 - **Feed health** (binary) — did the API respond with valid, fresh XML? If not, the group is marked as a feed issue regardless of sensor counts.
 - **Sensor health %** — of the sensors/controllers/paths reported by the feed, what percentage are working? Shown as a percentage badge per group: green ≥ 90 %, amber ≥ 80 %, red < 80 %.
 
-Each sensor in the Stability panel gets one of six badges based on its historical health %:
+The Stability panel answers **two different questions with two different columns**, and they are deliberately kept apart:
 
-| Badge | Range | Meaning |
+- **Current state** — what the sensor is doing *right now*: `Working`, `Down 10d`, or `Never worked (28d)`. This is what the control room acts on, and it drives the "Attention needed" list.
+- **Stability (lifetime)** — the sensor's record across **every run ever taken**: how far it can be trusted. It is intentionally slow-moving, so a sensor repaired yesterday still shows a poor record.
+
+A sensor can be down today with an excellent lifetime record (a new fault), or working today with a terrible one (a repeat offender that just came back). Both facts matter, so both are shown.
+
+| Badge | Lifetime range | Meaning |
 |---|---|---|
-| Always on | 99–100% | Effectively every recorded run was good |
+| Always on | 99–100% | Effectively every run was good |
 | Healthy | 90–98% | Consistently up, rare misses |
 | Intermittent | 70–89% | Mostly working but with regular gaps |
 | Unstable | 40–69% | Unreliable — failing more often than not |
-| Critical | 1–39% | Almost always failing |
-| Always off | 0% | No good runs recorded |
+| Critical | under 40% | Mostly failing, **but has worked at least once** |
+| Always off | never | Has **never** produced a single good reading |
+
+**"Always off" means literally zero good runs** — not a percentage that rounds to zero. That distinction is deliberate: it is a defensible claim to put in front of a contractor ("this sensor has never worked"). A sensor that worked once and never again is `Critical`, not `Always off`. Tiering compares the raw ratio, so there is no rounding cliff.
+
+A sensor with fewer than 5 recorded runs shows a neutral **Collecting data** badge rather than a falsely precise tier.
 
 Sensors marked in the reference sheet as **awaiting power** (not yet electrified) or **decommissioned** are not expected to be working, so they get a neutral badge instead of a health tier and are **excluded from all health statistics** (see [Sensor Ownership & Commissioning](#sensor-ownership--commissioning)).
 
@@ -95,9 +104,9 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 **Sensor Health Trend** — one line per sensor group showing health % across the last 30 runs.
 
-**Attention needed, by project** — groups every sensor below 70 % uptime by the project/contractor that owns it, worst-count first, so a failure has an owner to contact. Out-of-support projects (where a failure is expected and non-actionable) are shown in a separate, clearly-marked section; sensors not matched to any project surface as *Unassigned — no owner known*. Awaiting-power and decommissioned sensors are excluded (they aren't faults).
+**Attention needed, by project** — lists every sensor that is **not reporting right now**, grouped by the project/contractor that owns it and ordered by **how long it has been down** (longest outage first), so the strongest case comes to the top. Each sensor also carries its lifetime badge as context — is this a new fault, or a repeat offender? A sensor repaired yesterday drops off the list; one that died this morning appears however good its record was. Out-of-support projects (where a failure is expected and non-actionable) are shown in a separate, clearly-marked section; sensors not matched to any project surface as *Unassigned — no owner known*. Awaiting-power and decommissioned sensors are excluded (they aren't faults).
 
-**Sensor Stability** — per-sensor history table with sparklines (last 20 runs), stability badge, **project owner**, and timestamps for first seen / last working / last issue.
+**Sensor Stability** — per-sensor table with a **Current state** cell (Working / Down *N*d / Never worked), a sparkline of the last 20 runs, the **lifetime** stability badge, the **project owner**, and timestamps for last working / last issue.
 - Live search input to filter by sensor name or ID
 - Group dropdown filter
 - Sort dropdown — Default, Worst first, or Best first
@@ -107,7 +116,7 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 **Run History** — per-run feed status and sensor health % for each sensor group across the last 30 runs.
 
-> The dashboard uses a **two-column layout** (60/40): the left column holds System Overview, Sensor Map, Health Trend, and Run History; the right column holds the Sensor Stability panel and stays sticky while you scroll. On narrow screens (below 900px) the columns stack vertically.
+> The dashboard uses a **two-column layout** (55/45): the left column holds System Overview, Sensor Map, Health Trend, and Run History; the right column holds the Attention-needed and Sensor Stability panels and stays sticky while you scroll. On narrow screens (below 900px) the columns stack vertically.
 
 ---
 
@@ -115,7 +124,7 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 Tests run every 6 hours (triggered via cron-job.org). The workflow can also be triggered manually from the GitHub Actions tab.
 
-A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging always-off sensors, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed.
+A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging sensors with **no good runs that week**, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. Because the digest scores a single week, its zero tier reads *"No good runs"* rather than the dashboard's lifetime *"Always off"*.
 
 ---
 
