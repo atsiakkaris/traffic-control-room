@@ -797,7 +797,8 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
         return ''.join(out)
 
     # ── Render ────────────────────────────────────────────────────────────────
-    html = f"""<!DOCTYPE html>
+    # Not named `html`: that would shadow the module for the nested _h() escaper.
+    page = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1232,7 +1233,7 @@ function filterTables(query) {{
 </html>"""
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding='utf-8')
+    out_path.write_text(page, encoding='utf-8')
     return out_path
 
 

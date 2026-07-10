@@ -9,11 +9,10 @@ DATA_QUALITY.docx
 ~$*.docx
 ITS_Infrastructure_Health_Monitor.pptx
 reports/digest_preview.html
+reports/qa_*.html
 scheduled command.txt
 run.bat
 pin.html
-runner/qa.py
-qa_tdu.bat
 runner/results/
 *.xlsx
 ~$*.xlsx

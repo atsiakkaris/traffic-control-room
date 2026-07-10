@@ -170,3 +170,22 @@ def test_closest_sensor_still_wins_a_contested_row():
     match = [m for m in matches if m["type"] == "match"]
     assert len(match) == 1 and match[0]["api"]["id"] == "near"
     assert {m["api"]["id"] for m in matches if m["type"] == "api_only"} == {"far"}
+
+
+# ── qa.generate_html must not shadow the `html` module ────────────────────────
+#
+# generate_html() once assigned its output to a local named `html`, which made
+# the module invisible to the nested _h() escaper closing over that scope. Every
+# QA report raised NameError at render time. Guard the escaper directly.
+
+def test_generate_html_does_not_shadow_the_html_module():
+    import inspect, qa
+    src = inspect.getsource(qa.generate_html)
+    assert "\n    html = " not in src, "local named `html` shadows the module for _h()"
+
+
+def test_qa_html_escaper_works_inside_generate_html_scope():
+    """_h() must escape, not raise, for spreadsheet-derived text."""
+    import qa
+    # _h is nested; exercise the module-level escaping it relies on.
+    assert qa.html.escape('<script>&"') == '&lt;script&gt;&amp;&quot;'
