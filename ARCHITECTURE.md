@@ -276,11 +276,22 @@ exists in an external spreadsheet.
    `active` / `not_electrified` / `decommissioned` based on keyword matching
    against `_NOT_ELECTRIFIED` / `_INACTIVE_VALUES`).
 2. `match_sensors()` builds every (reference row, API sensor) pair within
-   `max_dist` (default `COORD_MATCH_MAX_M`, overridden per-group — 300m for
-   the sensors), sorts all candidate
-   pairs by distance, and assigns **greedily shortest-first** — a global
-   nearest-neighbor matching, not naive per-row nearest-match, so ambiguous
-   cases resolve to the overall best pairing.
+   `max_dist`, sorts all candidate pairs by distance, and assigns **greedily
+   shortest-first** — a global nearest-neighbor matching, not naive per-row
+   nearest-match, so ambiguous cases resolve to the overall best pairing.
+   Names are never compared; matching is purely geographic.
+
+   The radius is set per group in `update_projects.GROUPS`, and the
+   `qa_*.bat` launchers must pass the same value or the QA report will
+   disagree with what the DB holds:
+
+   | Group | `max_dist` | Why |
+   |---|---|---|
+   | Traffic Detection | 300m | Dense urban loops — a wider radius reaches a different junction |
+   | Bluetooth | 300m | As above |
+   | VMS | 500m | Signs are sparse (median nearest-neighbour 1.45km) and their reference coordinates are approximate. At 300m, "VMS A1" missed the API sign of that exact name by 93m |
+
+   `COORD_MATCH_MAX_M` (500m) is only the fallback when no `max_dist` is given.
 
    Claimed rows are tracked by **row position, not by name**. Two rows can
    legitimately share a name — two distinct points on Georgiou Griva Digeni

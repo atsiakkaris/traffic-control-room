@@ -43,7 +43,13 @@ WORKBOOK = REPO_ROOT / "QA Locations.xlsx"
 GROUPS = [
     ("Traffic Detection", "Traffic Detection", 300),
     ("Bluetooth",         "Bluetooth",         300),
-    ("VMS",               "VMS",               300),
+    # VMS sit far apart (median nearest-neighbour 1.45 km) and their reference
+    # coordinates are approximate, so 300m strands signs that are unambiguously
+    # the same installation — "VMS A1" was 393m from the API sign of that exact
+    # name, with the runner-up 919m away. 500m closes that without introducing a
+    # single re-assignment. Detection loops stay at 300m: they are dense enough
+    # in Nicosia that a wider radius would pull in a different junction.
+    ("VMS",               "VMS",               500),
 ]
 
 

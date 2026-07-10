@@ -13,6 +13,12 @@ CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
 # Sensor statuses that count as "good" when computing health percentages
 GOOD_STATUSES = {"working", "ok"}
 
+# Commissioning states meaning "not expected to be working". These sensors are
+# left out of every health statistic — dashboard and digest alike. An unpowered
+# VMS is published by the API and reports not_working forever; counting it as a
+# fault would bury the real ones.
+EXCLUDED_COMMISSIONING = {"not_electrified", "decommissioned"}
+
 Tier = namedtuple("Tier", ["key", "label", "min_pct", "bg", "fg", "tooltip", "range_label"])
 
 # Ordered highest tier first. `range_label` is the short range shown in legends —

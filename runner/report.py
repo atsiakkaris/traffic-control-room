@@ -19,7 +19,7 @@ def _json_safe(obj):
 
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects
 from labels import sensor_display_name
-from stability import CYPRUS_TZ, GOOD_STATUSES, tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS
+from stability import CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS
 
 _PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
 
@@ -776,7 +776,9 @@ _COMMISSIONING_TIP = {
     "decommissioned":  ("Marked inactive / decommissioned in the reference sheet — "
                         "excluded from health statistics."),
 }
-_EXCLUDED_COMMISSIONING = set(_COMMISSIONING_LABEL)
+# Shared with digest.py via stability.py so the dashboard and the weekly email
+# can never disagree about which sensors are expected to be working.
+_EXCLUDED_COMMISSIONING = EXCLUDED_COMMISSIONING
 
 
 def _commissioning(sensor_projects, group_name, sensor_id):

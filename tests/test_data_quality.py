@@ -230,3 +230,27 @@ def test_match_sensors_uses_the_shared_constant_not_a_local_one():
     src = inspect.getsource(qa.match_sensors)
     assert "COLOC_M" not in src, "local radius reintroduced; use COLOCATION_M"
     assert "COLOCATION_M" in src
+
+
+# ── Per-group match radius ────────────────────────────────────────────────────
+
+def test_vms_matches_at_500m_not_300m():
+    """VMS signs are sparse and their reference coords approximate; 300m stranded
+    "VMS A1" 393m from the API sign of that exact name."""
+    import update_projects
+    radii = {g: d for g, _sheet, d in update_projects.GROUPS}
+    assert radii["VMS"] == 500
+    assert radii["Traffic Detection"] == 300, "dense urban loops must stay tight"
+    assert radii["Bluetooth"] == 300
+
+
+def test_qa_vms_launcher_uses_the_same_radius_as_update_projects():
+    """A launcher that disagrees with GROUPS makes the QA report contradict the DB."""
+    import re
+    from pathlib import Path
+    import update_projects
+    radii = {g: d for g, _s, d in update_projects.GROUPS}
+    bat = (Path(__file__).parent.parent / "qa_vms.bat").read_text()
+    m = re.search(r"--max-dist\s+(\d+)", bat)
+    assert m, "qa_vms.bat must pass --max-dist explicitly"
+    assert int(m.group(1)) == radii["VMS"]

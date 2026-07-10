@@ -9,9 +9,10 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from db import get_connection
+from db import get_connection, fetch_sensor_projects
 from labels import sensor_display_name, with_id
-from stability import CYPRUS_TZ, GOOD_STATUSES, STABILITY_TIERS, tier_for, health_pct
+from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING,
+                       STABILITY_TIERS, tier_for, health_pct)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,6 +134,23 @@ def _retired_label(row):
     return with_id(html.escape(label), row["sensor_id"])
 
 
+def fetch_excluded_commissioning():
+    """{(group_name, sensor_id)} for sensors not expected to be working.
+
+    An unpowered VMS is published by the API and reports not_working forever.
+    Without this, the digest names all 38 of them under "No good runs this week"
+    and the real faults are lost in the noise. The dashboard already excludes
+    them; this keeps the weekly email agreeing with it.
+    """
+    projects = fetch_sensor_projects()
+    return {
+        (group, sensor_id)
+        for group, sensors in projects.items()
+        for sensor_id, info in sensors.items()
+        if info.get("commissioning") in EXCLUDED_COMMISSIONING
+    }
+
+
 def _counts(stats):
     counts = {"total": len(stats)}
     counts.update({tier.key: 0 for tier in STABILITY_TIERS})
@@ -166,7 +184,9 @@ def build_digest():
 
     daily = fetch_sensor_health_by_day(14)
     active_sensors, active_bt, sensor_names = fetch_active_sensors()
-    active = active_sensors | active_bt
+    # Awaiting-power and decommissioned sensors are not faults — same rule the
+    # dashboard applies, so the two never disagree about who is failing.
+    active = (active_sensors | active_bt) - fetch_excluded_commissioning()
     retired = fetch_retired_this_week()
 
     conn = get_connection()
