@@ -634,6 +634,33 @@ def _badge_conf(score):
     return f'<span class="badge red">{score:.0%} ✖</span>'
 
 
+# Same wording as report.py's _COMMISSIONING_LABEL, so a row reads the same
+# whether it's seen on the public dashboard or in this diagnostic tool.
+_REF_STATUS_LABEL = {
+    'active':          ('green', 'Active'),
+    'not_electrified': ('grey',  'Awaiting power'),
+    'decommissioned':  ('grey',  'Decommissioned'),
+}
+
+
+def _badge_ref_status(commissioning):
+    """Status badge for a reference-sheet row, from its own Status column.
+
+    This is what separates a genuine gap (active, nothing in the API) from an
+    expected absence (awaiting power / decommissioned) in the "In reference"
+    table — without it, every unmatched row looks equally alarming.
+    """
+    colour, label = _REF_STATUS_LABEL.get(commissioning, ('grey', commissioning or 'Active'))
+    return f'<span class="badge {colour}">{label}</span>'
+
+
+def _badge_active(active):
+    """Status badge for an API sensor: still in the live inventory feed, or
+    retired from it. Distinct from _badge_ref_status — this sensor has no
+    reference row, so no commissioning state exists for it."""
+    return '<span class="badge green">Active</span>' if active else '<span class="badge red">Retired</span>'
+
+
 def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False, not_electrified=0):
     try:
         from zoneinfo import ZoneInfo
@@ -723,7 +750,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<td class="mono dim">{ref_coords}</td>'
                 f'<td class="mono dim">{api_coords}</td>'
                 f'<td>{_badge_health(api["health_pct"])}</td>'
-                f'<td>{"Active" if api["active"] else "<span class=badge red>Retired</span>"}</td>'
+                f'<td>{_badge_active(api["active"])}</td>'
                 f'<td class="dim">{_h(ref["source"])}</td>'
                 f'<td class="dim">{_h(extra)}</td>'
                 f'</tr>'
@@ -745,6 +772,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<td>&#128205; {_h(ref["name"])}</td>'
                 f'<td class="mono">{coords}</td>'
                 f'<td class="dim">{_h(ref["source"])}</td>'
+                f'<td>{_badge_ref_status(ref.get("commissioning", "active"))}</td>'
                 f'<td class="dim">{_h(notes)}</td>'
                 f'<td class="dim">{_h(note)}</td>'
                 f'</tr>'
@@ -776,7 +804,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<td class="mono">{api["id"]}</td>'
                 f'<td class="mono">{coords}</td>'
                 f'<td>{_badge_health(api["health_pct"])}</td>'
-                f'<td>{"Active" if api["active"] else "<span class=badge red>Retired</span>"}</td>'
+                f'<td>{_badge_active(api["active"])}</td>'
                 f'</tr>'
             )
         return ''.join(out)
@@ -989,7 +1017,7 @@ tr.clickable:hover td{{background:#dceeff}}
     <summary>Sensors in your spreadsheets with no API match — not installed, wrong ID, or data entry error</summary>
     <div class="tbl-scroll">
     <table>
-      <thead><tr><th>Name</th><th>Coordinates</th><th>Source file</th><th>Notes</th><th>Reason</th></tr></thead>
+      <thead><tr><th>Name</th><th>Coordinates</th><th>Source file</th><th>Status</th><th>Notes</th><th>Reason</th></tr></thead>
       <tbody>{tr_ref_only()}</tbody>
     </table>
     </div>

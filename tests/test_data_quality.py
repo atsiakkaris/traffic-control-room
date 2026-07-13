@@ -287,3 +287,67 @@ def test_qa_pin_mode_and_ruler_mode_are_mutually_exclusive():
     src = inspect.getsource(qa.generate_html)
     assert "if (rulerMode) toggleRulerMode();" in src
     assert "if (pinMode) togglePinMode();" in src
+
+
+# ── QA "Status" column on the In-reference / In-API panels ────────────────────
+
+def test_badge_ref_status_labels_match_report_dot_py_wording():
+    """Same words as the public dashboard's commissioning badges, so a sensor
+    reads the same whether seen on the dashboard or in this diagnostic tool."""
+    import qa
+    assert "Active" in qa._badge_ref_status("active")
+    assert "Awaiting power" in qa._badge_ref_status("not_electrified")
+    assert "Decommissioned" in qa._badge_ref_status("decommissioned")
+
+
+def test_badge_ref_status_defaults_to_active_for_missing_state():
+    import qa
+    assert "Active" in qa._badge_ref_status(None)
+
+
+def test_badge_active_quotes_the_class_attribute():
+    """Regression: 'class=badge red' (no quotes) makes the browser parse
+    class="badge" and drop 'red' as a stray attribute — the red styling
+    silently never applied. Three call sites had this bug."""
+    import qa
+    assert 'class="badge red"' in qa._badge_active(False)
+    assert 'class="badge green"' in qa._badge_active(True)
+
+
+def test_qa_report_status_columns_present_in_both_panels(tmp_path):
+    """generate_html() is shared by all three qa_*.bat reports, so one check
+    here covers Traffic Detection, Bluetooth, and VMS."""
+    import qa
+    ref = [{"name": "Test Site", "lat": 35.0, "lon": 33.0, "source": "x.xlsx",
+            "extra": {}, "commissioning": "not_electrified"}]
+    api = [{"id": "1", "name": "API Site", "lat": 35.01, "lon": 33.01,
+            "active": True, "health_pct": 90, "total_runs": 10, "last_seen": None,
+            "first_seen": None}]
+    matches = [
+        {"type": "ref_only", "ref": ref[0], "api": None, "note": "Nearest API sensor is 999 m away"},
+        {"type": "api_only", "ref": None, "api": api[0]},
+    ]
+    out = qa.generate_html("Bluetooth", api, ref, matches, tmp_path / "qa.html")
+    html = out.read_text(encoding="utf-8")
+    assert '<th>Status</th>' in html
+    assert "Awaiting power" in html   # the ref_only row's own Status column
+    assert 'class="badge green">Active</span>' in html  # the api_only row's Status column
+    assert "class=badge" not in html
+
+
+def test_qa_ref_only_status_is_the_4th_column(tmp_path):
+    import re
+    import qa
+    ref = [{"name": "Test Site", "lat": 35.0, "lon": 33.0, "source": "x.xlsx",
+            "extra": {}, "commissioning": "not_electrified"}]
+    matches = [{"type": "ref_only", "ref": ref[0], "api": None, "note": "n/a"}]
+    out = qa.generate_html("Bluetooth", [], ref, matches, tmp_path / "qa.html")
+    html = out.read_text(encoding="utf-8")
+
+    thead = re.search(r"<h2>In reference.*?<thead>(.*?)</thead>", html, re.S).group(1)
+    headers = re.findall(r"<th>(.*?)</th>", thead)
+    assert headers[3] == "Status", headers
+
+    row = re.search(r'<tr class="clickable".*?</tr>', html, re.S).group(0)
+    cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+    assert "Awaiting power" in cells[3], cells
