@@ -254,3 +254,36 @@ def test_qa_vms_launcher_uses_the_same_radius_as_update_projects():
     m = re.search(r"--max-dist\s+(\d+)", bat)
     assert m, "qa_vms.bat must pass --max-dist explicitly"
     assert int(m.group(1)) == radii["VMS"]
+
+
+# ── QA map ruler ───────────────────────────────────────────────────────────────
+#
+# generate_html() is shared by all three qa_*.bat reports (Traffic Detection,
+# Bluetooth, VMS), so one check here covers all three.
+
+def test_qa_report_includes_a_ruler_alongside_get_coordinates(tmp_path):
+    import qa
+    out = qa.generate_html("Bluetooth", [], [], [], tmp_path / "qa.html")
+    html = out.read_text(encoding="utf-8")
+    for needle in ("ruler-toggle", "toggleRulerMode", "rulerClear", "haversineM", "ruler-bar"):
+        assert needle in html, f"missing {needle!r} — ruler feature not wired into generate_html"
+
+
+def test_qa_ruler_uses_the_same_earth_radius_as_the_python_matcher():
+    """R=6371000 must match _haversine_m()'s constant, or the on-map distance
+    the user reads while investigating a gap would disagree with the matcher's
+    own maths for the same two points."""
+    import inspect, qa
+    py_src = inspect.getsource(qa._haversine_m)
+    assert "6_371_000" in py_src
+    js_src = inspect.getsource(qa.generate_html)
+    assert "6371000" in js_src
+
+
+def test_qa_pin_mode_and_ruler_mode_are_mutually_exclusive():
+    """Turning one on must turn the other off — the map click handler is shared
+    between them, so both active at once would misroute every click."""
+    import inspect, qa
+    src = inspect.getsource(qa.generate_html)
+    assert "if (rulerMode) toggleRulerMode();" in src
+    assert "if (pinMode) togglePinMode();" in src

@@ -874,6 +874,15 @@ tr.clickable:hover td{{background:#dceeff}}
            cursor:pointer;font-size:12px}}
 #pin-copy:hover{{background:#163a5f}}
 #pin-copied{{font-size:11px;color:#27ae60;display:none}}
+#ruler-bar{{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:1000;
+            background:#fff;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.3);
+            padding:8px 14px;display:flex;align-items:center;gap:10px;font-size:13px;
+            opacity:0;transition:opacity .2s;pointer-events:none}}
+#ruler-bar.visible{{opacity:1;pointer-events:auto}}
+#ruler-dist{{font-family:monospace;font-weight:bold;color:#8e44ad}}
+#ruler-clear{{padding:4px 10px;background:#8e44ad;color:#fff;border:none;border-radius:4px;
+              cursor:pointer;font-size:12px}}
+#ruler-clear:hover{{background:#6c3483}}
 </style>
 </head>
 <body>
@@ -931,11 +940,23 @@ tr.clickable:hover td{{background:#dceeff}}
               border:2px solid transparent">
     &#128205; Get coordinates
   </div>
+  <div id="ruler-toggle" onclick="toggleRulerMode()"
+       style="position:absolute;top:48px;right:10px;z-index:1000;
+              background:#fff;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.3);
+              padding:6px 12px;cursor:pointer;font-size:12px;user-select:none;
+              border:2px solid transparent">
+    &#128207; Ruler
+  </div>
   <div id="pin-bar">
     <span>&#128205;</span>
     <span id="pin-coords"></span>
     <button id="pin-copy" onclick="pinCopy()">Copy</button>
     <span id="pin-copied">Copied!</span>
+  </div>
+  <div id="ruler-bar">
+    <span>&#128207;</span>
+    <span id="ruler-dist">Click two points on the map</span>
+    <button id="ruler-clear" onclick="rulerClear()">Clear</button>
   </div>
 </div>
 </div><!-- /map-wrap -->
@@ -1189,6 +1210,7 @@ function togglePinMode() {{
   pinMode = !pinMode;
   const btn = document.getElementById('pin-toggle');
   if (pinMode) {{
+    if (rulerMode) toggleRulerMode();
     btn.style.borderColor = '#1f4e79';
     btn.style.background = '#e8f0fa';
     map.getContainer().style.cursor = 'crosshair';
@@ -1201,18 +1223,6 @@ function togglePinMode() {{
   }}
 }}
 
-map.on('click', function(e) {{
-  if (!pinMode) return;
-  const lat = e.latlng.lat.toFixed(6);
-  const lon = e.latlng.lng.toFixed(6);
-  pinCoords = `${{lat}}, ${{lon}}`;
-  if (pinMarker) pinMarker.setLatLng(e.latlng);
-  else pinMarker = L.marker(e.latlng).addTo(map);
-  document.getElementById('pin-coords').textContent = pinCoords;
-  document.getElementById('pin-bar').classList.add('visible');
-  document.getElementById('pin-copied').style.display = 'none';
-}});
-
 function pinCopy() {{
   navigator.clipboard.writeText(pinCoords).then(() => {{
     const el = document.getElementById('pin-copied');
@@ -1220,6 +1230,78 @@ function pinCopy() {{
     setTimeout(() => el.style.display = 'none', 2000);
   }});
 }}
+
+// ── Click-to-measure ruler ────────────────────────────────────────────────
+// Same haversine formula as _haversine_m() in qa.py, so the on-map distance
+// always matches what the matcher itself would compute for those two points.
+let rulerMode = false;
+let rulerPoints = [];
+let rulerMarkers = [];
+let rulerLine = null;
+
+function haversineM(lat1, lon1, lat2, lon2) {{
+  const R = 6371000, rad = Math.PI / 180;
+  const phi1 = lat1 * rad, phi2 = lat2 * rad;
+  const dphi = (lat2 - lat1) * rad, dlam = (lon2 - lon1) * rad;
+  const a = Math.sin(dphi/2)**2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dlam/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}}
+
+function fmtDist(m) {{
+  return m >= 1000 ? `${{(m/1000).toFixed(2)}} km` : `${{Math.round(m)}} m`;
+}}
+
+function toggleRulerMode() {{
+  rulerMode = !rulerMode;
+  const btn = document.getElementById('ruler-toggle');
+  if (rulerMode) {{
+    if (pinMode) togglePinMode();
+    btn.style.borderColor = '#8e44ad';
+    btn.style.background = '#f3e8fa';
+    map.getContainer().style.cursor = 'crosshair';
+    document.getElementById('ruler-bar').classList.add('visible');
+  }} else {{
+    btn.style.borderColor = 'transparent';
+    btn.style.background = '#fff';
+    map.getContainer().style.cursor = '';
+    document.getElementById('ruler-bar').classList.remove('visible');
+    rulerClear();
+  }}
+}}
+
+function rulerClear() {{
+  rulerPoints = [];
+  rulerMarkers.forEach(m => map.removeLayer(m));
+  rulerMarkers = [];
+  if (rulerLine) {{ map.removeLayer(rulerLine); rulerLine = null; }}
+  document.getElementById('ruler-dist').textContent = 'Click two points on the map';
+}}
+
+map.on('click', function(e) {{
+  if (pinMode) {{
+    const lat = e.latlng.lat.toFixed(6);
+    const lon = e.latlng.lng.toFixed(6);
+    pinCoords = `${{lat}}, ${{lon}}`;
+    if (pinMarker) pinMarker.setLatLng(e.latlng);
+    else pinMarker = L.marker(e.latlng).addTo(map);
+    document.getElementById('pin-coords').textContent = pinCoords;
+    document.getElementById('pin-bar').classList.add('visible');
+    document.getElementById('pin-copied').style.display = 'none';
+    return;
+  }}
+  if (rulerMode) {{
+    if (rulerPoints.length >= 2) rulerClear();  // 3rd click starts a fresh measurement
+    rulerPoints.push(e.latlng);
+    rulerMarkers.push(L.circleMarker(e.latlng, {{radius:5, color:'#8e44ad', fillColor:'#8e44ad', fillOpacity:1}}).addTo(map));
+    if (rulerPoints.length === 1) {{
+      document.getElementById('ruler-dist').textContent = 'Click a second point…';
+    }} else {{
+      rulerLine = L.polyline(rulerPoints, {{color:'#8e44ad', weight:3, dashArray:'6,6'}}).addTo(map);
+      const d = haversineM(rulerPoints[0].lat, rulerPoints[0].lng, rulerPoints[1].lat, rulerPoints[1].lng);
+      document.getElementById('ruler-dist').textContent = fmtDist(d);
+    }}
+  }}
+}});
 
 // ── Search / filter all table rows ───────────────────────────────────────
 function filterTables(query) {{
