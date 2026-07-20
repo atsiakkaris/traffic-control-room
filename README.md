@@ -37,7 +37,7 @@ The monitor uses a two-tier health model:
 
 The Stability panel answers **two different questions with two different columns**, and they are deliberately kept apart:
 
-- **Current state** — what the sensor is doing *right now*: `Working`, `Down 10d`, or `Never worked (28d)`. This is what the control room acts on, and it drives the "Attention needed" list.
+- **Current state** — what the sensor is doing *right now*: `Working`, `Down 10d`, or `Never worked (28d)`. This is what the control room acts on.
 - **Stability (lifetime)** — the sensor's record across **every run ever taken**: how far it can be trusted. It is intentionally slow-moving, so a sensor repaired yesterday still shows a poor record.
 
 A sensor can be down today with an excellent lifetime record (a new fault), or working today with a terrible one (a repeat offender that just came back). Both facts matter, so both are shown.
@@ -97,14 +97,18 @@ Set a row back to `active` and re-run `update_projects.bat` to return the sensor
 - Marker clustering at country zoom (expands at zoom 13+); toggle clustering on/off with the **Cluster** button
 - All predefined BT paths drawn as polylines (green = OK, red = issue, grey = no data), with directional arrows showing the direction of travel
 - Toggle layers on/off; filter to issues only; collapsible legend
+- **Filter by contract** — a dropdown isolates one contract's sensors on the map (or *No maintenance plan*); paths, which belong to no contract, hide while a contract is selected
+- **Hide not-live** — a toggle drops the grey awaiting-power / decommissioned markers so only equipment expected to work is shown
+- **Streets / Satellite** base-map toggle (satellite is Esri World Imagery)
+- **Full screen** button — expands the map *and its controls* to fill the display, so filtering, clustering and playback all stay usable
 - **View on map** button on each group card isolates that group and flies to its bounds
 - **Historical playback** bar — scrub or step through the last 30 runs to see how sensor statuses changed over time
 
-The map pop-up for each sensor shows its **project owner** and, for sensors awaiting power or decommissioned, a neutral "Awaiting power" / "Decommissioned" status with a grey marker.
+The map pop-up for each sensor shows its **project owner**, a **View history →** link that jumps to that sensor's row in the Sensor Stability panel and opens its trend, and — for sensors awaiting power or decommissioned — a neutral "Awaiting power" / "Decommissioned" status with a grey marker.
 
 **Sensor Health Trend** — one line per sensor group showing health % across the last 30 runs.
 
-**Attention needed, by project** — lists every sensor that is **not reporting right now**, grouped by the project/contractor that owns it and ordered by **how long it has been down** (longest outage first), so the strongest case comes to the top. Each sensor also carries its lifetime badge as context — is this a new fault, or a repeat offender? A sensor repaired yesterday drops off the list; one that died this morning appears however good its record was. Out-of-support projects (where a failure is expected and non-actionable) are shown in a separate, clearly-marked section; sensors not matched to any project surface as *Unassigned — no owner known*. Hovering an unassigned sensor's project cell explains **why** it has no owner: either the reference spreadsheet has no row for it (a data-entry task — add the row and re-run `update_projects.bat`), or a nearer sensor claimed the only nearby row (a possible mis-mapping). Awaiting-power and decommissioned sensors are excluded (they aren't faults).
+**Sensors by contract** — every maintenance contract and the sensors it covers, so a fully-healthy contract stays visible instead of only the ones with a current fault. Four columns per contract: **Total** owned, **Working**, **Faults**, and **Not live** (awaiting power / decommissioned). A **fault** here is a *persistent* problem — a sensor that failed **at least 80% of its last 20 runs**, not a one-cycle blip — so for a live contract it is what the contractor should be responding to; faults are shown neutral for an out-of-support contract, where a failure is expected. Click a contract row to expand the list of its failing sensors (name, recent fail count, and current outage age, longest first). Sensors matched to no contract appear under **No maintenance plan** — hovering one in the Sensor Stability panel explains **why** it has no owner: either the reference spreadsheet has no row for it (a data-entry task — add the row and re-run `update_projects.bat`), or a nearer sensor claimed the only nearby row (a possible mis-mapping). Awaiting-power and decommissioned sensors count under *Not live*, never as faults.
 
 **Sensor Stability** — per-sensor table with a **Current state** cell (Working / Down *N*d / Never worked), a sparkline of the last 20 runs, the **lifetime** stability badge, the **project owner**, and timestamps for last working / last issue.
 - Live search input to filter by sensor name or ID. Wrap the term in double quotes for an **exact match** — `"10"` finds sensor 10 only, not 1001 or 1040. Exact match tests each identifier shown on the row (site code, name words, and both endpoints of a Bluetooth path)
@@ -116,7 +120,7 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 **Run History** — per-run feed status and sensor health % for each sensor group across the last 30 runs.
 
-> The dashboard uses a **two-column layout** (55/45): the left column holds System Overview, Sensor Map, Health Trend, and Run History; the right column holds the Attention-needed and Sensor Stability panels and stays sticky while you scroll. On narrow screens (below 900px) the columns stack vertically.
+> The dashboard uses a **two-column layout** (55/45): the left column holds System Overview, Sensor Map, Health Trend, and Run History; the right column holds the Sensors-by-contract and Sensor Stability panels and stays sticky while you scroll. On narrow screens (below 900px) the columns stack vertically.
 
 ---
 
@@ -124,7 +128,7 @@ The map pop-up for each sensor shows its **project owner** and, for sensors awai
 
 Tests run every 6 hours (triggered via cron-job.org). The workflow can also be triggered manually from the GitHub Actions tab.
 
-A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging sensors with **no good runs that week**, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. Sensors are named exactly as the dashboard names them (via `runner/labels.py`), with the raw ID alongside for quoting to a contractor. Because the digest scores a single week, its zero tier reads *"No good runs"* rather than the dashboard's lifetime *"Always off"*.
+A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It summarises the past 7 days of sensor health, flagging sensors with **no good runs that week**, persistently unstable sensors, degraded/recovered sensors, and any sensors retired from the API feed. It also carries the same **Sensors by contract** census as the dashboard — each contract's Total / Working / Faults / Not-live counts, with the failing sensors expandable under each — so maintenance and response can be tracked per contractor. Sensors are named exactly as the dashboard names them (via `runner/labels.py`), with the raw ID alongside for quoting to a contractor. Because the digest scores a single week, its zero tier reads *"No good runs"* rather than the dashboard's lifetime *"Always off"*.
 
 ---
 

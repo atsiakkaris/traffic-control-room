@@ -603,7 +603,7 @@ def build_html(d):
 
     {section("📋 Sensors by contract",
              "#111827",
-             "Every maintenance contract and the sensors it covers. A <strong>fault</strong> is a persistent problem &mdash; a sensor that failed at least 80% of its last 20 runs, not a one-off blip &mdash. Expand a contract to see which sensors are failing. <strong>No maintenance plan</strong> means the sensor is matched to no contract yet.",
+             "Every maintenance contract and the sensors it covers. A <strong>fault</strong> is a persistent problem &mdash; a sensor that failed <strong>at least 80% of its last 20 runs</strong>, not a one-off blip &mdash. Expand a contract to see which sensors are failing. <strong>No maintenance plan</strong> means the sensor is matched to no contract yet.",
              _contract_summary_html(d["census"], d["sensor_names"]))}
     {section("🔴 No good runs this week",
              "#e24b4a",

@@ -940,6 +940,7 @@ def _build_map_sensor_list(all_coords, live_data, sensor_projects=None):
                 "data": entry.get("data", {}),
                 "project": proj_info["project"] if proj_info else None,
                 "comm_label": comm_label,
+                "not_live": bool(comm_label),
             })
     return sensors
 
@@ -1415,6 +1416,7 @@ def generate_report() -> str:
         map_panel_html = '<p style="color:var(--color-text-secondary);font-size:13px">No coordinate data yet — run the test suite once to populate the map.</p>'
     else:
         map_panel_html = (
+            '<div id="mapFsWrap">'
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
@@ -1423,6 +1425,15 @@ def generate_report() -> str:
             '<button class="map-toggle active" id="btn-cluster" onclick="toggleClustering(this)" title="Toggle marker clustering">Cluster</button>'
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
             '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
+            '</div>'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
+            '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Contract:</span>'
+            '<select id="contractFilter" onchange="setContractFilter(this.value)" '
+            'style="font-size:11px;padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);'
+            'background:var(--surface);color:var(--text);cursor:pointer"><option value="all">All contracts</option></select>'
+            '<span style="flex:1"></span>'
+            '<button class="map-toggle" id="btn-notlive" onclick="toggleNotLive(this)" title="Show or hide sensors that are awaiting power or decommissioned">Hide not-live</button>'
+            '<button class="map-toggle" id="btn-basemap" onclick="toggleBasemap(this)" title="Switch between street and satellite base map">Satellite</button>'
             '</div>'
             '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:7px 10px;'
             'background:var(--surface);border:0.5px solid var(--border);border-radius:8px">'
@@ -1433,14 +1444,19 @@ def generate_report() -> str:
             '<span id="playTimestamp" style="font-size:11px;color:var(--muted);min-width:150px;text-align:right;white-space:nowrap"></span>'
             '</div>'
             '<div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">'
-            '<div id="mapInfoPanel" style="display:none;position:absolute;top:10px;right:10px;z-index:1000;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
+            '<button id="mapFsBtn" onclick="toggleMapFullscreen()" title="Toggle full screen" '
+            'style="position:absolute;top:10px;right:10px;z-index:1201;background:#fff;border:none;'
+            'border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,0.3);cursor:pointer;padding:6px 8px;'
+            'line-height:0;color:#1a1a2e"><i class="ti ti-arrows-maximize" style="font-size:15px"></i></button>'
+            '<div id="mapInfoPanel" style="display:none;position:absolute;top:48px;right:10px;z-index:1200;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
             '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee">'
             '<span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span>'
             '<button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button>'
             '</div>'
             '<div id="mapInfoBody" style="padding:10px 14px 12px"></div>'
             '</div>'
-            '</div>'
+            '</div>'   # /#sensorMap
+            '</div>'   # /#mapFsWrap
         )
 
     run_time = _to_cyprus(latest_run["run_at"])
@@ -1555,6 +1571,11 @@ def generate_report() -> str:
   #trendChart {{ cursor: grab; }}
   #trendChart:active {{ cursor: grabbing; }}
   .leaflet-top {{ transition: top .1s; }}
+  #mapFsWrap:fullscreen {{ display:flex; flex-direction:column; background:var(--bg); padding:12px; box-sizing:border-box; }}
+  #mapFsWrap:fullscreen #sensorMap {{ flex:1 1 auto; height:auto; min-height:0; border-radius:0; }}
+  #mapFsWrap:-webkit-full-screen {{ display:flex; flex-direction:column; background:var(--bg); padding:12px; box-sizing:border-box; }}
+  #mapFsWrap:-webkit-full-screen #sensorMap {{ flex:1 1 auto; height:auto; min-height:0; }}
+  #mapFsBtn:hover {{ background:#f4f6f9 !important; }}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1717,7 +1738,7 @@ def generate_report() -> str:
     <div class="panel-body" id="b-p-contracts">
       <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 10px">
         Every maintenance contract and the sensors it covers. A <strong>fault</strong> is a persistent
-        problem — a sensor that failed at least 80% of its last 20 runs, not a one-off blip. Click a contract to see which
+        problem — a sensor that failed <strong>at least 80% of its last 20 runs</strong>, not a one-off blip. Click a contract to see which
         sensors are failing. <strong>No maintenance plan</strong> means the sensor is matched to no
         contract yet.
       </p>
@@ -1853,19 +1874,57 @@ var STATUS_COLOR_MAP = {
 };
 
 var _map = L.map('sensorMap', {zoomControl:true}).setView([34.95, 33.15], 9);
-(function() {
+function _fixLeafletTop() {
+  // Keep the zoom controls clear of the sticky page header — but in fullscreen
+  // the header isn't on screen, so no offset is needed.
   var hdr = document.querySelector('header');
-  function _fixLeafletTop() {
-    var h = hdr ? hdr.getBoundingClientRect().height : 0;
-    document.querySelectorAll('.leaflet-top').forEach(function(el) { el.style.top = h + 'px'; });
-  }
-  _fixLeafletTop();
-  window.addEventListener('resize', _fixLeafletTop);
-})();
+  var h = (document.fullscreenElement || document.webkitFullscreenElement)
+          ? 0 : (hdr ? hdr.getBoundingClientRect().height : 0);
+  document.querySelectorAll('.leaflet-top').forEach(function(el) { el.style.top = h + 'px'; });
+}
+_fixLeafletTop();
+window.addEventListener('resize', _fixLeafletTop);
 _map.on('click', function() { closeMapPanel(); });
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+// The info panel and the fullscreen button live inside the map container; a
+// click on either must not fall through to the map (which would close the
+// panel) or start a map drag. Same guard Leaflet applies to its own controls.
+(function() {
+  var panel = document.getElementById('mapInfoPanel');
+  var fsBtn = document.getElementById('mapFsBtn');
+  if (panel) { L.DomEvent.disableClickPropagation(panel); L.DomEvent.disableScrollPropagation(panel); }
+  if (fsBtn) { L.DomEvent.disableClickPropagation(fsBtn); }
+})();
+
+/* -- Fullscreen --------------------------------------------------- */
+function toggleMapFullscreen() {
+  // Fullscreen the wrapper (toolbars + map) so the controls stay usable, not
+  // just the map canvas.
+  var el = document.getElementById('mapFsWrap');
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!fsEl) {
+    (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  }
+}
+function _onFsChange() {
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  var icon = document.querySelector('#mapFsBtn i');
+  if (icon) icon.className = 'ti ' + (fsEl ? 'ti-arrows-minimize' : 'ti-arrows-maximize');
+  // Let the browser finish resizing, then tell Leaflet its container changed.
+  setTimeout(function() { _fixLeafletTop(); _map.invalidateSize(); }, 120);
+}
+document.addEventListener('fullscreenchange', _onFsChange);
+document.addEventListener('webkitfullscreenchange', _onFsChange);
+var _streetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors', maxZoom: 19
-}).addTo(_map);
+});
+var _satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: 'Imagery © Esri', maxZoom: 19
+});
+_streetsLayer.addTo(_map);   // streets is the default base map
+var _satOn = false;
 
 var _clusterOpts = {showCoverageOnHover:false, maxClusterRadius:50, disableClusteringAtZoom:13, chunkedLoading:true};
 var _clustered = true;
@@ -1920,6 +1979,20 @@ function fmtTT(v) {
   return (mins>0?mins+'m ':'')+secs+'s';
 }
 
+/* -- Contract filter + not-live state ----------------------------- */
+var CONTRACT_NONE = '__noplan__';   // sentinel key for sensors with no contract
+var _contractFilter = 'all';
+var _hideNotLive = false;
+
+// "View history →" link that jumps to the sensor's row in the Stability panel.
+// Attribute is single-quoted so the JSON strings inside can use double quotes.
+function histLinkHtml(group, id) {
+  return "<div style='margin-top:8px'><a href='#' onclick='jumpToStability("
+    + JSON.stringify(String(group)) + "," + JSON.stringify(String(id))
+    + ");return false;' style='font-size:11px;color:#1f4e79;text-decoration:none;font-weight:600'>"
+    + "View history &rarr;</a></div>";
+}
+
 /* -- Marker factory ----------------------------------------------- */
 var _markersByGroup = {td:[], bt:[], vms:[]};
 
@@ -1930,6 +2003,8 @@ function makeMarker(s) {
   m._sensorGroup  = GROUP_LAYER[s.group] || s.group;
   m._sensorColor  = s.color;
   m._sensorGroup2 = s.group;
+  m._contract     = s.project || CONTRACT_NONE;
+  m._notLive      = !!s.not_live;
   var d = s.data || {};
   var dataRows = '';
   if (s.group === 'Traffic Detection') {
@@ -1946,7 +2021,11 @@ function makeMarker(s) {
   var rows = popRow('ID', s.id)+popRow('Group', s.group_display||s.group)+
              popRow('Project', s.project || 'Unassigned', s.project?null:'#c0392b')+
              statusCell+dataRows;
-  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
+  // Traffic Detection and VMS have per-sensor history in the Stability panel;
+  // Bluetooth sites do not, so only offer the jump where a row exists.
+  var showHist = (s.group === 'Traffic Detection' || s.group === 'VMS');
+  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>'
+    + (showHist ? histLinkHtml(s.group, s.id) : '');
   m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
   return m;
 }
@@ -1972,7 +2051,8 @@ function makePath(p) {
              popRow('Status', STATUS_LABELS[p.status]||p.status, style.color)+
              popRow('Speed', fmtSpeed(d.speed_kmh))+
              popRow('Travel time', fmtTT(d.travel_time_s));
-  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>';
+  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>'
+    + histLinkHtml('Bluetooth Paths', p.id);
   pl._bodyHtml = bodyHtml;
   pl._pathName = 'BT Path '+p.name;
   // direction arrows along the path
@@ -2064,7 +2144,8 @@ _legend.onAdd = function() {
       '<span style="font-size:14px;color:#555;margin-left:10px;line-height:1">'+(_legendOpen?'&#x25BE;':'&#x25B4;')+'</span>'+
       '</div>'+
       (_legendOpen ? '<div style="padding:8px 12px 10px">'+body+'</div>' : '');
-    d.querySelector('#_legendHdr').onclick = function() {
+    d.querySelector('#_legendHdr').onclick = function(ev) {
+      L.DomEvent.stop(ev);   // never let a legend toggle reach the map / close the panel
       _legendOpen = !_legendOpen;
       render();
     };
@@ -2081,14 +2162,17 @@ function applyVisibility() {
     lg.clearLayers();
     if (!_activeLayers[key]) return;
     _markersByGroup[key].forEach(function(m) {
-      var visible = _activeFilter === 'all' || ISSUE_STATUSES.indexOf(m._sensorStatus) !== -1;
+      var visible = (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(m._sensorStatus) !== -1)
+        && (_contractFilter === 'all' || m._contract === _contractFilter)
+        && !(_hideNotLive && m._notLive);
       if (visible) {
         m.setIcon(makeIcon(m._sensorGroup2, m._sensorColor));
         lg.addLayer(m);
       }
     });
   });
-  var pathsOn = _activeLayers.paths;
+  // Bluetooth paths belong to no contract, so a contract filter hides them all.
+  var pathsOn = _activeLayers.paths && _contractFilter === 'all';
   _paths.forEach(function(p) {
     var on = pathsOn &&
              (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(p._pathStatus) !== -1);
@@ -2128,6 +2212,63 @@ function setFilter(btn, val) {
   document.querySelectorAll('[data-filter]').forEach(function(b){b.classList.remove('active');});
   btn.classList.add('active');
   applyVisibility();
+}
+
+/* -- Contract filter, not-live toggle, base map ------------------- */
+function setContractFilter(val) {
+  _contractFilter = val;
+  applyVisibility();
+}
+
+function toggleNotLive(btn) {
+  _hideNotLive = !_hideNotLive;
+  btn.classList.toggle('active', _hideNotLive);
+  btn.textContent = _hideNotLive ? 'Show not-live' : 'Hide not-live';
+  applyVisibility();
+}
+
+function toggleBasemap(btn) {
+  _satOn = !_satOn;
+  if (_satOn) { _map.removeLayer(_streetsLayer); _satLayer.addTo(_map); }
+  else        { _map.removeLayer(_satLayer); _streetsLayer.addTo(_map); }
+  btn.classList.toggle('active', _satOn);
+  btn.textContent = _satOn ? 'Streets' : 'Satellite';
+}
+
+// Populate the contract dropdown from the sensors actually on the map.
+(function() {
+  var sel = document.getElementById('contractFilter');
+  if (!sel) return;
+  var names = {}, hasNoPlan = false;
+  _sensors.forEach(function(s) { if (s.project) names[s.project] = true; else hasNoPlan = true; });
+  Object.keys(names).sort().forEach(function(n) {
+    var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o);
+  });
+  if (hasNoPlan) {
+    var o = document.createElement('option');
+    o.value = CONTRACT_NONE; o.textContent = 'No maintenance plan'; sel.appendChild(o);
+  }
+})();
+
+/* -- Jump from a map popup to the sensor's Stability row ----------- */
+function jumpToStability(group, id) {
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  }
+  var cid = group + '|' + id;
+  var body = document.getElementById('b-p-sensors');
+  if (body && body.style.display === 'none') togglePanel('p-sensors');
+  // Clear filters/search/sort so the target row can't be hidden.
+  var gf = document.getElementById('groupFilter');     if (gf) gf.value = 'all';
+  var sf = document.getElementById('stabilitySearch'); if (sf) sf.value = '';
+  var so = document.getElementById('sortOrder');       if (so) so.value = 'default';
+  if (typeof _applyStabilityFilters === 'function') _applyStabilityFilters();
+  var chev = document.getElementById('chev-' + cid);
+  var trow = document.getElementById('trend-' + cid);
+  if (!chev || !trow) return;
+  var row = chev.closest('tr');
+  if (trow.style.display === 'none' && typeof _toggleTrend === 'function') _toggleTrend(cid, row);
+  setTimeout(function() { (row || trow).scrollIntoView({behavior:'smooth', block:'center'}); }, 60);
 }
 
 /* -- Cluster toggle ----------------------------------------------- */

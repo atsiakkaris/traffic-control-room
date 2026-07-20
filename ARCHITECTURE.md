@@ -242,19 +242,33 @@ implicit, untested contract with `tests.py`'s message wording.
   and `bt_path_coords` (polylines). Marker color encodes status; commissioning-
   excluded sensors render grey regardless of last status. Historical playback
   scrubs through the last 30 runs, sorted by the raw ISO timestamp (sorting the
-  formatted `dd/mm/yy` label instead put 01/07 before 30/06).
+  formatted `dd/mm/yy` label instead put 01/07 before 30/06). Client-side
+  controls (all in the map's inline `<script>`): a **contract filter** (isolates
+  one contract's markers — each marker carries `_contract`; paths belong to no
+  contract so any contract selection hides them), a **hide-not-live** toggle
+  (`_notLive`), a **Streets/Satellite** base-layer swap, and a **full-screen**
+  button. Full screen targets a wrapper (`#mapFsWrap`) around *both* the toolbars
+  and the map, laid out flex-column, so the controls stay usable at full size —
+  not just the map canvas. Each point pop-up carries a **View history →** link
+  (`jumpToStability()`) that opens the Sensor Stability panel and that sensor's
+  trend row.
 - **Sensors Health Trend** — one line per group, `_build_chart_data()` +
   `_build_health_by_run()`, from the per-run status counts above.
-- **Attention needed, by project** — `build_accountability_rollup_html()` lists
-  only sensors **failing right now** (`history[-1]` not in `GOOD_STATUSES`),
-  grouped by `sensor_projects.project` and sorted by fault age, longest outage
-  first. The lifetime tier rides along as context. Out-of-support projects are
-  separated out, commissioning-excluded sensors filtered entirely, unmatched
-  sensors bucketed under "Unassigned." Keying this off current state rather than
-  the lifetime tier is deliberate: a sensor repaired yesterday must drop off the
-  list, and one that died this morning must appear however good its record.
+- **Sensors by contract** — `build_contract_summary_html()` over
+  `stability.contract_census()`: every contract (plus a *No maintenance plan*
+  bucket) with Total / Working / Faults / Not-live counts, so a fully-healthy
+  contract stays visible — the old "Attention needed" panel only showed
+  contracts that had a live fault, hiding e.g. a contractor whose whole fleet is
+  awaiting power. **Faults** uses `stability.windowed_fail()` — a *persistent*
+  problem, failed ≥80% of the last 20 runs (`ATTENTION_FAIL_RATIO` /
+  `ATTENTION_WINDOW_RUNS`) — not merely `history[-1]` bad, so a one-cycle blip
+  doesn't count. Rows with faults expand to the failing sensors (display name,
+  recent fail count, and current fault age from `current_state()`). Out-of-support
+  contracts show faults neutrally (expected, not actionable); commissioning-
+  excluded sensors count as *Not live*, never faults. The same `contract_census()`
+  feeds the weekly digest (§9), so the two never disagree.
 - **Sensor Stability** — per-sensor table driven by `fetch_sensor_stability()`,
-  one row per sensor with a **Current state** cell (`_current_state()`: Working /
+  one row per sensor with a **Current state** cell (`current_state()`: Working /
   Down Nd / Never worked), a 20-run sparkline, the **lifetime** stability tier
   (`tier_for_counts()`), and the project owner.
 - **Run History** — last 30 runs, one row each, per-group % + overall API
@@ -390,20 +404,22 @@ is a lifetime claim and would overstate a week's data.
 `malfunctioning`, `no_status`, `no_traffic`, `no_measurement`, `failing`) counts
 as bad for tiering purposes, regardless of which group it came from.
 
-### Two metrics, deliberately separate
+### Three metrics, deliberately separate
 
-The dashboard answers two different questions and must never conflate them:
+The dashboard answers three different questions and must never conflate them:
 
 | | Question | Where it lives |
 |---|---|---|
 | **Stability tier** | "Can I trust this sensor?" | `tier_for_counts()` over the sensor's **whole lifetime** |
-| **Current state / fault age** | "Is it down *now*, and for how long?" | `report._current_state()` |
+| **Current state / fault age** | "Is it down *now*, and for how long?" | `current_state()` (in `stability.py`; `report._current_state` is a back-compat alias) |
+| **Persistent fault** | "Is this a standing problem a contractor owes a response on?" | `windowed_fail()` over the **last 20 runs** (failed ≥80%) |
 
 The tier is a lifetime average and is *intentionally* slow to move — a sensor
 repaired yesterday still reads badly. That is correct for a trust rating and
-wrong for an action list, so the **"Attention needed" rollup is keyed off current
-state**, not the tier: only sensors failing right now appear, sorted by outage
-length, with the tier riding along as context.
+wrong for a maintenance list, so the **Sensors-by-contract "Faults" count is keyed
+off the persistent-fault window**, not the tier: a contractor is held to sensors
+that are consistently failing right now, with the lifetime tier riding along as
+context ("new fault, or a repeat offender?").
 
 `tier_for_counts(good, total)` gets two things right that a bare percentage
 cannot:
@@ -421,10 +437,18 @@ cannot:
 Below `TIER_MIN_RUNS` (5) recorded runs the badge shows a neutral "Collecting
 data" rather than a falsely precise tier.
 
-> A rolling 20-run window was tried and reverted: it was **cadence-dependent**
-> (20 runs = ~5 days at 6-hourly but ~1.7 days at 2-hourly), so changing the cron
-> frequency silently changed what every badge meant. A lifetime tier plus an
-> explicit fault age has no window to tune.
+> **Why the 20-run window drives the contract "Faults" count but not the tier.**
+> A rolling window is deliberately kept *out* of the lifetime **stability tier**:
+> it is cadence-dependent (20 runs ≈ 5 days at 6-hourly but ≈ 1.7 days at
+> 2-hourly), so letting it drive the trust badge would mean changing the cron
+> frequency silently changed what every badge meant. The contract **"fault"** is a
+> different question — "is this a standing problem *right now*?" — where a recent
+> window is exactly what you want, and the cadence caveat is acceptable because the
+> number is read for action, not as a lifetime claim. `windowed_fail()` also
+> requires `TIER_MIN_RUNS` recorded runs before it will call a fault, so a
+> just-installed sensor isn't branded a contractor's problem on two data points.
+> Net: lifetime tier = no window; current fault age = exact days; contract fault =
+> last 20 runs.
 
 Covered by `tests/test_stability.py`.
 
@@ -438,7 +462,7 @@ Independent of `report.py` — reads the same DB, builds its own HTML email.
 1. `fetch_sensor_health_by_day()` — per-sensor daily good/total for the last
    14 days (so this week can be compared to the previous week).
 2. `fetch_active_sensors()` — sensors currently `active=1` in `sensor_coords`.
-3. `fetch_excluded_commissioning_sensors()` — sensors currently
+3. `fetch_excluded_commissioning()` — sensors currently
    `not_electrified`/`decommissioned` per `sensor_projects`; subtracted from
    the active set so they don't drag down tier counts or week-over-week %,
    mirroring the dashboard's exclusion logic.
@@ -448,6 +472,11 @@ Independent of `report.py` — reads the same DB, builds its own HTML email.
 5. `fetch_retired_this_week()` — sensors that flipped `active=0` in the last
    7 days (i.e. dropped from the API feed entirely), with names resolved from
    `sensor_coords`/`bt_path_coords` rather than shown as bare IDs.
+6. `fetch_contract_census()` — the **Sensors by contract** section, computed by
+   the *same* `stability.contract_census()` the dashboard panel uses (§6), so the
+   email and the live dashboard can't disagree about a contract's totals or which
+   sensors are failing. Rendered as a per-contract counts table plus an
+   expandable failing-sensor list under each contract.
 
 Sent via Gmail SMTP (`GMAIL_USER`/`GMAIL_APP_PW` secrets) to `NOTIFY_EMAIL`,
 triggered by the `weekly_digest.yml` workflow (itself fired externally by
