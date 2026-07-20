@@ -21,7 +21,7 @@ from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_s
 from labels import sensor_display_name
 from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
                        tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS,
-                       to_cyprus, current_state, load_project_accountability)
+                       to_cyprus, current_state, load_project_accountability, contract_census)
 
 
 # Load UI labels from config — falls back to defaults if file is missing
@@ -726,127 +726,104 @@ def _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group):
             f'style="font-size:11px;color:#6b7280">· {" · ".join(parts)}</span>')
 
 
-def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, sensor_projects, project_acct):
-    """Group sensors that are DOWN RIGHT NOW by the project responsible for them,
-    longest outage first — the list you act on today.
+_CONTRACT_STATUS_CHIP = {
+    "supported":      ("In support",     "#0f6e56", "#e1f5ee"),
+    "out_of_support": ("Out of support", "#7f8c8d", "var(--color-background-secondary)"),
+    "unassigned":     ("No plan",        "#a32d2d", "#fcebeb"),
+}
 
-    Deliberately keyed off current state, not the lifetime tier: a sensor that
-    was repaired yesterday must drop off this list, and one that died this
-    morning must appear on it however good its record used to be. The lifetime
-    tier rides along only as context ("is this a repeat offender?").
+
+def _contract_fault_detail(c, bt_path_names, all_sensor_coords):
+    """The expandable list of a contract's failing sensors, longest outage first."""
+    body = ""
+    for f in sorted(c["faults"], key=lambda x: -x["down_days"]):
+        disp = _html.escape(str(_sensor_display_name(
+            f["group"], f["sensor_id"], bt_path_names, all_sensor_coords)))
+        failed = f["window_total"] - f["window_good"]
+        body += (
+            f'<tr style="border-top:0.5px solid var(--color-border-tertiary)">'
+            f'<td style="padding:4px 8px;font-size:11px;color:var(--color-text-secondary);white-space:nowrap">{GROUP_DISPLAY.get(f["group"], f["group"])}</td>'
+            f'<td style="padding:4px 8px;font-size:11px;font-family:monospace;color:var(--color-text-primary)">{disp}</td>'
+            f'<td style="padding:4px 8px;font-size:11px;text-align:right;color:#e24b4a;white-space:nowrap" '
+            f'title="Failed {failed} of its last {f["window_total"]} runs">failed {failed}/{f["window_total"]}</td>'
+            f'<td style="padding:4px 8px;font-size:11px;text-align:right;color:var(--color-text-secondary);white-space:nowrap">{f["state"]}</td>'
+            f'</tr>'
+        )
+    return (f'<div style="padding:8px 10px;background:var(--color-background-secondary)">'
+            f'<table style="width:100%;border-collapse:collapse"><tbody>{body}</tbody></table></div>')
+
+
+def build_contract_summary_html(census, bt_path_names=None, all_sensor_coords=None):
+    """A per-contract census table: every maintenance contract (and the no-plan
+    bucket) with its sensor totals, so a fully-healthy contract stays visible —
+    not only the ones that currently have a fault. Counts come from
+    stability.contract_census, shared with the weekly digest.
+
+    Rows with faults are clickable to reveal exactly which sensors are failing.
+    'Faults' means a *persistent* problem — a sensor that failed at least 80% of
+    its last 20 runs (stability.windowed_fail), not a one-cycle blip. For a
+    supported contract it is what the contractor must respond to; it is shown
+    neutral for an out-of-support contract, where a failure is expected.
     """
     bt_path_names = bt_path_names or {}
-    sensor_projects = sensor_projects or {}
-    project_acct = project_acct or {}
-
-    # Collect currently-failing sensors, bucketed by project name (None -> "Unassigned")
-    buckets = {}   # project_name -> {"acct": str, "sensors": [ ... ]}
-    for s in sensors:
-        if s["group_name"] in _NON_OWNED_GROUPS:
-            continue  # BT paths are sensor combinations, not owned equipment
-        if _is_excluded_commissioning(sensor_projects, s["group_name"], s["sensor_id"]):
-            continue  # awaiting power or decommissioned — not a fault
-        history = s["history"]
-        if not history:
-            continue
-        if history[-1]["status"] in GOOD_STATUSES:
-            continue  # working right now — nothing to chase
-
-        state_label, _color, state_tip, down_days = current_state(history)
-        statuses = [h["status"] for h in history]
-        good_runs = sum(1 for st in statuses if st in GOOD_STATUSES)
-        tier = tier_for_counts(good_runs, len(statuses))
-
-        proj_info = sensor_projects.get(s["group_name"], {}).get(s["sensor_id"])
-        proj = proj_info["project"] if proj_info and proj_info["project"] else None
-        acct = project_acct.get(proj, "supported") if proj else "unassigned"
-        key = proj or "Unassigned"
-        buckets.setdefault(key, {"acct": acct, "sensors": []})
-        buckets[key]["sensors"].append({
-            "display": _html.escape(str(_sensor_display_name(s["group_name"], s["sensor_id"], bt_path_names, all_sensor_coords))),
-            "group": GROUP_DISPLAY.get(s["group_name"], s["group_name"]),
-            "state": state_label, "state_tip": state_tip,
-            "down_days": down_days or 0, "tier": tier,
-        })
-
-    if not buckets:
+    all_sensor_coords = all_sensor_coords or {}
+    if not census:
         return ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
-                'Every sensor is reporting right now — nothing needs attention. &#127881;</p>')
-
-    actionable = {k: v for k, v in buckets.items() if v["acct"] != "out_of_support"}
-    out_of_support = {k: v for k, v in buckets.items() if v["acct"] == "out_of_support"}
-
-    def _project_block(name, bucket, dim=False):
-        name = _html.escape(str(name))  # project name originates from external data
-        # Longest outage first — the strongest case to put to a contractor.
-        rows = sorted(bucket["sensors"], key=lambda x: -x["down_days"])
-        n = len(rows)
-        base_color = "var(--color-text-secondary)" if dim else "var(--color-text-primary)"
-        if name == "Unassigned":
-            tag = '<span style="font-size:10px;color:#c0392b;margin-left:8px">no owner known</span>'
-        elif dim:
-            tag = '<span style="font-size:10px;color:#7f8c8d;margin-left:8px">out of support — expected, not actionable</span>'
-        else:
-            tag = ''
-        body = ""
-        for r in rows:
-            t = r["tier"]
-            # Outage duration drives the case; the lifetime tier is context —
-            # "has this one always been trouble, or is this a new fault?"
-            down = (f'<span title="{_html.escape(r["state_tip"])}" style="font-size:11px;font-weight:600;'
-                    f'color:{"#7f8c8d" if dim else "#e24b4a"};cursor:help;white-space:nowrap">{r["state"]}</span>')
-            badge = (f'<span title="Lifetime record: {t.tooltip}" style="font-size:10px;font-weight:500;padding:1px 7px;'
-                     f'border-radius:10px;background:{t.bg};color:{t.fg};cursor:help">{t.label}</span>')
-            body += (f'<tr style="border-top:0.5px solid var(--color-border-tertiary)">'
-                     f'<td style="padding:5px 8px;font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{r["group"]}</td>'
-                     f'<td style="padding:5px 8px;font-size:12px;font-family:monospace;color:{base_color}">{r["display"]}</td>'
-                     f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{down}</td>'
-                     f'<td style="padding:5px 8px;text-align:right;white-space:nowrap">{badge}</td>'
-                     f'</tr>')
-        th = ("padding:4px 8px;font-size:10px;font-weight:500;letter-spacing:0.04em;"
-              "text-transform:uppercase;color:var(--color-text-secondary)")
-        head = (f'<thead><tr>'
-                f'<th style="{th};text-align:left" title="Which sensor system this device belongs to">Group</th>'
-                f'<th style="{th};text-align:left" title="The sensor that is not reporting">Sensor</th>'
-                f'<th style="{th};text-align:right" title="How long it has been failing continuously.">Down for</th>'
-                f'<th style="{th};text-align:right" title="Its reliability across every run ever recorded — is this a new fault or a repeat offender?">Lifetime record</th>'
-                f'</tr></thead>')
-        return (f'<details style="margin-bottom:6px">'
-                f'<summary style="cursor:pointer;padding:7px 10px;border-radius:6px;'
-                f'background:var(--color-background-secondary);font-size:13px;font-weight:500;color:{base_color};'
-                f'display:flex;align-items:center;justify-content:space-between;list-style:none">'
-                f'<span>{name}{tag}</span>'
-                f'<span style="font-size:12px;color:{"#7f8c8d" if dim else "#e24b4a"};font-weight:600;white-space:nowrap">{n} down</span>'
-                f'</summary>'
-                f'<table style="width:100%;border-collapse:collapse;margin:2px 0 8px">{head}<tbody>{body}</tbody></table>'
-                f'</details>')
-
-    def _project_sort_key(name, group):
-        """Worst first: the project with the longest-running outage, then the
-        one with the most sensors down, then alphabetical for stability."""
-        rows = group[name]["sensors"]
-        longest = max((r["down_days"] for r in rows), default=0)
-        return (-longest, -len(rows), name)
-
-    html = ""
-    if actionable:
-        for name in sorted(actionable, key=lambda k: _project_sort_key(k, actionable)):
-            html += _project_block(name, actionable[name])
-    else:
-        html += ('<p style="color:var(--color-text-secondary);font-size:13px;padding:4px 0">'
-                 'No actionable projects have failing sensors. &#9989;</p>')
-
-    if out_of_support:
-        oos_total = sum(len(v["sensors"]) for v in out_of_support.values())
-        html += (f'<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid var(--color-border-tertiary)">'
-                 f'<div style="font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;'
-                 f'color:var(--color-text-secondary);margin-bottom:8px">'
-                 f'Out of support &middot; {oos_total} down &middot; failure expected, not actionable</div>')
-        for name in sorted(out_of_support, key=lambda k: _project_sort_key(k, out_of_support)):
-            html += _project_block(name, out_of_support[name], dim=True)
-        html += '</div>'
-
-    return html
+                'No contract data yet.</p>')
+    rows = ""
+    for idx, c in enumerate(census):
+        label, fg, bg = _CONTRACT_STATUS_CHIP.get(
+            c["acct"], ("—", "var(--color-text-secondary)", "transparent"))
+        name = _html.escape(str(c["name"]))
+        groups = ", ".join(f'{GROUP_DISPLAY.get(g, g)} {n}'
+                           for g, n in sorted(c["groups"].items()))
+        fault_color = "#7f8c8d" if c["acct"] == "out_of_support" else "#e24b4a"
+        has_faults = bool(c["faults"])
+        cid = f"contract-{idx}"
+        chevron = (f'<span id="chev-{cid}" style="font-size:9px;color:var(--color-text-secondary);'
+                   f'display:inline-block;transition:transform .2s;margin-right:6px">&#9654;</span>'
+                   if has_faults else '<span style="display:inline-block;width:15px"></span>')
+        fault_cell = (f'<span style="color:{fault_color};font-weight:600">{c["down"]}</span>'
+                      if c["down"] else '<span style="color:var(--color-text-secondary)">0</span>')
+        notlive_cell = (f'<span style="color:#7f8c8d" title="Awaiting power / decommissioned — not expected to work yet">{c["not_live"]}</span>'
+                        if c["not_live"] else '<span style="color:var(--color-text-secondary)">0</span>')
+        click = (f' onclick="_toggleContract(\'{cid}\')" style="cursor:pointer"' if has_faults
+                 else '')
+        rows += (
+            f'<tr{click}>'
+            f'<td style="padding:6px 8px;border-top:0.5px solid var(--color-border-tertiary)">'
+            f'<div style="font-size:13px;color:var(--color-text-primary)">{chevron}{name}</div>'
+            f'<div style="font-size:10px;color:var(--color-text-secondary);padding-left:15px">{groups}</div></td>'
+            f'<td style="padding:6px 8px;text-align:center;border-top:0.5px solid var(--color-border-tertiary)"><span style="font-size:10px;font-weight:500;'
+            f'padding:1px 7px;border-radius:10px;background:{bg};color:{fg};white-space:nowrap">{label}</span></td>'
+            f'<td style="padding:6px 8px;text-align:right;font-size:13px;color:var(--color-text-primary);border-top:0.5px solid var(--color-border-tertiary)">{c["total"]}</td>'
+            f'<td style="padding:6px 8px;text-align:right;font-size:13px;color:#1d9e75;border-top:0.5px solid var(--color-border-tertiary)">{c["working"]}</td>'
+            f'<td style="padding:6px 8px;text-align:right;font-size:13px;border-top:0.5px solid var(--color-border-tertiary)">{fault_cell}</td>'
+            f'<td style="padding:6px 8px;text-align:right;font-size:13px;border-top:0.5px solid var(--color-border-tertiary)">{notlive_cell}</td>'
+            f'</tr>'
+        )
+        if has_faults:
+            rows += (f'<tr id="det-{cid}" style="display:none"><td colspan="6" style="padding:0">'
+                     f'{_contract_fault_detail(c, bt_path_names, all_sensor_coords)}</td></tr>')
+    th = ("padding:4px 8px;font-size:10px;font-weight:500;letter-spacing:0.04em;"
+          "text-transform:uppercase;color:var(--color-text-secondary)")
+    return (
+        f'<table style="width:100%;border-collapse:collapse">'
+        f'<thead><tr>'
+        f'<th style="{th};text-align:left">Contract</th>'
+        f'<th style="{th};text-align:center">Status</th>'
+        f'<th style="{th};text-align:right" title="Owned sensors">Total</th>'
+        f'<th style="{th};text-align:right" title="Expected to work and not a persistent fault">Working</th>'
+        f'<th style="{th};text-align:right" title="Failed at least 80% of the last 20 runs">Faults</th>'
+        f'<th style="{th};text-align:right" title="Awaiting power / decommissioned">Not live</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table>'
+        f'<script>'
+        f'function _toggleContract(id){{'
+        f'var d=document.getElementById("det-"+id),c=document.getElementById("chev-"+id);'
+        f'if(!d)return;var open=d.style.display==="none";'
+        f'd.style.display=open?"":"none";if(c)c.style.transform=open?"rotate(90deg)":"";}}'
+        f'</script>'
+    )
 
 
 def _pct_from_counts(counts):
@@ -1413,7 +1390,9 @@ def generate_report() -> str:
     _bt_path_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
     sensor_stability_html = build_sensor_stability_html(active_sensors, _bt_path_names, all_coords, trend_data_json, day_labels_json, all_bt_paths,
                                                           sensor_projects=sensor_projects, project_acct=project_acct)
-    accountability_html = build_accountability_rollup_html(active_sensors, _bt_path_names, all_coords, sensor_projects, project_acct)
+    contract_summary_html = build_contract_summary_html(
+        contract_census(active_sensors, sensor_projects, project_acct),
+        _bt_path_names, all_coords)
     live_data = fetch_sensor_live_data_for_run(latest_run["run_id"])
 
     map_sensors       = _build_map_sensor_list(all_coords, live_data, sensor_projects)
@@ -1730,18 +1709,19 @@ def generate_report() -> str:
 </div><!-- end left column -->
 <div class="col-right">
 
-  <div class="panel" id="p-accountability">
-    <div class="panel-header" onclick="togglePanel('p-accountability')">
-      <span class="panel-title">Attention needed, by project</span>
-      <div class="panel-chevron open" id="c-p-accountability"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
+  <div class="panel" id="p-contracts">
+    <div class="panel-header" onclick="togglePanel('p-contracts')">
+      <span class="panel-title">Sensors by contract</span>
+      <div class="panel-chevron open" id="c-p-contracts"><i class="ti ti-chevron-down" aria-hidden="true"></i></div>
     </div>
-    <div class="panel-body" id="b-p-accountability">
+    <div class="panel-body" id="b-p-contracts">
       <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 10px">
-        Sensors that are <strong>not reporting right now</strong>, grouped by the project responsible
-        and ordered by how long they have been down. The badge shows each sensor's lifetime record,
-        for context.
+        Every maintenance contract and the sensors it covers. A <strong>fault</strong> is a persistent
+        problem — a sensor that failed at least 80% of its last 20 runs, not a one-off blip. Click a contract to see which
+        sensors are failing. <strong>No maintenance plan</strong> means the sensor is matched to no
+        contract yet.
       </p>
-      {accountability_html}
+      {contract_summary_html}
     </div>
   </div>
 

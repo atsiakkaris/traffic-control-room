@@ -95,6 +95,104 @@ def health_pct(good, total):
 TIER_MIN_RUNS = 5
 
 
+# ── Per-contract census ───────────────────────────────────────────────────────
+# Label for sensors matched to no reference row — i.e. no maintenance contract
+# covers them. A real bucket, shown alongside the contracts.
+NO_PLAN_LABEL = "No maintenance plan"
+
+# Bluetooth "paths" are computed from pairs of BT sensors, not owned equipment,
+# so they belong to no contract and are left out of the census.
+_CENSUS_NON_OWNED = frozenset({"Bluetooth Paths"})
+
+# A contract "fault" is a *persistent* problem, not a one-cycle blip: a sensor
+# that failed at least this share of its last ATTENTION_WINDOW_RUNS runs. This is
+# what a contractor genuinely owes a response on — a sensor down for a single
+# 6-hour check, or one that fails only occasionally, is deliberately not counted.
+ATTENTION_WINDOW_RUNS = 20
+ATTENTION_FAIL_RATIO = 0.80
+
+
+def windowed_fail(history, window=ATTENTION_WINDOW_RUNS, min_runs=TIER_MIN_RUNS):
+    """(is_fault, good, total) over the sensor's last `window` runs.
+
+    is_fault is True when it failed at least ATTENTION_FAIL_RATIO of those runs.
+    Needs at least `min_runs` recorded to judge — below that the sample is too
+    small to call a persistent fault, so it returns False.
+    """
+    recent = history[-window:]
+    total = len(recent)
+    good = sum(1 for h in recent if h["status"] in GOOD_STATUSES)
+    is_fault = total >= min_runs and (total - good) / total >= ATTENTION_FAIL_RATIO
+    return is_fault, good, total
+
+
+def contract_census(sensors, sensor_projects, project_acct, non_owned_groups=_CENSUS_NON_OWNED):
+    """Per-contract sensor tally for the maintenance view — pure counts, shared by
+    the dashboard panel and the weekly digest so the two can never disagree.
+
+    Returns a list of per-contract dicts, ordered supported-first, then the
+    no-plan bucket, then out-of-support last, each:
+        {name, acct, total, working, down, not_live, groups, faults}
+
+      working  — expected to work and NOT a persistent fault
+      down     — a persistent fault (failed >=80% of its last 20 runs); for a
+                 supported contract this is the number the contractor must
+                 respond to. See windowed_fail().
+      not_live — awaiting power / decommissioned, not expected to work yet
+      groups   — {group_name: count} making up the total
+      faults   — per-failing-sensor detail so a caller can list which ones:
+                 [{group, sensor_id, window_good, window_total, state, down_days}]
+
+    `sensors` should already be filtered to active equipment (the caller's
+    active-coords set); retired sensors are not owned equipment to monitor.
+    """
+    stats = {}
+
+    def _bucket(name, acct):
+        return stats.setdefault(name, {
+            "name": name, "acct": acct,
+            "total": 0, "working": 0, "down": 0, "not_live": 0,
+            "groups": {}, "faults": [],
+        })
+
+    # Seed every configured contract so one with no matched sensors still shows
+    # (as all-zeros) rather than silently vanishing — a signal that matching or
+    # the reference sheet needs a look.
+    for name, acct in (project_acct or {}).items():
+        _bucket(name, acct)
+
+    for s in sensors:
+        group, sid = s["group_name"], s["sensor_id"]
+        if group in non_owned_groups:
+            continue
+        info = (sensor_projects or {}).get(group, {}).get(sid)
+        proj = info["project"] if info and info.get("project") else None
+        comm = info.get("commissioning", "active") if info else "active"
+        name = proj or NO_PLAN_LABEL
+        acct = project_acct.get(proj, "supported") if proj else "unassigned"
+        b = _bucket(name, acct)
+        b["total"] += 1
+        b["groups"][group] = b["groups"].get(group, 0) + 1
+        if comm in EXCLUDED_COMMISSIONING:
+            b["not_live"] += 1
+            continue
+        is_fault, wgood, wtotal = windowed_fail(s["history"])
+        if is_fault:
+            b["down"] += 1
+            _state, _c, _tip, down_days = current_state(s["history"])
+            b["faults"].append({
+                "group": group, "sensor_id": sid,
+                "window_good": wgood, "window_total": wtotal,
+                "state": _state, "down_days": down_days or 0,
+            })
+        else:
+            b["working"] += 1
+
+    _order = {"supported": 0, "unassigned": 1, "out_of_support": 2}
+    return sorted(stats.values(),
+                  key=lambda b: (_order.get(b["acct"], 1), -b["total"], b["name"]))
+
+
 # ── Simple green / amber / red health colouring ───────────────────────────────
 # Single source of truth for the three-way health colour used on the dashboard
 # group cards (report.py) and the QA report badges (qa.py). Keeping the
