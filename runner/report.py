@@ -19,29 +19,10 @@ def _json_safe(obj):
 
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects
 from labels import sensor_display_name
-from stability import CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS
+from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
+                       tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS,
+                       to_cyprus, current_state, load_project_accountability)
 
-_PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
-
-
-def _load_project_accountability():
-    """Return {project_name: accountability} from config/projects.csv.
-
-    Sensor-to-project assignment is computed elsewhere (qa.py, matched
-    against the reference spreadsheet) and persisted to the sensor_projects
-    DB table — this report only needs the project's accountability, which is
-    a small tracked file, not the (gitignored) reference spreadsheet itself.
-    """
-    import csv as _csv
-    status = {}
-    if _PROJECTS_CSV.exists():
-        with open(_PROJECTS_CSV, newline='', encoding='utf-8-sig') as f:
-            for r in _csv.DictReader(f):
-                proj = (r.get('project') or '').strip()
-                acct = (r.get('accountability') or '').strip().lower()
-                if proj:
-                    status[proj] = acct or 'supported'
-    return status
 
 # Load UI labels from config — falls back to defaults if file is missing
 _LABELS_PATH    = Path(__file__).parent.parent / "config" / "ui_labels.yaml"
@@ -75,13 +56,8 @@ for _g in _ENDPOINTS_CONFIG.get("groups", []):
             }
 
 
-def _to_cyprus(utc_iso: str) -> str:
-    """Convert a UTC ISO timestamp string to Cyprus time, formatted for display."""
-    dt = datetime.fromisoformat(utc_iso.replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone(CYPRUS_TZ)
-    return local.strftime("%d/%m/%y %H:%M")
+_to_cyprus = to_cyprus            # local alias — kept so existing call sites don't churn
+_current_state = current_state    # ditto — also referenced directly by tests
 
 REPORT_PATH = Path("reports/latest.html")
 
@@ -146,19 +122,6 @@ STATUS_COLOR = {
     "failing": "#e24b4a",
     "missing": "#e58e0a",
     "stale": "#e58e0a",
-}
-
-STATUS_LABEL = {
-    "working": "Working",
-    "ok": "OK",
-    "no_traffic": "No traffic",
-    "no_measurement": "No measurement",
-    "no_status": "No status reported",
-    "not_working": "VMS not working",
-    "malfunctioning": "Speed = -1 (sensor fault)",
-    "failing": "No speed or travel time",
-    "missing": "Not present in feed",
-    "stale": "Feed data is stale",
 }
 
 STATUS_TOOLTIP = {
@@ -253,53 +216,6 @@ def _map_layer_buttons(group_meta, bt_paths_label):
 def _health_color(pct):
     # Thin wrapper kept for the many call sites below; logic lives in stability.py.
     return health_color(pct)
-
-
-def _fault_streak_start(history):
-    """The earliest run in the sensor's *current* unbroken run of bad statuses,
-    or None if its latest run was good. That run is when the outage was first
-    detected — the number a contractor can be held to."""
-    if not history or history[-1]["status"] in GOOD_STATUSES:
-        return None
-    start = history[-1]
-    for h in reversed(history):
-        if h["status"] in GOOD_STATUSES:
-            break
-        start = h
-    return start
-
-
-def _current_state(history):
-    """(label, colour, tooltip, down_days) describing what the sensor is doing NOW.
-
-    Deliberately separate from the lifetime stability tier: a sensor can be
-    'Critical' on its record yet 'Working' today, and vice versa. The control
-    room acts on this column; the tier says whether the sensor can be trusted.
-    """
-    if not history:
-        return ("No data", "#9ca3af", "No runs recorded", None)
-
-    last = history[-1]
-    if last["status"] in GOOD_STATUSES:
-        return ("Working", "#1d9e75",
-                f"Reporting normally as of {_to_cyprus(last['run_at'])}", 0)
-
-    start = _fault_streak_start(history)
-    started_at = datetime.fromisoformat(start["run_at"].replace("Z", "+00:00"))
-    down_days = (datetime.now(timezone.utc) - started_at).days
-    reason = STATUS_LABEL.get(last["status"], last["status"])
-
-    if not any(h["status"] in GOOD_STATUSES for h in history):
-        # Never once produced a good reading since we started watching it.
-        return (f"Never worked ({down_days}d)" if down_days else "Never worked",
-                "#a32d2d",
-                f"No good reading since first seen {_to_cyprus(history[0]['run_at'])} — currently {reason}",
-                down_days)
-
-    label = "Down <1d" if down_days < 1 else f"Down {down_days}d"
-    return (label, "#e24b4a",
-            f"Failing since {_to_cyprus(start['run_at'])} — currently {reason}",
-            down_days)
 
 
 def _humanize_failure(check_name, full_failure_reason):
@@ -448,7 +364,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
 
         # Current operational state: is it working right now, and if not, for
         # how long has it been down? This is what the control room acts on.
-        state_label, state_color, state_tip, _down_days = _current_state(history)
+        state_label, state_color, state_tip, _down_days = current_state(history)
         state_cell = f'<span title="{_html.escape(state_tip)}" style="font-size:11px;color:{state_color};cursor:help;white-space:nowrap">{state_label}</span>'
 
         # Awaiting power / decommissioned: not expected to work. Override the
@@ -836,7 +752,7 @@ def build_accountability_rollup_html(sensors, bt_path_names, all_sensor_coords, 
         if history[-1]["status"] in GOOD_STATUSES:
             continue  # working right now — nothing to chase
 
-        state_label, _color, state_tip, down_days = _current_state(history)
+        state_label, _color, state_tip, down_days = current_state(history)
         statuses = [h["status"] for h in history]
         good_runs = sum(1 for st in statuses if st in GOOD_STATUSES)
         tier = tier_for_counts(good_runs, len(statuses))
@@ -1116,7 +1032,7 @@ def generate_report() -> str:
     # stability panel, map pop-ups, the "attention needed" rollup, and (below)
     # the health-percentage exclusion.
     sensor_projects = fetch_sensor_projects()
-    project_acct    = _load_project_accountability()
+    project_acct    = load_project_accountability()
 
     # Sensors awaiting power / decommissioned aren't expected to be working, so
     # they're dropped by ID from the health-percentage counts — otherwise e.g.

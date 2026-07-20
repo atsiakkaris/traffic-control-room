@@ -9,10 +9,15 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from db import get_connection, fetch_sensor_projects
+from db import get_connection, fetch_sensor_projects, fetch_sensor_stability
 from labels import sensor_display_name, with_id
 from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING,
-                       STABILITY_TIERS, tier_for, health_pct)
+                       STABILITY_TIERS, tier_for, tier_for_counts, health_pct,
+                       current_state, load_project_accountability)
+
+# Groups that are not individually-owned equipment and so have no contract.
+# Bluetooth "paths" are computed from pairs of BT sensors, not physical devices.
+_NON_OWNED_GROUPS = {"Bluetooth Paths"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,6 +156,50 @@ def fetch_excluded_commissioning():
     }
 
 
+def fetch_contract_rollup(sensor_names):
+    """Group sensors that are DOWN RIGHT NOW by the contract/project responsible
+    for them, longest outage first — mirrors the dashboard's "Attention needed,
+    by project" panel (report.build_accountability_rollup_html) so the email and
+    the live dashboard never disagree about who is failing or who owns it.
+
+    Returns {"actionable": {project: [...]}, "out_of_support": {project: [...]}}.
+    """
+    sensor_projects = fetch_sensor_projects()
+    project_acct = load_project_accountability()
+
+    buckets = {}  # project_name -> {"acct": str, "sensors": [...]}
+    for s in fetch_sensor_stability():
+        group, sid = s["group_name"], s["sensor_id"]
+        if group in _NON_OWNED_GROUPS:
+            continue  # BT paths are sensor combinations, not owned equipment
+        info = sensor_projects.get(group, {}).get(sid)
+        if info and info.get("commissioning") in EXCLUDED_COMMISSIONING:
+            continue  # awaiting power or decommissioned — not a fault
+        history = s["history"]
+        if not history or history[-1]["status"] in GOOD_STATUSES:
+            continue  # working right now — nothing to chase
+
+        state_label, _color, state_tip, down_days = current_state(history)
+        statuses = [h["status"] for h in history]
+        good_runs = sum(1 for st in statuses if st in GOOD_STATUSES)
+        tier = tier_for_counts(good_runs, len(statuses))
+
+        proj = info["project"] if info and info.get("project") else None
+        acct = project_acct.get(proj, "supported") if proj else "unassigned"
+        key = proj or "Unassigned"
+        buckets.setdefault(key, {"acct": acct, "sensors": []})
+        buckets[key]["sensors"].append({
+            "name": sensor_names.get((group, sid), str(sid)),
+            "group": group,
+            "state": state_label, "state_tip": state_tip,
+            "down_days": down_days or 0, "tier": tier,
+        })
+
+    actionable = {k: v for k, v in buckets.items() if v["acct"] != "out_of_support"}
+    out_of_support = {k: v for k, v in buckets.items() if v["acct"] == "out_of_support"}
+    return {"actionable": actionable, "out_of_support": out_of_support}
+
+
 def _counts(stats):
     counts = {"total": len(stats)}
     counts.update({tier.key: 0 for tier in STABILITY_TIERS})
@@ -188,6 +237,7 @@ def build_digest():
     # dashboard applies, so the two never disagree about who is failing.
     active = (active_sensors | active_bt) - fetch_excluded_commissioning()
     retired = fetch_retired_this_week()
+    contracts = fetch_contract_rollup(sensor_names)
 
     conn = get_connection()
     run_count = conn.execute(
@@ -266,6 +316,7 @@ def build_digest():
         "degraded":    degraded,
         "recovered":   recovered,
         "retired":     retired,
+        "contracts":   contracts,
     }
 
 
@@ -333,6 +384,75 @@ def _always_off_summary(sensors):
             f"Possible causes include equipment faults, loss of network connectivity, or sensors "
             f"that have been physically removed but not yet formally retired. "
             f"These should be investigated or decommissioned.")
+
+
+def _contract_block(name, bucket, dim=False):
+    """One collapsible table of currently-down sensors for a single contract."""
+    name_esc = html.escape(str(name))
+    rows = sorted(bucket["sensors"], key=lambda x: -x["down_days"])
+    n = len(rows)
+    base_color = "#6b7280" if dim else "#111827"
+    if name == "Unassigned":
+        tag = ' <span style="font-size:10px;color:#c0392b">no owner known</span>'
+    elif dim:
+        tag = ' <span style="font-size:10px;color:#9ca3af">out of support &mdash; expected, not actionable</span>'
+    else:
+        tag = ""
+    body_rows = ""
+    for r in rows:
+        down_label = "Down &lt;1d" if r["down_days"] < 1 else f'Down {r["down_days"]}d'
+        tier_badge = (f'<span style="background:{r["tier"].bg};color:{r["tier"].fg};padding:2px 8px;'
+                      f'border-radius:10px;font-size:11px;white-space:nowrap">{r["tier"].label}</span>') \
+                     if r["tier"] is not None else _badge(None)
+        body_rows += (
+            f'<tr style="border-top:1px solid #f3f4f6">'
+            f'<td style="padding:5px 12px;font-size:12px;color:#6b7280;white-space:nowrap">{r["group"]}</td>'
+            f'<td style="padding:5px 12px;font-size:13px;color:{base_color}">{html.escape(str(r["name"]))}</td>'
+            f'<td style="padding:5px 12px;text-align:right;white-space:nowrap;font-size:12px;color:#e24b4a;font-weight:600">{down_label}</td>'
+            f'<td style="padding:5px 12px;text-align:right;white-space:nowrap">{tier_badge}</td>'
+            f'</tr>'
+        )
+    return f"""
+    <details style="margin-bottom:8px" {"open" if not dim else ""}>
+      <summary style="cursor:pointer;list-style:none;padding:8px 12px;border-radius:6px;background:#f9fafb;
+                       font-size:13px;font-weight:600;color:{base_color};display:flex;align-items:center;
+                       justify-content:space-between">
+        <span>{name_esc}{tag}</span>
+        <span style="font-size:12px;color:{"#9ca3af" if dim else "#e24b4a"};font-weight:700;white-space:nowrap">{n} down</span>
+      </summary>
+      <table style="border-collapse:collapse;width:100%;margin:4px 0 10px">
+        <thead><tr style="border-bottom:1px solid #e5e7eb">
+          <th style="padding:5px 12px;text-align:left;font-weight:500;color:#9ca3af;font-size:11px">Group</th>
+          <th style="padding:5px 12px;text-align:left;font-weight:500;color:#9ca3af;font-size:11px">Sensor</th>
+          <th style="padding:5px 12px;text-align:right;font-weight:500;color:#9ca3af;font-size:11px">Down since</th>
+          <th style="padding:5px 12px;text-align:right;font-weight:500;color:#9ca3af;font-size:11px">Lifetime record</th>
+        </tr></thead>
+        <tbody>{body_rows}</tbody>
+      </table>
+    </details>"""
+
+
+def _contract_rollup_html(contracts):
+    actionable, out_of_support = contracts["actionable"], contracts["out_of_support"]
+    if not actionable and not out_of_support:
+        return '<p style="color:#6b7280;font-size:13px;margin:4px 0">Every sensor is reporting right now &mdash; nothing needs attention. &#127881;</p>'
+
+    out = ""
+    if actionable:
+        for name in sorted(actionable, key=lambda k: (-len(actionable[k]["sensors"]), k)):
+            out += _contract_block(name, actionable[name])
+    else:
+        out += '<p style="color:#6b7280;font-size:13px;margin:4px 0">No actionable contract has a sensor down right now. &#9989;</p>'
+
+    if out_of_support:
+        oos_total = sum(len(v["sensors"]) for v in out_of_support.values())
+        out += (f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid #e5e7eb">'
+                f'<div style="font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;'
+                f'color:#9ca3af;margin-bottom:6px">Out of support &middot; {oos_total} down &middot; failure expected, not actionable</div>')
+        for name in sorted(out_of_support, key=lambda k: (-len(out_of_support[k]["sensors"]), k)):
+            out += _contract_block(name, out_of_support[name], dim=True)
+        out += "</div>"
+    return out
 
 
 def build_html(d):
@@ -494,6 +614,10 @@ def build_html(d):
       </tr>
     </table>
 
+    {section("📋 By contract &mdash; needs maintenance now",
+             "#111827",
+             "Sensors currently down, grouped by the contract responsible for them, longest outage first. Out-of-support contracts are listed separately since a failure there is expected and not actionable.",
+             _contract_rollup_html(d["contracts"]))}
     {section("🔴 No good runs this week",
              "#e24b4a",
              _always_off_summary(d['always_off']),

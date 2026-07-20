@@ -5,10 +5,15 @@ Single source of truth for the 6-tier health badge system used by both the
 dashboard report (report.py) and the weekly email digest (digest.py).
 If a threshold or colour changes, change it here only.
 """
+import csv as _csv
 from collections import namedtuple
+from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
+
+PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
 
 # Sensor statuses that count as "good" when computing health percentages
 GOOD_STATUSES = {"working", "ok"}
@@ -113,3 +118,95 @@ def health_color(pct):
     if pct >= HEALTH_WARNING_PCT:
         return HEALTH_COLOR_WARN
     return HEALTH_COLOR_BAD
+
+
+def to_cyprus(utc_iso: str) -> str:
+    """Convert a UTC ISO timestamp string to Cyprus time, formatted for display."""
+    dt = datetime.fromisoformat(utc_iso.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(CYPRUS_TZ).strftime("%d/%m/%y %H:%M")
+
+
+# Plain-English reason for each raw sensor status. Shared so the dashboard and
+# the digest never describe the same fault differently.
+STATUS_LABEL = {
+    "working": "Working",
+    "ok": "OK",
+    "no_traffic": "No traffic",
+    "no_measurement": "No measurement",
+    "no_status": "No status reported",
+    "not_working": "VMS not working",
+    "malfunctioning": "Speed = -1 (sensor fault)",
+    "failing": "No speed or travel time",
+    "missing": "Not present in feed",
+    "stale": "Feed data is stale",
+}
+
+
+def fault_streak_start(history):
+    """The earliest run in the sensor's *current* unbroken run of bad statuses,
+    or None if its latest run was good. That run is when the outage was first
+    detected — the number a contractor can be held to."""
+    if not history or history[-1]["status"] in GOOD_STATUSES:
+        return None
+    start = history[-1]
+    for h in reversed(history):
+        if h["status"] in GOOD_STATUSES:
+            break
+        start = h
+    return start
+
+
+def current_state(history):
+    """(label, colour, tooltip, down_days) describing what the sensor is doing NOW.
+
+    Deliberately separate from the lifetime stability tier: a sensor can be
+    'Critical' on its record yet 'Working' today, and vice versa. This is what
+    the control room acts on; the tier says whether the sensor can be trusted.
+    Shared by report.py (dashboard) and digest.py (weekly email) so the two
+    surfaces can never disagree about who is down right now.
+    """
+    if not history:
+        return ("No data", "#9ca3af", "No runs recorded", None)
+
+    last = history[-1]
+    if last["status"] in GOOD_STATUSES:
+        return ("Working", "#1d9e75",
+                f"Reporting normally as of {to_cyprus(last['run_at'])}", 0)
+
+    start = fault_streak_start(history)
+    started_at = datetime.fromisoformat(start["run_at"].replace("Z", "+00:00"))
+    down_days = (datetime.now(timezone.utc) - started_at).days
+    reason = STATUS_LABEL.get(last["status"], last["status"])
+
+    if not any(h["status"] in GOOD_STATUSES for h in history):
+        # Never once produced a good reading since we started watching it.
+        return (f"Never worked ({down_days}d)" if down_days else "Never worked",
+                "#a32d2d",
+                f"No good reading since first seen {to_cyprus(history[0]['run_at'])} — currently {reason}",
+                down_days)
+
+    label = "Down <1d" if down_days < 1 else f"Down {down_days}d"
+    return (label, "#e24b4a",
+            f"Failing since {to_cyprus(start['run_at'])} — currently {reason}",
+            down_days)
+
+
+def load_project_accountability():
+    """Return {project_name: accountability} from config/projects.csv.
+
+    Sensor-to-project assignment is computed elsewhere (qa.py, matched against
+    the reference spreadsheet) and persisted to the sensor_projects DB table —
+    callers only need the project's accountability, which is a small tracked
+    file, not the (gitignored) reference spreadsheet itself.
+    """
+    status = {}
+    if PROJECTS_CSV.exists():
+        with open(PROJECTS_CSV, newline='', encoding='utf-8-sig') as f:
+            for r in _csv.DictReader(f):
+                proj = (r.get('project') or '').strip()
+                acct = (r.get('accountability') or '').strip().lower()
+                if proj:
+                    status[proj] = acct or 'supported'
+    return status
