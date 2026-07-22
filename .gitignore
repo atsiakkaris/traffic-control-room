@@ -4,13 +4,11 @@ __pycache__/
 .idea/
 .pytest_cache/
 digest_recipients_list.txt
-ONBOARDING.docx
-DATA_QUALITY.docx
 ~$*.docx
 ITS_Infrastructure_Health_Monitor.pptx
+ITS_Infrastructure_Health_Monitor_Public_Presentation
 reports/digest_preview.html
 reports/qa_*.html
-scheduled command.txt
 run.bat
 digest.bat
 pin.html
