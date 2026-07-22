@@ -306,7 +306,8 @@ var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
 
-var map = L.map('map', {{zoomControl:true}}).setView([{center_lat}, {center_lon}], 9);
+var map = L.map('map', {{zoomControl:false}}).setView([{center_lat}, {center_lon}], 9);
+L.control.zoom({{position: 'topright'}}).addTo(map);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   attribution: '© OpenStreetMap contributors', maxZoom: 19
 }}).addTo(map);

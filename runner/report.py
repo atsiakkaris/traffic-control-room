@@ -1444,12 +1444,8 @@ def generate_report() -> str:
             '<span id="playTimestamp" style="font-size:11px;color:var(--muted);min-width:150px;text-align:right;white-space:nowrap"></span>'
             '</div>'
             '<div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">'
-            '<button id="mapFsBtn" onclick="toggleMapFullscreen()" title="Toggle full screen" '
-            'style="position:absolute;top:10px;right:10px;z-index:1201;background:#fff;border:none;'
-            'border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,0.3);cursor:pointer;padding:6px 8px;'
-            'line-height:0;color:#1a1a2e"><i class="ti ti-arrows-maximize" style="font-size:15px"></i></button>'
-            '<div id="mapInfoPanel" style="display:none;position:absolute;top:48px;right:10px;z-index:1200;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
-            '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee">'
+            '<div id="mapInfoPanel" style="display:none;position:absolute;top:155px;right:10px;z-index:1200;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
+            '<div id="mapInfoHeader" style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee">'
             '<span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span>'
             '<button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button>'
             '</div>'
@@ -1571,6 +1567,9 @@ def generate_report() -> str:
   #trendChart {{ cursor: grab; }}
   #trendChart:active {{ cursor: grabbing; }}
   .leaflet-top {{ transition: top .1s; }}
+  /* Tighten the fullscreen/recentre/zoom stack so it (and the info popup
+     below it) sit higher, leaving more room before the map's bottom edge. */
+  #sensorMap .leaflet-top.leaflet-right .leaflet-control {{ margin-top: 6px; }}
   #mapFsWrap:fullscreen {{ display:flex; flex-direction:column; background:var(--bg); padding:12px; box-sizing:border-box; }}
   #mapFsWrap:fullscreen #sensorMap {{ flex:1 1 auto; height:auto; min-height:0; border-radius:0; }}
   #mapFsWrap:-webkit-full-screen {{ display:flex; flex-direction:column; background:var(--bg); padding:12px; box-sizing:border-box; }}
@@ -1873,27 +1872,76 @@ var STATUS_COLOR_MAP = {
   no_measurement:'#6b7280', no_status:'#6b7280', unknown:'#6b7280'
 };
 
-var _map = L.map('sensorMap', {zoomControl:true}).setView([34.95, 33.15], 9);
+var _DEFAULT_VIEW = {center: [34.95, 33.15], zoom: 9};
+var _map = L.map('sensorMap', {zoomControl:false}).setView(_DEFAULT_VIEW.center, _DEFAULT_VIEW.zoom);
+
+// Topright stack, added in visual top-to-bottom order: fullscreen, recentre, zoom.
+var FullscreenControl = L.Control.extend({
+  options: {position: 'topright'},
+  onAdd: function() {
+    var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    var link = L.DomUtil.create('a', '', container);
+    link.href = '#';
+    link.id = 'mapFsBtn';
+    link.title = 'Toggle full screen';
+    link.innerHTML = '<i class="ti ti-arrows-maximize" style="font-size:15px;line-height:26px"></i>';
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.on(link, 'click', function(e) {
+      L.DomEvent.preventDefault(e);
+      toggleMapFullscreen();
+    });
+    return container;
+  }
+});
+_map.addControl(new FullscreenControl());
+
+var RecentreControl = L.Control.extend({
+  options: {position: 'topright'},
+  onAdd: function() {
+    var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    var link = L.DomUtil.create('a', '', container);
+    link.href = '#';
+    link.title = 'Recentre map';
+    link.innerHTML = '<i class="ti ti-crosshair" style="font-size:15px;line-height:26px"></i>';
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.on(link, 'click', function(e) {
+      L.DomEvent.preventDefault(e);
+      _map.setView(_DEFAULT_VIEW.center, _DEFAULT_VIEW.zoom);
+    });
+    return container;
+  }
+});
+_map.addControl(new RecentreControl());
+
+L.control.zoom({position: 'topright'}).addTo(_map);
 function _fixLeafletTop() {
-  // Keep the zoom controls clear of the sticky page header — but in fullscreen
-  // the header isn't on screen, so no offset is needed.
+  // Keep the zoom controls clear of the sticky page header — but only by
+  // however much the header is actually covering the map's top edge right
+  // now. The header is position:sticky, so it only overlaps the map once
+  // the page is scrolled far enough; using its full height unconditionally
+  // (as if it always overlapped) wasted that much space above the controls
+  // even when nothing needed clearing. In fullscreen the header isn't on
+  // screen at all, so there's never an offset there.
   var hdr = document.querySelector('header');
-  var h = (document.fullscreenElement || document.webkitFullscreenElement)
-          ? 0 : (hdr ? hdr.getBoundingClientRect().height : 0);
-  document.querySelectorAll('.leaflet-top').forEach(function(el) { el.style.top = h + 'px'; });
+  var mapEl = document.getElementById('sensorMap');
+  var isFs = document.fullscreenElement || document.webkitFullscreenElement;
+  var overlap = 0;
+  if (!isFs && hdr && mapEl) {
+    overlap = Math.max(0, hdr.getBoundingClientRect().bottom - mapEl.getBoundingClientRect().top);
+  }
+  document.querySelectorAll('.leaflet-top').forEach(function(el) { el.style.top = overlap + 'px'; });
 }
 _fixLeafletTop();
 window.addEventListener('resize', _fixLeafletTop);
+window.addEventListener('scroll', _fixLeafletTop, {passive: true});
 _map.on('click', function() { closeMapPanel(); });
 
-// The info panel and the fullscreen button live inside the map container; a
-// click on either must not fall through to the map (which would close the
-// panel) or start a map drag. Same guard Leaflet applies to its own controls.
+// The info panel lives inside the map container; a click on it must not fall
+// through to the map (which would close the panel) or start a map drag.
+// The fullscreen/recentre/zoom controls get this guard from Leaflet itself.
 (function() {
   var panel = document.getElementById('mapInfoPanel');
-  var fsBtn = document.getElementById('mapFsBtn');
   if (panel) { L.DomEvent.disableClickPropagation(panel); L.DomEvent.disableScrollPropagation(panel); }
-  if (fsBtn) { L.DomEvent.disableClickPropagation(fsBtn); }
 })();
 
 /* -- Fullscreen --------------------------------------------------- */
@@ -2026,7 +2074,7 @@ function makeMarker(s) {
   var showHist = (s.group === 'Traffic Detection' || s.group === 'VMS');
   var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>'
     + (showHist ? histLinkHtml(s.group, s.id) : '');
-  m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml); });
+  m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml, e.latlng); });
   return m;
 }
 
@@ -2096,13 +2144,13 @@ _btPaths.forEach(function(p) {
     _highlighted = pl;
     pl.setStyle({color:'#facc15', weight:7, opacity:1});
     pl.bringToFront();
-    showMapPanel(pl._pathName, pl._bodyHtml);
+    showMapPanel(pl._pathName, pl._bodyHtml, e.latlng);
   });
   _paths.push(pl);
 });
 
 /* -- Legend ------------------------------------------------------- */
-var _legend = L.control({position:'bottomright'});
+var _legend = L.control({position:'bottomleft'});
 var _legendOpen = true;
 _legend.onAdd = function() {
   var d = L.DomUtil.create('div');
@@ -2419,11 +2467,52 @@ function flyToBtPath(el) {
 }
 
 /* -- Info panel --------------------------------------------------- */
-function showMapPanel(title, bodyHtml) {
+// Bottom of the fullscreen/recentre/zoom stack, relative to the map — measured
+// fresh each time rather than assumed, since the sticky header (and so the
+// header-clearance offset every .leaflet-top control gets) varies with
+// viewport width. A hardcoded pixel guess here previously overlapped the
+// zoom buttons on narrower screens where the header takes more vertical space.
+function _controlStackBottom(mapEl) {
+  var ctls = mapEl.querySelectorAll('.leaflet-top.leaflet-right .leaflet-control');
+  if (!ctls.length) return 10;
+  var last = ctls[ctls.length - 1];
+  return last.getBoundingClientRect().bottom - mapEl.getBoundingClientRect().top;
+}
+
+function showMapPanel(title, bodyHtml, latlng) {
   var panel = document.getElementById('mapInfoPanel');
   document.getElementById('mapInfoTitle').textContent = title;
   document.getElementById('mapInfoBody').innerHTML = bodyHtml;
   panel.style.display = '';
+
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl && latlng) {
+    // Full screen means the map fills the whole viewport, so the fixed
+    // corner slot can end up far from whatever was actually clicked —
+    // anchor the panel next to the click instead, clamped to stay on screen.
+    var mapEl = document.getElementById('sensorMap');
+    var pt = _map.latLngToContainerPoint(latlng);
+    var pw = panel.offsetWidth, ph = panel.offsetHeight;
+    var maxLeft = Math.max(mapEl.clientWidth - pw - 10, 10);
+    var maxTop  = Math.max(mapEl.clientHeight - ph - 20, 10);
+    // A wider gap from the click point than the default 16px, so the popup
+    // doesn't sit right on top of the marker/path that was clicked.
+    var left = Math.min(Math.max(pt.x + 30, 10), maxLeft);
+    // Biased above the click (not vertically centred on it) so a tall panel
+    // — e.g. one with the "View history" link — has more room before its
+    // bottom edge risks running past the map/screen.
+    var top  = Math.min(Math.max(pt.y - ph * 0.75, 10), maxTop);
+    panel.style.left = left + 'px';
+    panel.style.right = 'auto';
+    panel.style.top = top + 'px';
+  } else {
+    // Outside full screen, always the top-right corner, just below whatever
+    // the control stack's actual current height happens to be.
+    var mapEl2 = document.getElementById('sensorMap');
+    panel.style.left = '';
+    panel.style.right = '10px';
+    panel.style.top = (_controlStackBottom(mapEl2) + 6) + 'px';
+  }
 }
 function closeMapPanel() {
   document.getElementById('mapInfoPanel').style.display = 'none';
