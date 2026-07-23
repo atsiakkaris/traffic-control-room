@@ -96,7 +96,7 @@ def main():
     for group, detail in rows:
         print(f"  {group.ljust(width)} :  {detail}")
 
-    print(f"\nWrote sensor_projects → {Path('results/history.db')}  "
+    print(f"\nWrote sensor_projects -> {Path('results/history.db')}  "
           f"({total_matched}/{total_api} sensors assigned)")
     print("\nNext: commit results/history.db and push so the automated report picks it up.")
 
