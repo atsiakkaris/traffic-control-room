@@ -661,7 +661,7 @@ def _badge_active(active):
     return '<span class="badge green">Active</span>' if active else '<span class="badge red">Retired</span>'
 
 
-def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False, not_electrified=0):
+def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False, not_electrified=0, max_dist=None):
     try:
         from zoneinfo import ZoneInfo
         _cy = ZoneInfo("Asia/Nicosia")
@@ -674,6 +674,34 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
     colocated = [m for m in matches if m['type'] == 'colocated']
 
     coord_issues = [m for m in matched if m['distance_m'] and m['distance_m'] >= COORD_WARN_M]
+
+    # This report's actual matching radius — match_sensors() never pairs anything
+    # further apart than this, so a legend band beyond it can never fire and
+    # would only mislead the reader into thinking farther matches are tolerated.
+    match_max_m = max_dist if max_dist is not None else COORD_MATCH_MAX_M
+    _amber_hi = min(match_max_m, COORD_ALERT_M)
+    _show_amber = match_max_m > COORD_WARN_M
+    _show_red = match_max_m > COORD_ALERT_M
+
+    # Pre-built legend fragments for the two colour-key blocks below — kept as
+    # plain strings (not inline conditionals) so neither block can show a
+    # distance band this report's --max-dist makes physically unreachable.
+    _key_line_amber = (
+        f'<span><span style="display:inline-block;width:24px;border-top:2.5px dashed #e67e22;'
+        f'vertical-align:middle"></span> {COORD_WARN_M}–{_amber_hi} m</span>'
+    ) if _show_amber else ''
+    _key_line_red = (
+        f'<span><span style="display:inline-block;width:24px;border-top:2.5px dashed #c0392b;'
+        f'vertical-align:middle"></span> &gt;{COORD_ALERT_M} m</span>'
+    ) if _show_red else ''
+    _corner_line_amber = (
+        f'<span style="display:inline-block;width:22px;border-top:2.5px dashed #e67e22;'
+        f'vertical-align:middle;margin-right:6px"></span>Match {COORD_WARN_M}–{_amber_hi} m<br>'
+    ) if _show_amber else ''
+    _corner_line_red = (
+        f'<span style="display:inline-block;width:22px;border-top:2.5px dashed #c0392b;'
+        f'vertical-align:middle;margin-right:6px"></span>Match &gt;{COORD_ALERT_M} m'
+    ) if _show_red else ''
 
     # ── Accountability breakdown ───────────────────────────────────────────────
     # Health % is computed over supported sensors only, so a dead out-of-support
@@ -949,8 +977,8 @@ tr.clickable:hover td{{background:#dceeff}}
   <span><i style="background:#27ae60;outline:3px solid #f1c40f;outline-offset:2px"></i> Confirmed match — ref + API agree (&lt;{COORD_WARN_M} m, shown as one marker)</span>
   <strong style="margin-left:8px">Lines:</strong>
   <span><span style="display:inline-block;width:24px;border-top:2.5px dashed #27ae60;vertical-align:middle"></span> &lt;{COORD_WARN_M} m apart</span>
-  <span><span style="display:inline-block;width:24px;border-top:2.5px dashed #e67e22;vertical-align:middle"></span> {COORD_WARN_M}–{COORD_ALERT_M} m</span>
-  <span><span style="display:inline-block;width:24px;border-top:2.5px dashed #c0392b;vertical-align:middle"></span> &gt;{COORD_ALERT_M} m</span>
+  {_key_line_amber}
+  {_key_line_red}
 </div>
 <div style="padding:0 24px 10px;font-size:11px;color:#888">
   <b>Note:</b> Out-of-support sensors belong to a project whose maintenance contract has ended — a failure is
@@ -1196,8 +1224,8 @@ legend.onAdd = () => {{
     '<i style="background:#1f4e79"></i>Reference location<br>'+
     '<i style="background:#27ae60;outline:3px solid #f1c40f;outline-offset:2px"></i>Confirmed match (ref + API agree, &lt;{COORD_WARN_M} m)<br>'+
     '<span style="display:inline-block;width:22px;border-top:2.5px dashed #27ae60;vertical-align:middle;margin-right:6px"></span>Match &lt;{COORD_WARN_M} m<br>'+
-    '<span style="display:inline-block;width:22px;border-top:2.5px dashed #e67e22;vertical-align:middle;margin-right:6px"></span>Match {COORD_WARN_M}–{COORD_ALERT_M} m<br>'+
-    '<span style="display:inline-block;width:22px;border-top:2.5px dashed #c0392b;vertical-align:middle;margin-right:6px"></span>Match &gt;{COORD_ALERT_M} m';
+    '{_corner_line_amber}'+
+    '{_corner_line_red}';
   return d;
 }};
 legend.addTo(map);
@@ -1208,7 +1236,8 @@ else map.setView([34.9,33.0],9);
 // ── Fly to sensor when clicking a table row ───────────────────────────────
 let activePopup = null;
 function flyTo(lat, lon, label) {{
-  document.getElementById('map').scrollIntoView({{behavior:'smooth', block:'center'}});
+  // #map is position:sticky, so it's already pinned in view while scrolling
+  // through the tables below it — no page scroll needed, just move the camera.
   map.flyTo([lat, lon], 16, {{duration: 1.2}});
   if (activePopup) activePopup.remove();
   activePopup = L.popup()
@@ -1218,7 +1247,8 @@ function flyTo(lat, lon, label) {{
 }}
 
 function flyToBoth(refLat, refLon, apiLat, apiLon, label) {{
-  document.getElementById('map').scrollIntoView({{behavior:'smooth', block:'center'}});
+  // #map is position:sticky, so it's already pinned in view while scrolling
+  // through the tables below it — no page scroll needed, just move the camera.
   const b = L.latLngBounds([[refLat, refLon], [apiLat, apiLon]]);
   map.flyToBounds(b, {{padding:[80,80], maxZoom:17, duration:1.2}});
   if (activePopup) activePopup.remove();
@@ -1421,7 +1451,7 @@ def main():
         print(f"  API only (extra): {api_only}")
 
     path = generate_html(args.group, api_sensors, ref_sensors, matches, out_path, live=live_mode,
-                          not_electrified=not_electrified)
+                          not_electrified=not_electrified, max_dist=args.max_dist)
     print(f"\nReport written -> {path}")
     print(f"Open in browser: file:///{path.as_posix()}\n")
 
