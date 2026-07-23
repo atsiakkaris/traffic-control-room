@@ -330,15 +330,138 @@ function applySelection() {{
   }});
 }}
 
-function selectPath(id) {{
-  selectedId = (selectedId === id) ? null : id;
+/* -- Overlap geometry: hover indicator + interior-touch detection --- */
+/* These paths overlap constantly (a short leg often traces a single stretch
+   of a much longer route), so "which path is this line" is frequently
+   ambiguous from a click alone. Point-to-*polyline* distance (not just
+   point-to-endpoint) catches a path whose end lands partway along another
+   one's length, not only where the two share an actual endpoint. */
+var _ADJACENT_TOL_M = 30;
+
+function _projectToLocal(origin, pt) {{
+  var dLat = (pt[0] - origin[0]) * 110574;
+  var dLon = (pt[1] - origin[1]) * 111320 * Math.cos(origin[0] * Math.PI / 180);
+  return [dLon, dLat];
+}}
+function _metresBetween(a, b) {{
+  var p = _projectToLocal(a, b);
+  return Math.hypot(p[0], p[1]);
+}}
+function _distPointToSegment(pt, a, b) {{
+  var P = _projectToLocal(a, pt), B = _projectToLocal(a, b), A = [0, 0];
+  var abx = B[0]-A[0], aby = B[1]-A[1];
+  var len2 = abx*abx + aby*aby;
+  var t = len2 > 0 ? Math.max(0, Math.min(1, ((P[0]-A[0])*abx + (P[1]-A[1])*aby) / len2)) : 0;
+  var cx = A[0] + abx*t, cy = A[1] + aby*t;
+  return Math.hypot(P[0]-cx, P[1]-cy);
+}}
+function _distPointToPolyline(pt, coords) {{
+  var best = Infinity;
+  for (var i = 0; i < coords.length - 1; i++) {{
+    var d = _distPointToSegment(pt, coords[i], coords[i+1]);
+    if (d < best) best = d;
+  }}
+  return best;
+}}
+
+/* Every path passing within tolerance of a map point — powers both the hover
+   tooltip ("N paths overlap here") and click-to-cycle. */
+function _overlappingPathsAt(latlng, tol) {{
+  var pt = [latlng.lat, latlng.lng];
+  tol = tol == null ? _ADJACENT_TOL_M : tol;
+  return pathObjs.filter(function(o) {{
+    return o.polyline._coords && _distPointToPolyline(pt, o.polyline._coords) <= tol;
+  }});
+}}
+
+/* -- Path start / end markers --------------------------------------- */
+var endpointLayer = L.layerGroup().addTo(map);
+var _endpointCycle = {{}};
+
+function _endpointIcon(letter, color, title, size) {{
+  size = size || 19;
+  var fs = size >= 18 ? 11 : 9;
+  return L.divIcon({{
+    className: '',
+    html: '<div title="'+title+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;'+
+          'background:'+color+';border:2.5px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,0.5);'+
+          'display:flex;align-items:center;justify-content:center;'+
+          'font-size:'+fs+'px;font-weight:700;color:#fff;font-family:sans-serif">'+letter+'</div>',
+    iconSize: [size,size], iconAnchor: [size/2,size/2]
+  }});
+}}
+
+function _clearPathEndpoints() {{
+  endpointLayer.clearLayers();
+}}
+
+function _showPathEndpoints(pl) {{
+  _clearPathEndpoints();
+  if (!pl._startLL || !pl._endLL) return;
+
+  var wanted = [
+    {{ll: pl._startLL, letter: 'A', color: '#1d9e75', size: 19, name: pl._pathName, kind: 'start'}},
+    {{ll: pl._endLL,   letter: 'B', color: '#1a1a2e', size: 19, name: pl._pathName, kind: 'end'}}
+  ];
+  pathObjs.forEach(function(o) {{
+    var p = o.polyline;
+    if (p === pl || !p._startLL || !p._endLL) return;
+    var touches =
+      _distPointToPolyline(pl._startLL, p._coords)  <= _ADJACENT_TOL_M ||
+      _distPointToPolyline(pl._endLL,   p._coords)  <= _ADJACENT_TOL_M ||
+      _distPointToPolyline(p._startLL,  pl._coords) <= _ADJACENT_TOL_M ||
+      _distPointToPolyline(p._endLL,    pl._coords) <= _ADJACENT_TOL_M;
+    if (!touches) return;
+    wanted.push({{ll: p._startLL, letter: 'a', color: '#7bc4a4', size: 15, name: p._pathName, kind: 'start'}});
+    wanted.push({{ll: p._endLL,   letter: 'b', color: '#6b7280', size: 15, name: p._pathName, kind: 'end'}});
+  }});
+
+  // Merge markers landing on the same point so a busy junction gets one
+  // marker per position, not a pile of overlapping ones.
+  var spots = [];
+  wanted.forEach(function(w) {{
+    for (var i = 0; i < spots.length; i++) {{
+      if (_metresBetween(spots[i].ll, w.ll) <= _ADJACENT_TOL_M) {{
+        spots[i].owners.push({{name: w.name, kind: w.kind}});
+        return;
+      }}
+    }}
+    spots.push({{ll: w.ll, letter: w.letter, color: w.color, size: w.size,
+                owners: [{{name: w.name, kind: w.kind}}]}});
+  }});
+
+  spots.forEach(function(spot) {{
+    var names = spot.owners.map(function(o) {{ return o.name + ' — ' + o.kind; }});
+    var title = spot.owners.length > 1
+      ? names.length + ' paths meet here:\\n• ' + names.join('\\n• ')
+      : names[0];
+    L.marker(spot.ll, {{icon: _endpointIcon(spot.letter, spot.color, title, spot.size), interactive: false}})
+      .addTo(endpointLayer);
+  }});
+}}
+
+/* Select-by-id keeps the original toggle behaviour (click the same path again
+   to deselect) for the common case of one path under the cursor. */
+function _applySelectionAndEndpoints(id) {{
+  selectedId = id;
   applySelection();
+  if (id === null) {{ _clearPathEndpoints(); return; }}
+  var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
+  if (obj) _showPathEndpoints(obj.polyline);
+}}
+
+function selectPath(id) {{
+  _applySelectionAndEndpoints(selectedId === id ? null : id);
 }}
 
 FEATURES.forEach(function(f) {{
   if (!f.coords.length) return;
   var latlngs = f.coords.map(function(c) {{ return [c[0], c[1]]; }});
   var pl = L.polyline(latlngs, {{color: f.color, weight: 4, opacity: 0.8}}).addTo(map);
+  pl._pathName = f.name;
+  pl._startLL  = latlngs[0];
+  pl._endLL    = latlngs[latlngs.length - 1];
+  pl._coords   = latlngs;
   var popupHtml = '<b>' + f.name + '</b><br>Path ID: ' + f.id + '<br>' + f.coords.length + ' points';
   var dup = DUPLICATE_GROUPS[f.name];
   if (dup) {{
@@ -351,9 +474,34 @@ FEATURES.forEach(function(f) {{
     }}
   }}
   pl.bindPopup(popupHtml);
-  pl.on('mouseover', function() {{ if (selectedId === null) pl.setStyle({{weight: 7}}); }});
+  pl.bindTooltip('', {{sticky: true, direction: 'top', opacity: 0.95}});
+  pl.on('mouseover', function(e) {{
+    if (selectedId === null) pl.setStyle({{weight: 7}});
+    var here = _overlappingPathsAt(e.latlng);
+    var tip = here.length > 1
+      ? '<b>' + here.length + ' paths overlap here</b> — click to cycle<br>&bull; ' +
+        here.map(function(o) {{ return o.feature.name; }}).join('<br>&bull; ')
+      : f.name;
+    pl.setTooltipContent(tip);
+  }});
   pl.on('mouseout',  function() {{ if (selectedId === null) pl.setStyle({{weight: 4}}); }});
-  pl.on('click', function(e) {{ L.DomEvent.stopPropagation(e); selectPath(f.id); }});
+  pl.on('click', function(e) {{
+    L.DomEvent.stopPropagation(e);
+    var here = _overlappingPathsAt(e.latlng);
+    if (here.length <= 1) {{ selectPath(f.id); return; }}
+    // Multiple paths stacked at this exact spot: step to the next one on each
+    // click instead of only ever reaching whichever line Leaflet hit-tested,
+    // keyed by click position so repeated clicks near the same spot advance
+    // the same cycle.
+    var key = 'line:' + e.latlng.lat.toFixed(4) + ',' + e.latlng.lng.toFixed(4);
+    var idx = (_endpointCycle[key] || 0) % here.length;
+    _endpointCycle[key] = idx + 1;
+    var chosen = here[idx];
+    _applySelectionAndEndpoints(chosen.feature.id);
+    var suffix = '<br><i style="color:#888">(' + (idx+1) + ' of ' + here.length + ' here)</i>';
+    chosen.polyline.setPopupContent(chosen.popupHtml + suffix);
+    chosen.polyline.openPopup(e.latlng);
+  }});
   var decorator = L.polylineDecorator(pl, {{
     patterns: [{{
       offset: 20, repeat: 80,
@@ -363,7 +511,7 @@ FEATURES.forEach(function(f) {{
       }})
     }}]
   }}).addTo(map);
-  pathObjs.push({{feature: f, polyline: pl, decorator: decorator}});
+  pathObjs.push({{feature: f, polyline: pl, decorator: decorator, popupHtml: popupHtml}});
   bounds = bounds.concat(latlngs);
 }});
 map.on('click', function() {{ selectPath(null); }});

@@ -1979,7 +1979,11 @@ var _clustered = true;
 var _layerGroups = {
   """ + layer_groups_entries + """
   paths: L.layerGroup(),
-  arrows: L.layerGroup()
+  arrows: L.layerGroup(),
+  // Start/end markers for the *selected* path only. Drawing them for all ~500
+  // paths at once would put ~1000 markers on the map and bury the routes they
+  // are meant to clarify, so they appear when a path is clicked.
+  endpoints: L.layerGroup()
 };
 Object.values(_layerGroups).forEach(function(lg){ lg.addTo(_map); });
 
@@ -2103,6 +2107,9 @@ function makePath(p) {
     + histLinkHtml('Bluetooth Paths', p.id);
   pl._bodyHtml = bodyHtml;
   pl._pathName = 'BT Path '+p.name;
+  pl._startLL  = latlngs[0];
+  pl._endLL    = latlngs[latlngs.length - 1];
+  pl._coords   = latlngs;   // full geometry, for overlap / interior-touch tests
   // direction arrows along the path
   pl._decorator = L.polylineDecorator(pl, {
     patterns: [{
@@ -2114,6 +2121,158 @@ function makePath(p) {
     }]
   });
   return pl;
+}
+
+/* -- Path start / end markers ------------------------------------- */
+/* Shown for the selected path only — see _layerGroups.endpoints. The arrows
+   along a path give its direction, but not where it actually begins and ends,
+   which is what these answer. */
+/* A path counts as adjacent when one of its ends sits on an end of the selected
+   path — i.e. traffic can continue from one onto the other. Coordinates from the
+   feed are not bit-identical at a shared node, so match on distance. */
+var _ADJACENT_TOL_M = 30;
+
+function _metresBetween(a, b) {
+  var dLat = (b[0] - a[0]) * 110574;
+  var dLon = (b[1] - a[1]) * 111320 * Math.cos((a[0] + b[0]) / 2 * Math.PI / 180);
+  return Math.sqrt(dLat*dLat + dLon*dLon);
+}
+
+/* Distance in metres from a point to the nearest point on a full polyline —
+   not just its two ends. 229 of the 496 BT paths run entirely along a LONGER
+   path (e.g. a 1.3km leg that is really just a piece of a 15.7km route), so an
+   endpoint-to-endpoint check alone misses most of the real overlap: a short
+   path's ends land partway along the long one, nowhere near its endpoints. */
+function _projectToLocal(origin, pt) {
+  var dLat = (pt[0] - origin[0]) * 110574;
+  var dLon = (pt[1] - origin[1]) * 111320 * Math.cos(origin[0] * Math.PI / 180);
+  return [dLon, dLat];
+}
+function _distPointToSegment(pt, a, b) {
+  var P = _projectToLocal(a, pt), B = _projectToLocal(a, b), A = [0, 0];
+  var abx = B[0]-A[0], aby = B[1]-A[1];
+  var len2 = abx*abx + aby*aby;
+  var t = len2 > 0 ? Math.max(0, Math.min(1, ((P[0]-A[0])*abx + (P[1]-A[1])*aby) / len2)) : 0;
+  var cx = A[0] + abx*t, cy = A[1] + aby*t;
+  return Math.hypot(P[0]-cx, P[1]-cy);
+}
+function _distPointToPolyline(pt, coords) {
+  var best = Infinity;
+  for (var i = 0; i < coords.length - 1; i++) {
+    var d = _distPointToSegment(pt, coords[i], coords[i+1]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/* Every visible path passing within tolerance of a map point — used both to
+   tell the hovering user "N paths are stacked here" and to let clicking cycle
+   through all of them, not just whichever one Leaflet happened to hit-test. */
+function _overlappingPathsAt(latlng, tol) {
+  var pt = [latlng.lat, latlng.lng];
+  tol = tol == null ? _ADJACENT_TOL_M : tol;
+  return _paths.filter(function(p) {
+    return p._visible !== false && p._coords && _distPointToPolyline(pt, p._coords) <= tol;
+  });
+}
+
+function _endpointIcon(letter, color, title, size) {
+  size = size || 19;
+  var fs = size >= 18 ? 11 : 9;
+  return L.divIcon({
+    className: '',
+    html: '<div title="'+title+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;'+
+          'background:'+color+';border:2.5px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,0.5);'+
+          'display:flex;align-items:center;justify-content:center;'+
+          'font-size:'+fs+'px;font-weight:700;color:#fff;font-family:sans-serif">'+letter+'</div>',
+    iconSize: [size,size], iconAnchor: [size/2,size/2]
+  });
+}
+
+function _clearPathEndpoints() {
+  _layerGroups.endpoints.clearLayers();
+}
+
+/* Which path a shared marker currently points at. Routes overlap heavily here
+   (229 of 496 paths run along a longer one, and reverse pairs A->B / B->A share
+   both ends), so one marker position often belongs to several paths. Clicking
+   cycles through them rather than silently picking one. Keyed by position so
+   the cycle survives the redraw that selecting a path triggers. */
+var _endpointCycle = {};
+
+function _showPathEndpoints(pl) {
+  _clearPathEndpoints();
+  if (!pl._startLL || !pl._endLL) return;
+
+  // Collect every endpoint to draw, selected path first so its A/B win the
+  // position and the styling.
+  var wanted = [
+    {ll: pl._startLL, letter: 'A', color: '#1d9e75', size: 19, path: pl, kind: 'start'},
+    {ll: pl._endLL,   letter: 'B', color: '#1a1a2e', size: 19, path: pl, kind: 'end'}
+  ];
+  _paths.forEach(function(p) {
+    if (p === pl || p._visible === false || !p._startLL || !p._endLL) return;
+    // Point-to-*polyline* distance, not just point-to-endpoint: catches a short
+    // path's end landing partway along a longer one, not only at its tips.
+    var touches =
+      _distPointToPolyline(pl._startLL, p._coords)  <= _ADJACENT_TOL_M ||
+      _distPointToPolyline(pl._endLL,   p._coords)  <= _ADJACENT_TOL_M ||
+      _distPointToPolyline(p._startLL,  pl._coords) <= _ADJACENT_TOL_M ||
+      _distPointToPolyline(p._endLL,    pl._coords) <= _ADJACENT_TOL_M;
+    if (!touches) return;
+    wanted.push({ll: p._startLL, letter: 'a', color: '#7bc4a4', size: 15, path: p, kind: 'start'});
+    wanted.push({ll: p._endLL,   letter: 'b', color: '#6b7280', size: 15, path: p, kind: 'end'});
+  });
+
+  // Merge everything landing on the same point into one marker that remembers
+  // all the paths meeting there.
+  var spots = [];
+  wanted.forEach(function(w) {
+    for (var i = 0; i < spots.length; i++) {
+      if (_metresBetween(spots[i].ll, w.ll) <= _ADJACENT_TOL_M) {
+        spots[i].owners.push({path: w.path, kind: w.kind});
+        return;
+      }
+    }
+    spots.push({ll: w.ll, letter: w.letter, color: w.color, size: w.size,
+                owners: [{path: w.path, kind: w.kind}]});
+  });
+
+  spots.forEach(function(spot) {
+    var names = spot.owners.map(function(o) { return o.path._pathName + ' — ' + o.kind; });
+    var title = spot.owners.length > 1
+      ? names.length + ' paths meet here (click to cycle):\\n• ' + names.join('\\n• ')
+      : names[0] + '\\nClick to open this path';
+    var key = spot.ll[0].toFixed(4) + ',' + spot.ll[1].toFixed(4);
+    var mk = L.marker(spot.ll, {
+      icon: _endpointIcon(spot.letter, spot.color, title, spot.size),
+      interactive: true, keyboard: false, zIndexOffset: 500
+    });
+    mk.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
+      var idx = (_endpointCycle[key] || 0) % spot.owners.length;
+      _endpointCycle[key] = idx + 1;
+      var suffix = spot.owners.length > 1 ? ' (' + (idx+1) + ' of ' + spot.owners.length + ' here)' : '';
+      _selectPath(spot.owners[idx].path, e.latlng, suffix);
+    });
+    mk.addTo(_layerGroups.endpoints);
+  });
+}
+
+/* Select a path: highlight it, reveal its endpoints, open its panel. Shared by
+   clicking the line itself and clicking an endpoint marker. `suffix` notes a
+   path's position in a stack of overlapping ones (" (2 of 3 here)"), so the
+   panel confirms which one cycling landed on. */
+function _selectPath(pl, latlng, suffix) {
+  if (_highlighted && _highlighted !== pl) {
+    _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
+    _highlighted.bringToBack();
+  }
+  _highlighted = pl;
+  pl.setStyle({color:'#facc15', weight:7, opacity:1});
+  pl.bringToFront();
+  _showPathEndpoints(pl);
+  showMapPanel(pl._pathName + (suffix || ''), pl._bodyHtml, latlng || pl.getBounds().getCenter());
 }
 
 /* -- Build layers ------------------------------------------------- */
@@ -2135,16 +2294,26 @@ _btPaths.forEach(function(p) {
   var pl = makePath(p);
   pl.addTo(_layerGroups.paths);
   pl._decorator.addTo(_layerGroups.arrows);
+  pl.bindTooltip('', {sticky: true, direction: 'top', opacity: 0.95, className: 'bt-overlap-tip'});
+  pl.on('mouseover', function(e) {
+    var here = _overlappingPathsAt(e.latlng);
+    var html = here.length > 1
+      ? '<b>' + here.length + ' paths overlap here</b> — click to cycle<br>&bull; ' +
+        here.map(function(p) { return p._pathName; }).join('<br>&bull; ')
+      : pl._pathName;
+    pl.setTooltipContent(html);
+  });
   pl.on('click', function(e) {
     L.DomEvent.stopPropagation(e);
-    if (_highlighted && _highlighted !== pl) {
-      _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
-      _highlighted.bringToBack();
-    }
-    _highlighted = pl;
-    pl.setStyle({color:'#facc15', weight:7, opacity:1});
-    pl.bringToFront();
-    showMapPanel(pl._pathName, pl._bodyHtml, e.latlng);
+    var here = _overlappingPathsAt(e.latlng);
+    if (here.length <= 1) { _selectPath(pl, e.latlng); return; }
+    // Same idea as the endpoint-marker cycle: repeated clicks near this spot
+    // step through every path stacked here instead of only ever selecting
+    // whichever one Leaflet's hit-test happens to hand the event to.
+    var key = 'line:' + e.latlng.lat.toFixed(4) + ',' + e.latlng.lng.toFixed(4);
+    var idx = (_endpointCycle[key] || 0) % here.length;
+    _endpointCycle[key] = idx + 1;
+    _selectPath(here[idx], e.latlng, ' (' + (idx+1) + ' of ' + here.length + ' here)');
   });
   _paths.push(pl);
 });
@@ -2179,6 +2348,18 @@ _legend.onAdd = function() {
     row(line('#1d9e75','3')+'<span style="color:#1a1a2e">BT Path (OK)</span>')+
     row(line('#e24b4a','4')+'<span style="color:#1a1a2e">BT Path (issue)</span>')+
     row(line('#9ca3af','2')+'<span style="color:#1a1a2e">BT Path (no data)</span>')+
+    row('<span style="display:inline-flex;gap:3px;flex-shrink:0">'+
+        '<span style="width:13px;height:13px;border-radius:50%;background:#1d9e75;border:1.5px solid #fff;'+
+        'display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff">A</span>'+
+        '<span style="width:13px;height:13px;border-radius:50%;background:#1a1a2e;border:1.5px solid #fff;'+
+        'display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff">B</span>'+
+        '</span><span style="color:#1a1a2e">Path start / end (click a path)</span>')+
+    row('<span style="display:inline-flex;gap:3px;flex-shrink:0">'+
+        '<span style="width:11px;height:11px;border-radius:50%;background:#7bc4a4;border:1.5px solid #fff;'+
+        'display:inline-flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;color:#fff">a</span>'+
+        '<span style="width:11px;height:11px;border-radius:50%;background:#6b7280;border:1.5px solid #fff;'+
+        'display:inline-flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;color:#fff">b</span>'+
+        '</span><span style="color:#1a1a2e">Adjacent path start / end</span>')+
     '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin:7px 0 4px">Status</div>'+
     row(dot('#1d9e75')+'<span style="color:#1a1a2e">Working / OK</span>')+
     row(dot('#e24b4a')+'<span style="color:#1a1a2e">Issue / Fault</span>')+
@@ -2224,12 +2405,15 @@ function applyVisibility() {
   _paths.forEach(function(p) {
     var on = pathsOn &&
              (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(p._pathStatus) !== -1);
+    p._visible = on;   // adjacency lookup must not point at a hidden path
     p.setStyle(pathStyle(p._pathStatus, !on));
   });
   if (pathsOn) {
     if (!_map.hasLayer(_layerGroups.arrows)) _map.addLayer(_layerGroups.arrows);
   } else {
     if (_map.hasLayer(_layerGroups.arrows)) _map.removeLayer(_layerGroups.arrows);
+    // Paths are hidden, so a lingering A/B pair would point at nothing.
+    _clearPathEndpoints();
   }
 }
 
@@ -2521,6 +2705,7 @@ function closeMapPanel() {
     _highlighted.bringToBack();
     _highlighted = null;
   }
+  _clearPathEndpoints();
 }
 </script>""")
 
