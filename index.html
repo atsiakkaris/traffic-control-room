@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>ITS Infrastructure Health Monitor</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, Segoe UI, Arial, sans-serif; }
+  #tabs { display: flex; background: #1f2937; }
+  #tabs button {
+    flex: 0 0 auto; padding: 12px 22px; background: none; border: none; cursor: pointer;
+    color: #cbd5e1; font-size: 14px; font-weight: 600; border-bottom: 3px solid transparent;
+  }
+  #tabs button:hover { color: #fff; }
+  #tabs button.active { color: #fff; border-bottom-color: #3b82f6; background: #111827; }
+  #frames { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; }
+  #frames iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; display: none; }
+  #frames iframe.active { display: block; }
+</style>
+</head>
+<body>
+<div id="tabs">
+  <button data-target="frame-dashboard" class="active">Dashboard</button>
+  <button data-target="frame-btmap">BT Paths Map</button>
+</div>
+<div id="frames">
+  <iframe id="frame-dashboard" class="active" src="reports/latest.html"></iframe>
+  <iframe id="frame-btmap" src="docs/bt-paths-map.html"></iframe>
+</div>
+<script>
+  document.querySelectorAll('#tabs button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.remove('active'); });
+      document.querySelectorAll('#frames iframe').forEach(function (f) { f.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById(btn.getAttribute('data-target')).classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

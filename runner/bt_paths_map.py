@@ -36,6 +36,7 @@ from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection
 from qa import load_reference, _haversine_m
 
 REPORT_DIR = Path(__file__).parent.parent / "reports"
+DOCS_DIR = Path(__file__).parent.parent / "docs"
 WORKBOOK = Path(__file__).parent.parent / "QA Locations.xlsx"
 
 # Rotating categorical palette so adjacent/overlapping paths stay visually
@@ -1175,6 +1176,9 @@ def main():
                      help="Render every duplicate path registration instead of collapsing "
                           "confirmed duplicates down to one — useful for eyeballing them "
                           "on the map before removing any from the API.")
+    ap.add_argument("--publish", action="store_true",
+                     help="Also write a copy to docs/bt-paths-map.html, the file served by "
+                          "GitHub Pages for sharing this tool with colleagues.")
     args = ap.parse_args()
 
     paths = fetch_bt_path_coords()
@@ -1208,6 +1212,12 @@ def main():
     out_path.write_text(page, encoding="utf-8")
     print(f"Bluetooth paths map written to {out_path}  "
           f"({len(paths)} active paths, {len(sensors)} API sensors, {len(ref_sensors)} spreadsheet sensors)")
+
+    if args.publish:
+        DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        published_path = DOCS_DIR / "bt-paths-map.html"
+        published_path.write_text(page, encoding="utf-8")
+        print(f"Published copy written to {published_path} — commit and push to update the shared page.")
 
 
 if __name__ == "__main__":
