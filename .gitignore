@@ -12,6 +12,7 @@ reports/qa_*.html
 reports/bt_paths_map.html
 run.bat
 digest.bat
+bt_paths_map_dupes.bat
 pin.html
 runner/results/
 *.xlsx

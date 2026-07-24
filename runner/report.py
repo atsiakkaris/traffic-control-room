@@ -1446,7 +1446,9 @@ def generate_report() -> str:
             '<div id="sensorMap" style="height:520px;border-radius:8px;overflow:hidden;border:0.5px solid var(--color-border-tertiary);position:relative">'
             '<div id="mapInfoPanel" style="display:none;position:absolute;top:155px;right:10px;z-index:1200;background:#fff;border-radius:10px;box-shadow:0 3px 14px rgba(0,0,0,0.22);min-width:220px;max-width:280px;font-size:12px;overflow:hidden">'
             '<div id="mapInfoHeader" style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px 7px;border-bottom:1px solid #eee">'
-            '<span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e"></span>'
+            '<span id="mapInfoTitle" style="font-weight:700;font-size:13px;color:#1a1a2e;flex:1;'
+            'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>'
+            '<span id="mapInfoNav"></span>'
             '<button onclick="closeMapPanel()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 0 0 10px">&times;</button>'
             '</div>'
             '<div id="mapInfoBody" style="padding:10px 14px 12px"></div>'
@@ -1570,6 +1572,17 @@ def generate_report() -> str:
   /* Tighten the fullscreen/recentre/zoom stack so it (and the info popup
      below it) sit higher, leaving more room before the map's bottom edge. */
   #sensorMap .leaflet-top.leaflet-right .leaflet-control {{ margin-top: 6px; }}
+  /* Selecting a path brings it to front, which reorders its DOM node and makes
+     the browser re-fire a native mouseover under the still-stationary cursor —
+     that reopens the sticky hover tooltip a tick after we close it, stacking
+     it on top of the info panel. Racing to close it again loses half the
+     time, so instead force it hidden for as long as the info panel is open. */
+  body.map-popup-open .bt-overlap-tip {{ display:none !important; }}
+  #mapInfoNav {{ display:none; align-items:center; gap:4px; font-size:11px; color:#9ca3af; margin:0 8px }}
+  #mapInfoNav button {{ background:#f1f2f5; border:none; color:#4b5563; border-radius:4px;
+      padding:2px 7px; cursor:pointer; font-size:11px }}
+  #mapInfoNav button:hover {{ background:#e5e7eb }}
+  #mapInfoNav span {{ min-width:48px; text-align:center }}
   #mapFsWrap:fullscreen {{ display:flex; flex-direction:column; background:var(--bg); padding:12px; box-sizing:border-box; }}
   #mapFsWrap:fullscreen #sensorMap {{ flex:1 1 auto; height:auto; min-height:0; border-radius:0; }}
   #mapFsWrap:-webkit-full-screen {{ display:flex; flex-direction:column; background:var(--bg); padding:12px; box-sizing:border-box; }}
@@ -1873,7 +1886,11 @@ var STATUS_COLOR_MAP = {
 };
 
 var _DEFAULT_VIEW = {center: [34.95, 33.15], zoom: 9};
-var _map = L.map('sensorMap', {zoomControl:false}).setView(_DEFAULT_VIEW.center, _DEFAULT_VIEW.zoom);
+// doubleClickZoom off: cycling through a stack of overlapping BT paths means
+// clicking the same spot repeatedly, which Leaflet's default dblclick
+// handling would otherwise read as "zoom in" and yank the view out from
+// under you mid-review.
+var _map = L.map('sensorMap', {zoomControl:false, doubleClickZoom:false}).setView(_DEFAULT_VIEW.center, _DEFAULT_VIEW.zoom);
 
 // Topright stack, added in visual top-to-bottom order: fullscreen, recentre, zoom.
 var FullscreenControl = L.Control.extend({
@@ -2176,12 +2193,22 @@ function _overlappingPathsAt(latlng, tol) {
   });
 }
 
-function _endpointIcon(letter, color, title, size) {
+// Bolds whichever path is currently selected so, when cycling through a
+// stack via repeated clicks, the list reflects which one you're now on.
+function _overlapTooltipHtml(here, pl) {
+  if (here.length <= 1) return pl._pathName;
+  var rows = here.map(function(p) {
+    return p === _highlighted ? '<b>' + p._pathName + '</b>' : p._pathName;
+  });
+  return '<b>' + here.length + ' paths overlap here</b> — click to cycle<br>&bull; ' + rows.join('<br>&bull; ');
+}
+
+function _endpointIcon(letter, color, size) {
   size = size || 19;
   var fs = size >= 18 ? 11 : 9;
   return L.divIcon({
     className: '',
-    html: '<div title="'+title+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;'+
+    html: '<div style="width:'+size+'px;height:'+size+'px;border-radius:50%;'+
           'background:'+color+';border:2.5px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,0.5);'+
           'display:flex;align-items:center;justify-content:center;'+
           'font-size:'+fs+'px;font-weight:700;color:#fff;font-family:sans-serif">'+letter+'</div>',
@@ -2199,6 +2226,7 @@ function _clearPathEndpoints() {
    cycles through them rather than silently picking one. Keyed by position so
    the cycle survives the redraw that selecting a path triggers. */
 var _endpointCycle = {};
+var _lastEndpointClickKey = null;
 
 function _showPathEndpoints(pl) {
   _clearPathEndpoints();
@@ -2238,25 +2266,67 @@ function _showPathEndpoints(pl) {
                 owners: [{path: w.path, kind: w.kind}]});
   });
 
+  // Cycling an endpoint spot re-selects a different path (which rebuilds
+  // this whole marker layer, since who's A/B vs a/b depends on the current
+  // selection) — so, unlike line-click cycling where the same tooltip object
+  // just gets new content, here we must explicitly reopen a tooltip on the
+  // freshly-rebuilt marker at the spot that was just clicked, or the list
+  // appears to vanish instead of cycling in place.
+  var markersByKey = {};
   spots.forEach(function(spot) {
-    var names = spot.owners.map(function(o) { return o.path._pathName + ' — ' + o.kind; });
-    var title = spot.owners.length > 1
-      ? names.length + ' paths meet here (click to cycle):\\n• ' + names.join('\\n• ')
-      : names[0] + '\\nClick to open this path';
+    var names = spot.owners.map(function(o) {
+      var row = o.path._pathName + ' — ' + o.kind;
+      return o.path === _highlighted ? '<b>' + row + '</b>' : row;
+    });
+    var label = spot.owners.length > 1
+      ? '<b>' + names.length + ' paths meet here</b> — click to cycle<br>&bull; ' + names.join('<br>&bull; ')
+      : names[0] + '<br><i style="color:#888">Click to open this path</i>';
     var key = spot.ll[0].toFixed(4) + ',' + spot.ll[1].toFixed(4);
     var mk = L.marker(spot.ll, {
-      icon: _endpointIcon(spot.letter, spot.color, title, spot.size),
+      icon: _endpointIcon(spot.letter, spot.color, spot.size),
       interactive: true, keyboard: false, zIndexOffset: 500
     });
+    mk.bindTooltip(label, {direction: 'top', opacity: 0.95, className: 'bt-overlap-tip'});
     mk.on('click', function(e) {
       L.DomEvent.stopPropagation(e);
       var idx = (_endpointCycle[key] || 0) % spot.owners.length;
       _endpointCycle[key] = idx + 1;
       var suffix = spot.owners.length > 1 ? ' (' + (idx+1) + ' of ' + spot.owners.length + ' here)' : '';
+      _lastEndpointClickKey = key;
       _selectPath(spot.owners[idx].path, e.latlng, suffix);
     });
     mk.addTo(_layerGroups.endpoints);
+    markersByKey[key] = mk;
   });
+  if (_lastEndpointClickKey && markersByKey[_lastEndpointClickKey]) {
+    markersByKey[_lastEndpointClickKey].openTooltip();
+  }
+  _lastEndpointClickKey = null;
+}
+
+function _pathStepList() {
+  var list = _paths.slice();
+  list.sort(function(a, b) { return a._pathName < b._pathName ? -1 : a._pathName > b._pathName ? 1 : 0; });
+  return list;
+}
+
+function _pathNavHtml(pl) {
+  var list = _pathStepList();
+  var idx = list.indexOf(pl);
+  var counter = idx === -1 ? '—' : (idx + 1) + ' / ' + list.length;
+  return '<button onclick="event.stopPropagation(); _stepTo(-1)" title="Previous path">&#9664;</button>' +
+         '<span>' + counter + '</span>' +
+         '<button onclick="event.stopPropagation(); _stepTo(1)" title="Next path">&#9654;</button>';
+}
+
+function _stepTo(delta) {
+  var list = _pathStepList();
+  if (!list.length) return;
+  var idx = list.indexOf(_highlighted);
+  idx = idx === -1 ? 0 : (idx + delta + list.length) % list.length;
+  var pl = list[idx];
+  _selectPath(pl, pl.getBounds().getCenter());
+  _map.fitBounds(pl.getBounds(), {padding: [60, 60], maxZoom: 16});
 }
 
 /* Select a path: highlight it, reveal its endpoints, open its panel. Shared by
@@ -2272,7 +2342,7 @@ function _selectPath(pl, latlng, suffix) {
   pl.setStyle({color:'#facc15', weight:7, opacity:1});
   pl.bringToFront();
   _showPathEndpoints(pl);
-  showMapPanel(pl._pathName + (suffix || ''), pl._bodyHtml, latlng || pl.getBounds().getCenter());
+  showMapPanel(pl._pathName + (suffix || ''), pl._bodyHtml, latlng || pl.getBounds().getCenter(), _pathNavHtml(pl));
 }
 
 /* -- Build layers ------------------------------------------------- */
@@ -2296,15 +2366,14 @@ _btPaths.forEach(function(p) {
   pl._decorator.addTo(_layerGroups.arrows);
   pl.bindTooltip('', {sticky: true, direction: 'top', opacity: 0.95, className: 'bt-overlap-tip'});
   pl.on('mouseover', function(e) {
-    var here = _overlappingPathsAt(e.latlng);
-    var html = here.length > 1
-      ? '<b>' + here.length + ' paths overlap here</b> — click to cycle<br>&bull; ' +
-        here.map(function(p) { return p._pathName; }).join('<br>&bull; ')
-      : pl._pathName;
-    pl.setTooltipContent(html);
+    pl.setTooltipContent(_overlapTooltipHtml(_overlappingPathsAt(e.latlng), pl));
   });
   pl.on('click', function(e) {
     L.DomEvent.stopPropagation(e);
+    // The sticky hover tooltip stays open through a click (mouse hasn't left
+    // the path), so it would render on top of the info panel that's about to
+    // open — close it now; it reappears next time the mouse re-enters the path.
+    pl.closeTooltip();
     var here = _overlappingPathsAt(e.latlng);
     if (here.length <= 1) { _selectPath(pl, e.latlng); return; }
     // Same idea as the endpoint-marker cycle: repeated clicks near this spot
@@ -2663,11 +2732,15 @@ function _controlStackBottom(mapEl) {
   return last.getBoundingClientRect().bottom - mapEl.getBoundingClientRect().top;
 }
 
-function showMapPanel(title, bodyHtml, latlng) {
+function showMapPanel(title, bodyHtml, latlng, navHtml) {
   var panel = document.getElementById('mapInfoPanel');
   document.getElementById('mapInfoTitle').textContent = title;
   document.getElementById('mapInfoBody').innerHTML = bodyHtml;
+  var nav = document.getElementById('mapInfoNav');
+  nav.innerHTML = navHtml || '';
+  nav.style.display = navHtml ? 'flex' : 'none';
   panel.style.display = '';
+  document.body.classList.add('map-popup-open');
 
   var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
   if (fsEl && latlng) {
@@ -2700,6 +2773,7 @@ function showMapPanel(title, bodyHtml, latlng) {
 }
 function closeMapPanel() {
   document.getElementById('mapInfoPanel').style.display = 'none';
+  document.body.classList.remove('map-popup-open');
   if (_highlighted) {
     _highlighted.setStyle(pathStyle(_highlighted._pathStatus, false));
     _highlighted.bringToBack();

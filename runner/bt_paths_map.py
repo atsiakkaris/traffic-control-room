@@ -63,6 +63,12 @@ SAMPLE_POINTS     = 16   # points sampled evenly along each path for proximity c
 OVERLAP_M         = 120  # metres apart counts as "running alongside"
 OVERLAP_FRACTION  = 0.5  # fraction of a path's samples that must be this close to the other
 
+# A path traced with only a couple of points is usually a relic of an early,
+# rougher registration pass rather than a deliberately simple short hop —
+# worth a reviewer's eye first when working through a decade of accumulated
+# paths.
+SUSPICIOUS_MIN_POINTS = 5
+
 
 def _sample_points(coords, n=SAMPLE_POINTS):
     if len(coords) <= n:
@@ -204,14 +210,20 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None):
     features = []
     for pid in ids:
         p = paths[pid]
+        coords = p.get("coords") or []
         features.append({
             "id": pid,
             "name": p.get("name") or pid,
-            "coords": p.get("coords") or [],
+            "coords": coords,
+            "suspicious": len(coords) < SUSPICIOUS_MIN_POINTS,
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
-    duplicate_groups_json = json.dumps(duplicate_groups or {})
+    duplicate_groups = duplicate_groups or {}
+    duplicate_groups_json = json.dumps(duplicate_groups)
+    confirmed_dup_count = sum(1 for v in duplicate_groups.values() if v.get("confirmed"))
+    ambiguous_dup_count = sum(1 for v in duplicate_groups.values() if not v.get("confirmed"))
+    suspicious_count = sum(1 for f in features if f["suspicious"])
 
     sensor_list = [
         {"id": sid, "name": s.get("name") or sid, "lat": s["lat"], "lon": s["lon"],
@@ -258,6 +270,12 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
        box-shadow:0 1px 4px rgba(0,0,0,.1);text-align:center;border-top:3px solid #1f4e79}}
 .card .num{{font-size:26px;font-weight:bold;color:#1f4e79}}
 .card .lbl{{font-size:11px;color:#666;margin-top:3px}}
+.card.dup{{border-top-color:#c0392b}}
+.card.dup .num{{color:#c0392b}}
+.card.dup-warn{{border-top-color:#e67e22}}
+.card.dup-warn .num{{color:#e67e22}}
+.card.susp{{border-top-color:#b7791f}}
+.card.susp .num{{color:#b7791f}}
 #map{{flex:1 1 auto;min-height:0;margin:0 24px 24px;border-radius:6px;
       box-shadow:0 1px 6px rgba(0,0,0,.15)}}
 .leaflet-popup-content b{{color:#1a1a2e}}
@@ -283,6 +301,44 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .search-result:hover{{background:#f0f6ff}}
 .search-result .type{{color:#888;font-size:10px;text-transform:uppercase;letter-spacing:.03em}}
 .search-empty{{padding:8px 12px;font-size:12px;color:#888}}
+.sensor-toggle-btn.susp{{background:#0f766e}}
+.sensor-toggle-btn.susp:hover{{background:#0b5c56}}
+.sensor-toggle-btn.susp.active{{background:#b7791f}}
+.sensor-toggle-btn.susp.active:hover{{background:#92600f}}
+.sensor-toggle-btn.export{{background:#27ae60}}
+.sensor-toggle-btn.export:hover{{background:#1e8449}}
+.sensor-toggle-btn.import{{background:#3949ab;margin-top:6px}}
+.sensor-toggle-btn.import:hover{{background:#2c3a82}}
+.inspector{{position:absolute;left:12px;bottom:12px;z-index:1000;width:300px;max-height:60%;
+      display:flex;flex-direction:column;background:#fff;border-radius:8px;
+      box-shadow:0 2px 10px rgba(0,0,0,.35);font-size:12px;overflow:hidden}}
+.inspector-hd{{flex:0 0 auto;background:#1f4e79;color:#fff;padding:7px 10px;
+      display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:bold}}
+.inspector-hd .nav{{display:flex;align-items:center;gap:6px;font-weight:normal}}
+.inspector-hd .nav button{{background:rgba(255,255,255,.18);border:none;color:#fff;border-radius:4px;
+      padding:3px 9px;cursor:pointer;font-size:12px}}
+.inspector-hd .nav button:hover{{background:rgba(255,255,255,.32)}}
+.inspector-hd .nav span{{font-size:11px;opacity:.9;min-width:52px;text-align:center}}
+.inspector-body{{padding:10px 12px;overflow-y:auto}}
+.inspector-body .empty{{color:#888;font-style:italic}}
+.flag-summary{{display:flex;align-items:center;gap:4px;font-size:11px;color:#555;
+      padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid #eee;flex-wrap:wrap}}
+.flag-cycle-toggle{{cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px}}
+.flag-cycle-toggle input{{cursor:pointer;margin:0}}
+.flag-summary-link{{color:#1f4e79;text-decoration:underline;margin-left:auto;cursor:pointer}}
+.flag-list-row{{padding:7px 4px;font-size:12px;cursor:pointer;border-bottom:1px solid #f0f0f0}}
+.flag-list-row:hover{{background:#f4f6f9}}
+.badge{{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:bold;
+      margin:6px 4px 0 0}}
+.badge.suspicious{{background:#fde68a;color:#92400e}}
+.flag-row{{display:flex;gap:6px;margin-top:9px}}
+.flag-row button{{flex:1;border:1px solid #ddd;background:#f8f9fa;border-radius:4px;padding:5px 4px;
+      font-size:11px;cursor:pointer}}
+.flag-row button:hover{{background:#eef1f4}}
+.flag-row button.active-flag{{background:#c0392b;color:#fff;border-color:#c0392b}}
+.flag-row button.active-ok{{background:#27ae60;color:#fff;border-color:#27ae60}}
+.inspector-body textarea{{width:100%;margin-top:6px;font-size:11px;padding:5px;border:1px solid #ddd;
+      border-radius:4px;resize:vertical;min-height:36px;font-family:inherit}}
 </style>
 </head>
 <body>
@@ -296,6 +352,9 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
   <div class="card"><div class="num">{len(features)}</div><div class="lbl">Bluetooth paths</div></div>
   <div class="card"><div class="num">{len(sensor_list)}</div><div class="lbl">API sensors</div></div>
   <div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>
+  <div class="card dup"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>
+  {f'<div class="card dup-warn"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
+  <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
 </div>
 
 <div id="map"></div>
@@ -306,19 +365,37 @@ var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
 
-var map = L.map('map', {{zoomControl:false}}).setView([{center_lat}, {center_lon}], 9);
+// doubleClickZoom off: cycling through a stack of overlapping paths means
+// clicking the same spot repeatedly, which Leaflet's default dblclick
+// handling would otherwise read as "zoom in" and yank the view out from
+// under you mid-review.
+var map = L.map('map', {{zoomControl:false, doubleClickZoom:false}}).setView([{center_lat}, {center_lon}], 9);
 L.control.zoom({{position: 'topright'}}).addTo(map);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   attribution: '© OpenStreetMap contributors', maxZoom: 19
 }}).addTo(map);
+
+var SUSPICIOUS_MIN_POINTS = {SUSPICIOUS_MIN_POINTS};
+var SUSPICIOUS_ONLY = false;
+
+// Reviewer's findings, keyed by path id, persisted locally so a multi-session
+// review of ~500 legacy paths doesn't lose progress on reload: {{id: {{status: 'flag'|'ok', note: string}}}}
+var FLAGS = {{}};
+try {{ FLAGS = JSON.parse(localStorage.getItem('btPathFlags') || '{{}}'); }} catch (e) {{ FLAGS = {{}}; }}
+function saveFlags() {{ localStorage.setItem('btPathFlags', JSON.stringify(FLAGS)); }}
 
 /* -- Paths: click to highlight ------------------------------------ */
 var bounds = [];
 var pathObjs = [];
 var selectedId = null;
 
+// Selected path gets a fixed high-contrast colour of its own (not just a
+// thicker version of its palette colour) so it's unmistakable even against
+// a dozen overlapping neighbours of similar hue.
+var SELECTED_COLOR = '#facc15';
+
 function baseStyle(f, selected) {{
-  if (selected) return {{color: f.color, weight: 9, opacity: 1}};
+  if (selected) return {{color: SELECTED_COLOR, weight: 10, opacity: 1}};
   return {{color: f.color, weight: 4, opacity: 0.8}};
 }}
 
@@ -374,16 +451,27 @@ function _overlappingPathsAt(latlng, tol) {{
   }});
 }}
 
+// Bolds whichever path is currently selected so, when cycling through a
+// stack via repeated clicks, the list reflects which one you're now on.
+function _overlapTooltipHtml(here, f) {{
+  if (here.length <= 1) return f.name;
+  var rows = here.map(function(o) {{
+    return o.feature.id === selectedId ? '<b>' + o.feature.name + '</b>' : o.feature.name;
+  }});
+  return '<b>' + here.length + ' paths overlap here</b> — click to cycle<br>&bull; ' + rows.join('<br>&bull; ');
+}}
+
 /* -- Path start / end markers --------------------------------------- */
 var endpointLayer = L.layerGroup().addTo(map);
 var _endpointCycle = {{}};
+var _lastEndpointClickKey = null;
 
-function _endpointIcon(letter, color, title, size) {{
+function _endpointIcon(letter, color, size) {{
   size = size || 19;
   var fs = size >= 18 ? 11 : 9;
   return L.divIcon({{
     className: '',
-    html: '<div title="'+title+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;'+
+    html: '<div style="width:'+size+'px;height:'+size+'px;border-radius:50%;'+
           'background:'+color+';border:2.5px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,0.5);'+
           'display:flex;align-items:center;justify-content:center;'+
           'font-size:'+fs+'px;font-weight:700;color:#fff;font-family:sans-serif">'+letter+'</div>',
@@ -400,8 +488,8 @@ function _showPathEndpoints(pl) {{
   if (!pl._startLL || !pl._endLL) return;
 
   var wanted = [
-    {{ll: pl._startLL, letter: 'A', color: '#1d9e75', size: 19, name: pl._pathName, kind: 'start'}},
-    {{ll: pl._endLL,   letter: 'B', color: '#1a1a2e', size: 19, name: pl._pathName, kind: 'end'}}
+    {{ll: pl._startLL, letter: 'A', color: '#1d9e75', size: 19, name: pl._pathName, id: pl._pathId, kind: 'start'}},
+    {{ll: pl._endLL,   letter: 'B', color: '#1a1a2e', size: 19, name: pl._pathName, id: pl._pathId, kind: 'end'}}
   ];
   pathObjs.forEach(function(o) {{
     var p = o.polyline;
@@ -412,8 +500,8 @@ function _showPathEndpoints(pl) {{
       _distPointToPolyline(p._startLL,  pl._coords) <= _ADJACENT_TOL_M ||
       _distPointToPolyline(p._endLL,    pl._coords) <= _ADJACENT_TOL_M;
     if (!touches) return;
-    wanted.push({{ll: p._startLL, letter: 'a', color: '#7bc4a4', size: 15, name: p._pathName, kind: 'start'}});
-    wanted.push({{ll: p._endLL,   letter: 'b', color: '#6b7280', size: 15, name: p._pathName, kind: 'end'}});
+    wanted.push({{ll: p._startLL, letter: 'a', color: '#7bc4a4', size: 15, name: p._pathName, id: p._pathId, kind: 'start'}});
+    wanted.push({{ll: p._endLL,   letter: 'b', color: '#6b7280', size: 15, name: p._pathName, id: p._pathId, kind: 'end'}});
   }});
 
   // Merge markers landing on the same point so a busy junction gets one
@@ -422,22 +510,47 @@ function _showPathEndpoints(pl) {{
   wanted.forEach(function(w) {{
     for (var i = 0; i < spots.length; i++) {{
       if (_metresBetween(spots[i].ll, w.ll) <= _ADJACENT_TOL_M) {{
-        spots[i].owners.push({{name: w.name, kind: w.kind}});
+        spots[i].owners.push({{name: w.name, id: w.id, kind: w.kind}});
         return;
       }}
     }}
     spots.push({{ll: w.ll, letter: w.letter, color: w.color, size: w.size,
-                owners: [{{name: w.name, kind: w.kind}}]}});
+                owners: [{{name: w.name, id: w.id, kind: w.kind}}]}});
   }});
 
+  // Cycling an endpoint spot re-selects a different path (which rebuilds
+  // this whole marker layer, since who's A/B vs a/b depends on the current
+  // selection) — so, unlike line-click cycling where the same tooltip object
+  // just gets new content, here we must explicitly reopen a tooltip on the
+  // freshly-rebuilt marker at the spot that was just clicked, or the list
+  // appears to vanish instead of cycling in place.
+  var markersByKey = {{}};
   spots.forEach(function(spot) {{
-    var names = spot.owners.map(function(o) {{ return o.name + ' — ' + o.kind; }});
-    var title = spot.owners.length > 1
-      ? names.length + ' paths meet here:\\n• ' + names.join('\\n• ')
-      : names[0];
-    L.marker(spot.ll, {{icon: _endpointIcon(spot.letter, spot.color, title, spot.size), interactive: false}})
-      .addTo(endpointLayer);
+    var names = spot.owners.map(function(o) {{
+      var row = o.name + ' — ' + o.kind;
+      return o.id === selectedId ? '<b>' + row + '</b>' : row;
+    }});
+    var label = spot.owners.length > 1
+      ? '<b>' + names.length + ' paths meet here</b> — click to cycle<br>&bull; ' + names.join('<br>&bull; ')
+      : names[0] + '<br><i style="color:#888">Click to select</i>';
+    var key = 'pt:' + spot.ll[0].toFixed(4) + ',' + spot.ll[1].toFixed(4);
+    var mk = L.marker(spot.ll, {{icon: _endpointIcon(spot.letter, spot.color, spot.size),
+                                interactive: true, zIndexOffset: 500}});
+    mk.bindTooltip(label, {{direction: 'top', opacity: 0.95}});
+    mk.on('click', function(e) {{
+      L.DomEvent.stopPropagation(e);
+      var idx = (_endpointCycle[key] || 0) % spot.owners.length;
+      _endpointCycle[key] = idx + 1;
+      _lastEndpointClickKey = key;
+      _applySelectionAndEndpoints(spot.owners[idx].id);
+    }});
+    mk.addTo(endpointLayer);
+    markersByKey[key] = mk;
   }});
+  if (_lastEndpointClickKey && markersByKey[_lastEndpointClickKey]) {{
+    markersByKey[_lastEndpointClickKey].openTooltip();
+  }}
+  _lastEndpointClickKey = null;
 }}
 
 /* Select-by-id keeps the original toggle behaviour (click the same path again
@@ -445,9 +558,10 @@ function _showPathEndpoints(pl) {{
 function _applySelectionAndEndpoints(id) {{
   selectedId = id;
   applySelection();
-  if (id === null) {{ _clearPathEndpoints(); return; }}
+  if (id === null) {{ _clearPathEndpoints(); renderInspector(); return; }}
   var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
   if (obj) _showPathEndpoints(obj.polyline);
+  renderInspector();
 }}
 
 function selectPath(id) {{
@@ -459,30 +573,29 @@ FEATURES.forEach(function(f) {{
   var latlngs = f.coords.map(function(c) {{ return [c[0], c[1]]; }});
   var pl = L.polyline(latlngs, {{color: f.color, weight: 4, opacity: 0.8}}).addTo(map);
   pl._pathName = f.name;
+  pl._pathId   = f.id;
   pl._startLL  = latlngs[0];
   pl._endLL    = latlngs[latlngs.length - 1];
   pl._coords   = latlngs;
-  var popupHtml = '<b>' + f.name + '</b><br>Path ID: ' + f.id + '<br>' + f.coords.length + ' points';
+  var detailHtml = '<b>' + f.name + '</b><br>Path ID: ' + f.id + '<br>' + f.coords.length + ' points';
   var dup = DUPLICATE_GROUPS[f.name];
   if (dup) {{
     var otherIds = dup.ids.filter(function(id) {{ return id !== f.id; }});
-    popupHtml += '<br><span style="color:#c0392b;font-weight:bold">⚠ Duplicate registration</span>' +
+    detailHtml += '<br><span style="color:#c0392b;font-weight:bold">⚠ Duplicate registration</span>' +
                  '<br>Also registered as: ID ' + otherIds.join(', ID ') +
                  '<br>Status match: ' + Math.round(dup.match_pct * 100) + '%';
     if (!dup.confirmed) {{
-      popupHtml += '<br><span style="color:#e67e22">Not a clean duplicate — needs manual check</span>';
+      detailHtml += '<br><span style="color:#e67e22">Not a clean duplicate — needs manual check</span>';
     }}
   }}
-  pl.bindPopup(popupHtml);
-  pl.bindTooltip('', {{sticky: true, direction: 'top', opacity: 0.95}});
+  // Selection detail (id, point count, duplicate warning, flag/note controls)
+  // lives in the fixed Inspector panel, not a popup here — a popup anchored
+  // at the click point fights the sticky hover tooltip for the same spot on
+  // screen; a panel docked in a corner never competes with it.
+  pl.bindTooltip('', {{sticky: true, direction: 'top', opacity: 0.95, className: 'bt-overlap-tip'}});
   pl.on('mouseover', function(e) {{
     if (selectedId === null) pl.setStyle({{weight: 7}});
-    var here = _overlappingPathsAt(e.latlng);
-    var tip = here.length > 1
-      ? '<b>' + here.length + ' paths overlap here</b> — click to cycle<br>&bull; ' +
-        here.map(function(o) {{ return o.feature.name; }}).join('<br>&bull; ')
-      : f.name;
-    pl.setTooltipContent(tip);
+    pl.setTooltipContent(_overlapTooltipHtml(_overlappingPathsAt(e.latlng), f));
   }});
   pl.on('mouseout',  function() {{ if (selectedId === null) pl.setStyle({{weight: 4}}); }});
   pl.on('click', function(e) {{
@@ -498,9 +611,7 @@ FEATURES.forEach(function(f) {{
     _endpointCycle[key] = idx + 1;
     var chosen = here[idx];
     _applySelectionAndEndpoints(chosen.feature.id);
-    var suffix = '<br><i style="color:#888">(' + (idx+1) + ' of ' + here.length + ' here)</i>';
-    chosen.polyline.setPopupContent(chosen.popupHtml + suffix);
-    chosen.polyline.openPopup(e.latlng);
+    pl.setTooltipContent(_overlapTooltipHtml(here, f));
   }});
   var decorator = L.polylineDecorator(pl, {{
     patterns: [{{
@@ -511,10 +622,331 @@ FEATURES.forEach(function(f) {{
       }})
     }}]
   }}).addTo(map);
-  pathObjs.push({{feature: f, polyline: pl, decorator: decorator, popupHtml: popupHtml}});
+  pathObjs.push({{feature: f, polyline: pl, decorator: decorator, detailHtml: detailHtml}});
   bounds = bounds.concat(latlngs);
 }});
 map.on('click', function() {{ selectPath(null); }});
+
+/* -- Suspicious-path styling ----------------------------------------- */
+// Baseline dashed outline for low-point paths so they stand out even before
+// you click anything — the whole point of a systematic review is spotting
+// these without having to hover every single one.
+pathObjs.forEach(function(o) {{
+  if (o.feature.suspicious) o.polyline.setStyle({{dashArray: '2,7'}});
+}});
+
+/* -- Sequential step-through ------------------------------------------ */
+// Walking every path in a fixed order — not just whatever happens to be
+// stacked under a click — is how you actually get through several hundred
+// of them systematically instead of only sampling wherever you clicked.
+//
+// Cycling alphabetically through all 496 is useless once you've actually
+// flagged a handful worth revisiting — the next one alphabetically is
+// probably nowhere near the last, geographically. "Cycle flagged only"
+// narrows Prev/Next to just the paths you've marked, in whichever order
+// still makes sense once the set is small.
+var CYCLE_FLAGGED_ONLY = false;
+function stepList() {{
+  if (CYCLE_FLAGGED_ONLY && Object.keys(FLAGS).filter(function(id) {{ return FLAGS[id] && FLAGS[id].status; }}).length === 0) {{
+    CYCLE_FLAGGED_ONLY = false;   // nothing left to cycle through — fall back automatically
+  }}
+  // While the flagged list itself is open, Prev/Next stepping through all ~500
+  // paths would make the bold-current-row indicator basically never light up
+  // — showingFlagList forces the same scoping as the checkbox, whether or not
+  // it's ticked.
+  var useFlaggedOnly = CYCLE_FLAGGED_ONLY || showingFlagList;
+  var base = useFlaggedOnly
+    ? pathObjs.filter(function(o) {{ return FLAGS[o.feature.id] && FLAGS[o.feature.id].status; }})
+    : pathObjs.filter(function(o) {{ return !SUSPICIOUS_ONLY || o.feature.suspicious; }});
+  var list = base.map(function(o) {{ return o.feature; }});
+  list.sort(function(a, b) {{ return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; }});
+  return list;
+}}
+function stepSelect(id) {{
+  _applySelectionAndEndpoints(id);
+  var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
+  if (obj) map.fitBounds(obj.polyline.getBounds(), {{padding: [60, 60], maxZoom: 16}});
+}}
+function stepTo(delta) {{
+  var list = stepList();
+  if (!list.length) return;
+  var idx = list.findIndex(function(f) {{ return f.id === selectedId; }});
+  idx = idx === -1 ? 0 : (idx + delta + list.length) % list.length;
+  stepSelect(list[idx].id);
+}}
+
+/* -- Flagging + export -------------------------------------------------- */
+var flagLayer = L.layerGroup().addTo(map);
+var flagMarkers = {{}};
+
+// A bare emoji has no background of its own, so a red flag glyph disappears
+// against a red (issue-coloured) path underneath it. A solid-fill teardrop
+// pin — different colour, different silhouette from both the lines and the
+// round A/B endpoint markers, tip anchored on the path rather than centred
+// on it — stays legible regardless of what's under it.
+function _flagIcon(status) {{
+  var color = status === 'flag' ? '#c0392b' : '#1d9e75';
+  var symbol = status === 'flag' ? '!' : '&#10003;';
+  return L.divIcon({{
+    className: '',
+    html: '<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);' +
+          'background:' + color + ';border:2.5px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.5);' +
+          'display:flex;align-items:center;justify-content:center">' +
+          '<span style="transform:rotate(45deg);font-size:12px;color:#fff;font-weight:800;' +
+          'font-family:sans-serif">' + symbol + '</span></div>',
+    iconSize: [22, 26], iconAnchor: [11, 26]
+  }});
+}}
+
+function updateFlagMarker(id) {{
+  if (flagMarkers[id]) {{ flagLayer.removeLayer(flagMarkers[id]); delete flagMarkers[id]; }}
+  var status = (FLAGS[id] || {{}}).status;
+  if (!status) return;
+  var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
+  if (!obj || !obj.polyline._coords.length) return;
+  var mid = obj.polyline._coords[Math.floor(obj.polyline._coords.length / 2)];
+  var m = L.marker(mid, {{icon: _flagIcon(status), interactive: true, zIndexOffset: 1000}});
+  m.bindTooltip((status === 'flag' ? 'Flagged' : 'OK’d') + ': ' + obj.feature.name,
+                {{direction: 'top', opacity: 0.95}});
+  m.on('click', function(e) {{ L.DomEvent.stopPropagation(e); stepSelect(id); }});
+  m.addTo(flagLayer);
+  flagMarkers[id] = m;
+}}
+function setFlag(id, status) {{
+  if (!FLAGS[id]) FLAGS[id] = {{}};
+  FLAGS[id].status = (FLAGS[id].status === status) ? '' : status;
+  saveFlags();
+  updateFlagMarker(id);
+  renderInspector();
+}}
+function setNote(id, note) {{
+  if (!FLAGS[id]) FLAGS[id] = {{}};
+  FLAGS[id].note = note;
+  saveFlags();
+}}
+// Prune flags for paths retired from the API (e.g. removed as duplicates) —
+// otherwise they'd linger forever as dead entries: unclickable in the list
+// (nothing left in pathObjs to select) and shown by bare ID since the name
+// lookup fails too.
+(function _pruneOrphanedFlags() {{
+  var knownIds = {{}};
+  pathObjs.forEach(function(o) {{ knownIds[o.feature.id] = true; }});
+  var changed = false;
+  Object.keys(FLAGS).forEach(function(id) {{
+    if (!knownIds[id]) {{ delete FLAGS[id]; changed = true; }}
+  }});
+  if (changed) saveFlags();
+}})();
+Object.keys(FLAGS).forEach(updateFlagMarker);
+
+function exportFindings() {{
+  var rows = [['Path ID', 'Name', 'Status', 'Note', 'Suspicious', 'Duplicate']];
+  Object.keys(FLAGS).forEach(function(id) {{
+    var flag = FLAGS[id];
+    if (!flag || (!flag.status && !flag.note)) return;
+    var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
+    var name = obj ? obj.feature.name : id;
+    var susp = obj && obj.feature.suspicious ? 'yes' : 'no';
+    var dup = DUPLICATE_GROUPS[name] ? 'yes' : 'no';
+    rows.push([id, name, flag.status || '', (flag.note || '').replace(/\\n/g, ' '), susp, dup]);
+  }});
+  if (rows.length === 1) {{ alert('No flagged paths yet — use Flag/OK in the panel at bottom-left first.'); return; }}
+  var csv = rows.map(function(r) {{
+    return r.map(function(v) {{ return '"' + String(v).replace(/"/g, '""') + '"'; }}).join(',');
+  }}).join('\\n');
+  var blob = new Blob([csv], {{type: 'text/csv'}});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bt_path_review_findings.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}}
+
+// Minimal RFC4180-ish CSV parser — handles quoted fields, escaped quotes
+// (""), and both CRLF and LF line endings, matching what exportFindings()
+// itself writes (and what Excel/Sheets produce when re-saving that file).
+function _parseCsv(text) {{
+  var rows = [], row = [], field = '', inQuotes = false;
+  for (var i = 0; i < text.length; i++) {{
+    var c = text[i];
+    if (inQuotes) {{
+      if (c === '"') {{
+        if (text[i + 1] === '"') {{ field += '"'; i++; }} else {{ inQuotes = false; }}
+      }} else {{
+        field += c;
+      }}
+    }} else if (c === '"') {{
+      inQuotes = true;
+    }} else if (c === ',') {{
+      row.push(field); field = '';
+    }} else if (c === '\\r') {{
+      // skip; \\n handles the line break
+    }} else if (c === '\\n') {{
+      row.push(field); rows.push(row); row = []; field = '';
+    }} else {{
+      field += c;
+    }}
+  }}
+  if (field.length || row.length) {{ row.push(field); rows.push(row); }}
+  return rows;
+}}
+
+// Re-imports a CSV from exportFindings() (this tool's own, or one edited in
+// Excel/Sheets) — the only way findings survive a different browser, a
+// different machine, or localStorage getting cleared. Merges by Path ID:
+// rows in the file overwrite that path's status/note, anything already
+// flagged locally but absent from the file is left alone.
+function importFindings(file) {{
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function() {{
+    var rows = _parseCsv(String(reader.result));
+    if (!rows.length) {{ alert("That file looks empty."); return; }}
+    var header = rows[0].map(function(h) {{ return h.trim().toLowerCase(); }});
+    var idIdx = header.indexOf('path id');
+    var statusIdx = header.indexOf('status');
+    var noteIdx = header.indexOf('note');
+    if (idIdx === -1) {{
+      alert("That doesn't look like a findings CSV exported from this tool — no \\"Path ID\\" column.");
+      return;
+    }}
+    var imported = 0;
+    for (var r = 1; r < rows.length; r++) {{
+      var row = rows[r];
+      var id = row[idIdx];
+      if (!id) continue;
+      var status = statusIdx !== -1 ? row[statusIdx] : '';
+      var note = noteIdx !== -1 ? row[noteIdx] : '';
+      if (!status && !note) continue;
+      FLAGS[id] = {{status: status || '', note: note || ''}};
+      updateFlagMarker(id);
+      imported++;
+    }}
+    saveFlags();
+    renderInspector();
+    alert("Imported " + imported + " path finding(s).");
+  }};
+  reader.readAsText(file);
+}}
+
+/* -- Inspector panel: selection detail, suspicious badge, flag/note ---- */
+var insBody, insCounter;
+(function() {{
+  var wrap = L.DomUtil.create('div', 'inspector', map.getContainer());
+  L.DomEvent.disableClickPropagation(wrap);
+  L.DomEvent.disableScrollPropagation(wrap);
+  var hd = L.DomUtil.create('div', 'inspector-hd', wrap);
+  hd.appendChild(document.createTextNode('Path review'));
+  var nav = L.DomUtil.create('div', 'nav', hd);
+  var prevBtn = L.DomUtil.create('button', '', nav);
+  prevBtn.innerHTML = '&#9664;'; prevBtn.title = 'Previous path';
+  insCounter = L.DomUtil.create('span', '', nav);
+  var nextBtn = L.DomUtil.create('button', '', nav);
+  nextBtn.innerHTML = '&#9654;'; nextBtn.title = 'Next path';
+  prevBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); stepTo(-1); }};
+  nextBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); stepTo(1); }};
+  insBody = L.DomUtil.create('div', 'inspector-body', wrap);
+}})();
+
+// Once you've flagged/OK'd a path, clicking around to find it again isn't
+// realistic across ~500 paths — this is the way back to any of them.
+var showingFlagList = false;
+function _flaggedList() {{
+  return Object.keys(FLAGS)
+    .filter(function(id) {{ return FLAGS[id] && FLAGS[id].status; }})
+    .map(function(id) {{
+      var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
+      return {{id: id, name: obj ? obj.feature.name : id, status: FLAGS[id].status}};
+    }})
+    .sort(function(a, b) {{ return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; }});
+}}
+function _flagSummaryHtml() {{
+  var flagged = _flaggedList();
+  if (!flagged.length) return '';
+  var flagCount = flagged.filter(function(x) {{ return x.status === 'flag'; }}).length;
+  var okCount = flagged.filter(function(x) {{ return x.status === 'ok'; }}).length;
+  return '<div class="flag-summary">' +
+    (flagCount ? '&#128681;' + flagCount + ' ' : '') + (okCount ? '&#9989;' + okCount + ' ' : '') +
+    '<label class="flag-cycle-toggle"><input type="checkbox" id="cycleFlaggedChk"' +
+      (CYCLE_FLAGGED_ONLY || showingFlagList ? ' checked' : '') + (showingFlagList ? ' disabled' : '') +
+      '> Cycle flagged only</label>' +
+    '<span class="flag-summary-link" id="flagSummaryToggle">' + (showingFlagList ? 'Hide list' : 'View list') + '</span>' +
+    '</div>';
+}}
+function _wireFlagSummaryToggle() {{
+  var link = document.getElementById('flagSummaryToggle');
+  if (link) link.onclick = function(e) {{ L.DomEvent.stopPropagation(e); showingFlagList = !showingFlagList; renderInspector(); }};
+  var chk = document.getElementById('cycleFlaggedChk');
+  if (chk) {{
+    chk.onclick = function(e) {{ L.DomEvent.stopPropagation(e); }};
+    chk.onchange = function() {{ CYCLE_FLAGGED_ONLY = chk.checked; renderInspector(); }};
+  }}
+}}
+
+function renderInspector() {{
+  var list = stepList();
+  var flagSummary = _flagSummaryHtml();
+
+  if (showingFlagList) {{
+    var flagged = _flaggedList();
+    // Bolds whichever path is currently selected, same as the overlap-list
+    // tooltip does — stepping with &#9664; &#9654; while this list is open should
+    // show which one you're now looking at, not just move the map underneath.
+    var rows = flagged.map(function(x) {{
+      var icon = x.status === 'flag' ? '&#128681;' : '&#9989;';
+      var label = icon + ' ' + x.name;
+      if (x.id === selectedId) label = '<b>' + label + '</b>';
+      return '<div class="flag-list-row" data-id="' + x.id + '">' + label + '</div>';
+    }}).join('');
+    insBody.innerHTML = flagSummary + (flagged.length ? rows : '<div class="empty">Nothing flagged yet.</div>');
+    Array.prototype.forEach.call(insBody.querySelectorAll('.flag-list-row'), function(row) {{
+      row.onclick = function(e) {{
+        L.DomEvent.stopPropagation(e);
+        stepSelect(row.getAttribute('data-id'));
+      }};
+    }});
+    insCounter.textContent = flagged.length + ' flagged';
+    _wireFlagSummaryToggle();
+    return;
+  }}
+
+  if (selectedId === null) {{
+    insBody.innerHTML = flagSummary + '<div class="empty">Click a path, or use &#9664; &#9654; to step through ' +
+      (SUSPICIOUS_ONLY ? 'the ' + list.length + ' suspicious paths' : 'all ' + list.length + ' paths') + '.</div>';
+    insCounter.textContent = list.length ? '0 / ' + list.length : '';
+    _wireFlagSummaryToggle();
+    return;
+  }}
+  var obj = pathObjs.filter(function(p) {{ return p.feature.id === selectedId; }})[0];
+  if (!obj) return;
+  var f = obj.feature;
+  var idx = list.findIndex(function(x) {{ return x.id === selectedId; }});
+  insCounter.textContent = idx === -1 ? '—' : (idx + 1) + ' / ' + list.length;
+
+  var susp = f.suspicious
+    ? '<span class="badge suspicious" title="Fewer than ' + SUSPICIOUS_MIN_POINTS + ' points">Suspicious</span>'
+    : '';
+  insBody.innerHTML = flagSummary + obj.detailHtml + susp +
+    '<div class="flag-row"><button id="flagBtn">&#128681; Flag</button><button id="okBtn">&#9989; OK</button></div>' +
+    '<textarea id="insNote" placeholder="Notes for this path…"></textarea>';
+
+  var flagState = (FLAGS[f.id] || {{}}).status || '';
+  var flagBtn = document.getElementById('flagBtn'), okBtn = document.getElementById('okBtn');
+  flagBtn.classList.toggle('active-flag', flagState === 'flag');
+  okBtn.classList.toggle('active-ok', flagState === 'ok');
+  // Both buttons replace insBody's contents (to refresh flag state), and that
+  // DOM mutation mid-click can let the click "escape" disableClickPropagation
+  // — stop it explicitly before triggering the refresh, or the click reaches
+  // the map underneath and deselects the very path being flagged.
+  flagBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); setFlag(f.id, 'flag'); }};
+  okBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); setFlag(f.id, 'ok'); }};
+  var noteEl = document.getElementById('insNote');
+  noteEl.value = (FLAGS[f.id] || {{}}).note || '';
+  noteEl.onchange = function() {{ setNote(f.id, noteEl.value); }};
+  _wireFlagSummaryToggle();
+}}
+renderInspector();
 
 /* -- Bluetooth sensor inventory (API / local DB) -------------------- */
 var sensorLayer = L.layerGroup();
@@ -585,6 +1017,63 @@ var apiToggleCtl = new (makeToggle('API sensors', sensorLayer))();
 var refToggleCtl = new (makeToggle('Spreadsheet sensors', refLayer, 'ref'))();
 map.addControl(apiToggleCtl);
 map.addControl(refToggleCtl);
+
+var SuspiciousToggle = L.Control.extend({{
+  options: {{position: 'topright'}},
+  onAdd: function() {{
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn susp');
+    btn.innerHTML = 'Suspicious only: OFF';
+    L.DomEvent.disableClickPropagation(btn);
+    btn.onclick = function(e) {{
+      L.DomEvent.stopPropagation(e);
+      SUSPICIOUS_ONLY = !SUSPICIOUS_ONLY;
+      btn.innerHTML = 'Suspicious only: ' + (SUSPICIOUS_ONLY ? 'ON' : 'OFF');
+      btn.classList.toggle('active', SUSPICIOUS_ONLY);
+      pathObjs.forEach(function(o) {{
+        var show = !SUSPICIOUS_ONLY || o.feature.suspicious;
+        var has = map.hasLayer(o.polyline);
+        if (show && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
+        if (!show && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
+      }});
+      renderInspector();
+    }};
+    return btn;
+  }}
+}});
+map.addControl(new SuspiciousToggle());
+
+var ExportCtl = L.Control.extend({{
+  options: {{position: 'topright'}},
+  onAdd: function() {{
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn export');
+    btn.innerHTML = 'Export findings &#8659;';
+    L.DomEvent.disableClickPropagation(btn);
+    btn.onclick = exportFindings;
+    return btn;
+  }}
+}});
+map.addControl(new ExportCtl());
+
+var ImportCtl = L.Control.extend({{
+  options: {{position: 'topright'}},
+  onAdd: function() {{
+    var wrap = L.DomUtil.create('div');
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn import', wrap);
+    btn.innerHTML = 'Import findings &#8657;';
+    var fileInput = L.DomUtil.create('input', '', wrap);
+    fileInput.type = 'file';
+    fileInput.accept = '.csv';
+    fileInput.style.display = 'none';
+    L.DomEvent.disableClickPropagation(wrap);
+    btn.onclick = function() {{ fileInput.click(); }};
+    fileInput.onchange = function() {{
+      importFindings(fileInput.files[0]);
+      fileInput.value = '';   // allow re-importing the same file
+    }};
+    return wrap;
+  }}
+}});
+map.addControl(new ImportCtl());
 
 // Turns a toggleable layer back on (and syncs its button) if search jumps to
 // something currently hidden — otherwise the marker/popup a search result
