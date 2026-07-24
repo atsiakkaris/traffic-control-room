@@ -276,6 +276,48 @@ implicit, untested contract with `tests.py`'s message wording.
 
 ---
 
+## 6a. The BT paths review tool (`runner/bt_paths_map.py`)
+
+A separate, standalone generator — not part of the daily test run — for
+manually auditing the ~500 legacy Bluetooth travel-time paths (built up over
+10 years, many overlapping or duplicated). It reads `bt_path_coords` and the
+Bluetooth `sensor_coords` straight from the DB and renders a self-contained
+Leaflet map with no other groups and no health data.
+
+- **Duplicate detection** (`find_duplicate_groups`) — paths sharing the same
+  name are compared by status-history match percentage; a near-100% match is
+  auto-collapsed to one entry (the rest noted in the console output), a
+  partial match is left for manual review (flagged in the UI, not collapsed).
+  `--show-duplicates` disables collapsing entirely, for eyeballing every
+  registration before deciding what to retire from the API.
+- **Overlap detection** — point-to-polyline distance checks flag paths whose
+  lines run suspiciously close together; clicking a line or endpoint marker
+  cycles through the overlapping candidates in place, bolding whichever one is
+  currently selected.
+- **Reviewer findings persist client-side only** — flagging a path OK/problem
+  and any note is kept in the browser's `localStorage` (key `btPathFlags`),
+  never sent anywhere. This means findings are per-browser/per-machine and
+  are lost on a fresh profile — the **CSV export/import** buttons exist
+  specifically so a reviewer can back up their findings or hand them to
+  someone else, merging by path ID without wiping local-only entries. Flags
+  for paths no longer present in the API (retired/removed) are silently
+  pruned on load rather than lingering as orphaned entries.
+- **Cycling scope** — Prev/Next normally step through all paths alphabetically;
+  opening the flagged-paths list forces cycling to be scoped to just that list
+  (otherwise "next" is nearly useless — the next alphabetical path can be
+  anywhere on the map).
+
+**Sharing with colleagues:** `python runner/bt_paths_map.py --publish` (via
+`publish_bt_map.bat`) additionally writes the generated page to
+`docs/bt-paths-map.html`, which is tracked in git and served by GitHub Pages
+alongside the main dashboard (Pages source is `main` / `/ (root)`, so nothing
+under `docs/` needs a separate Pages config). `index.html` at the repo root is
+a small tabbed landing page — plain iframes, no build step — so one URL
+(`https://atsiakkaris.github.io/traffic-control-room/`) can switch between the
+live dashboard and this tool instead of needing two separate links.
+
+---
+
 ## 7. Ownership & commissioning (`runner/qa.py`, `update_projects.py`)
 
 The API can tell you a sensor exists and whether it's currently working — it

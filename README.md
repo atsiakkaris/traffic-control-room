@@ -6,9 +6,38 @@ Automated health monitoring for Cyprus traffic infrastructure. Tests run every 6
 
 ## Live Dashboard
 
-**[View the latest report here→](https://atsiakkaris.github.io/traffic-control-room/reports/latest.html)**
+**[Open the site →](https://atsiakkaris.github.io/traffic-control-room/)**
 
-It updates automatically within ~1 minute of each scheduled run.
+A tabbed landing page ([index.html](index.html)) switches between the **Dashboard**
+(updates automatically within ~1 minute of each scheduled run) and the
+**BT Paths Map** (see below).
+
+---
+
+## BT Paths Review Tool
+
+A standalone tool (`runner/bt_paths_map.py`) for manually auditing the ~500
+legacy Bluetooth travel-time paths — many overlapping or duplicated after 10
+years of additions. It shows just the BT paths and their anchor sensors on a
+Leaflet map, with:
+
+- **Duplicate detection** — same-name paths with matching status history are
+  auto-collapsed to one; partial matches are flagged for manual review instead
+  (`--show-duplicates` shows every registration uncollapsed)
+- **Overlap detection** — click a line or endpoint marker to cycle through
+  paths running suspiciously close together
+- **Per-path flag/note** with local persistence, and CSV export/import so
+  findings can be backed up or shared between reviewers (see caveat below)
+- **Cycle flagged only** — step through just the flagged paths instead of all
+  ~500 alphabetically
+
+Run it locally with `bt_paths_map.bat` (opens `reports/bt_paths_map.html`,
+gitignored). ⚠️ Flags/notes are saved in your **browser's local storage** —
+they don't sync across machines or browsers and aren't backed up anywhere;
+export to CSV periodically if you want to keep them.
+
+To update the copy shared with colleagues at the link above, run
+`publish_bt_map.bat`, then commit and push `docs/bt-paths-map.html`.
 
 ---
 
@@ -149,11 +178,16 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   ├── labels.py               ← Shared human-readable sensor names (report + digest)
 │   ├── qa.py                   ← Reference-sheet ↔ API coordinate matching (ownership + commissioning)
 │   ├── update_projects.py      ← Refresh sensor→project + commissioning in the DB after editing the workbook
-│   └── digest.py               ← Weekly digest email builder and sender
+│   ├── digest.py               ← Weekly digest email builder and sender
+│   └── bt_paths_map.py         ← Standalone BT path review map (duplicate/overlap detection, flag/note, CSV export)
 ├── results/
 │   └── history.db              ← SQLite DB (auto-committed after each run)
 ├── reports/
-│   └── latest.html             ← Generated dashboard (auto-committed after each run)
+│   ├── latest.html             ← Generated dashboard (auto-committed after each run)
+│   └── bt_paths_map.html       ← Local BT paths review map (gitignored — regenerate with bt_paths_map.bat)
+├── docs/
+│   └── bt-paths-map.html       ← Published copy of the BT paths map (GitHub Pages, updated via publish_bt_map.bat)
+├── index.html                  ← Tabbed landing page (GitHub Pages root) switching Dashboard / BT Paths Map
 ├── QA Locations.xlsx           ← Reference equipment inventory (gitignored — local/cloud only)
 ├── .github/workflows/
 │   ├── daily_tests.yml         ← GitHub Actions workflow (runs pytest, then the API tests)
@@ -167,6 +201,9 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 ├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
 ├── update_projects.bat         ← Refresh ownership/commissioning in the DB from QA Locations.xlsx
 ├── qa_tdu.bat / qa_bt.bat / qa_vms.bat  ← Open the per-group QA matching report (needs QA Locations.xlsx)
+├── bt_paths_map.bat             ← Open the local BT paths review map
+├── bt_paths_map_dupes.bat        ← Same, but showing every duplicate registration uncollapsed
+├── publish_bt_map.bat            ← Regenerate + write the shared copy to docs/bt-paths-map.html
 └── requirements.txt
 ```
 

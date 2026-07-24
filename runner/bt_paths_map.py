@@ -34,6 +34,7 @@ if _env_path.exists():
 
 from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection
 from qa import load_reference, _haversine_m
+from stability import CYPRUS_TZ
 
 REPORT_DIR = Path(__file__).parent.parent / "reports"
 DOCS_DIR = Path(__file__).parent.parent / "docs"
@@ -206,7 +207,7 @@ def load_reference_sensors():
 
 
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     ids = sorted(paths.keys())
     features = []
     for pid in ids:
@@ -240,14 +241,9 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None):
     ]
     ref_json = json.dumps(ref_list)
 
-    all_pts = [c for f in features for c in f["coords"]]
-    all_pts += [[s["lat"], s["lon"]] for s in sensor_list]
-    all_pts += [[s["lat"], s["lon"]] for s in ref_list]
-    if all_pts:
-        center_lat = sum(c[0] for c in all_pts) / len(all_pts)
-        center_lon = sum(c[1] for c in all_pts) / len(all_pts)
-    else:
-        center_lat, center_lon = 34.95, 33.15
+    # Same fixed default view as the dashboard map — not a centroid of the
+    # paths, which can land in the middle of nowhere depending on their spread.
+    center_lat, center_lon = 34.95, 33.15
 
     page = f"""<!DOCTYPE html>
 <html lang="en">
@@ -258,6 +254,7 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None):
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden}}
@@ -277,7 +274,10 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .card.dup-warn .num{{color:#e67e22}}
 .card.susp{{border-top-color:#b7791f}}
 .card.susp .num{{color:#b7791f}}
-#map{{flex:1 1 auto;min-height:0;margin:0 24px 24px;border-radius:6px;
+#mapFsWrap{{flex:1 1 auto;min-height:0;margin:0 24px 24px;display:flex}}
+#mapFsWrap:fullscreen{{margin:0;padding:12px;background:#f4f6f9;box-sizing:border-box}}
+#mapFsWrap:-webkit-full-screen{{margin:0;padding:12px;background:#f4f6f9;box-sizing:border-box}}
+#map{{flex:1 1 auto;min-height:0;border-radius:6px;
       box-shadow:0 1px 6px rgba(0,0,0,.15)}}
 .leaflet-popup-content b{{color:#1a1a2e}}
 .sensor-toggle-btn{{background:#1f4e79;color:#fff;border:none;border-radius:4px;
@@ -358,7 +358,7 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
   <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
 </div>
 
-<div id="map"></div>
+<div id="mapFsWrap"><div id="map"></div></div>
 
 <script>
 var FEATURES = {features_json};
@@ -370,8 +370,66 @@ var DUPLICATE_GROUPS = {duplicate_groups_json};
 // clicking the same spot repeatedly, which Leaflet's default dblclick
 // handling would otherwise read as "zoom in" and yank the view out from
 // under you mid-review.
-var map = L.map('map', {{zoomControl:false, doubleClickZoom:false}}).setView([{center_lat}, {center_lon}], 9);
+var DEFAULT_VIEW = {{center: [{center_lat}, {center_lon}], zoom: 9}};
+var map = L.map('map', {{zoomControl:false, doubleClickZoom:false}}).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+
+// Topright stack, added in visual top-to-bottom order: fullscreen, recentre, zoom.
+var FullscreenControl = L.Control.extend({{
+  options: {{position: 'topright'}},
+  onAdd: function() {{
+    var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    var link = L.DomUtil.create('a', '', container);
+    link.href = '#';
+    link.id = 'mapFsBtn';
+    link.title = 'Toggle full screen';
+    link.innerHTML = '<i class="ti ti-arrows-maximize" style="font-size:15px;line-height:26px"></i>';
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.on(link, 'click', function(e) {{
+      L.DomEvent.preventDefault(e);
+      toggleMapFullscreen();
+    }});
+    return container;
+  }}
+}});
+map.addControl(new FullscreenControl());
+
+var RecentreControl = L.Control.extend({{
+  options: {{position: 'topright'}},
+  onAdd: function() {{
+    var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    var link = L.DomUtil.create('a', '', container);
+    link.href = '#';
+    link.title = 'Recentre map';
+    link.innerHTML = '<i class="ti ti-crosshair" style="font-size:15px;line-height:26px"></i>';
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.on(link, 'click', function(e) {{
+      L.DomEvent.preventDefault(e);
+      map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+    }});
+    return container;
+  }}
+}});
+map.addControl(new RecentreControl());
+
 L.control.zoom({{position: 'topright'}}).addTo(map);
+
+function toggleMapFullscreen() {{
+  var el = document.getElementById('mapFsWrap');
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!fsEl) {{
+    (el.requestFullscreen || el.webkitRequestFullscreen || function(){{}}).call(el);
+  }} else {{
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){{}}).call(document);
+  }}
+}}
+function _onFsChange() {{
+  var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  var icon = document.querySelector('#mapFsBtn i');
+  if (icon) icon.className = 'ti ' + (fsEl ? 'ti-arrows-minimize' : 'ti-arrows-maximize');
+  setTimeout(function() {{ map.invalidateSize(); }}, 120);
+}}
+document.addEventListener('fullscreenchange', _onFsChange);
+document.addEventListener('webkitfullscreenchange', _onFsChange);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   attribution: '© OpenStreetMap contributors', maxZoom: 19
 }}).addTo(map);
@@ -386,7 +444,6 @@ try {{ FLAGS = JSON.parse(localStorage.getItem('btPathFlags') || '{{}}'); }} cat
 function saveFlags() {{ localStorage.setItem('btPathFlags', JSON.stringify(FLAGS)); }}
 
 /* -- Paths: click to highlight ------------------------------------ */
-var bounds = [];
 var pathObjs = [];
 var selectedId = null;
 
@@ -624,7 +681,6 @@ FEATURES.forEach(function(f) {{
     }}]
   }}).addTo(map);
   pathObjs.push({{feature: f, polyline: pl, decorator: decorator, detailHtml: detailHtml}});
-  bounds = bounds.concat(latlngs);
 }});
 map.on('click', function() {{ selectPath(null); }});
 
@@ -962,7 +1018,6 @@ SENSORS.forEach(function(s) {{
   m.bindPopup(rows);
   m.addTo(sensorLayer);
   sensorMarkersById[s.id] = m;
-  bounds.push([s.lat, s.lon]);
 }});
 sensorLayer.addTo(map);
 
@@ -988,7 +1043,6 @@ REF_SENSORS.forEach(function(s, idx) {{
   m.bindPopup(rows);
   m.addTo(refLayer);
   refMarkersByIdx[idx] = m;
-  bounds.push([s.lat, s.lon]);
 }});
 refLayer.addTo(map);
 
@@ -1162,7 +1216,6 @@ function goToSearchResult(item) {{
     }});
 }})();
 
-if (bounds.length) map.fitBounds(bounds, {{padding: [20, 20]}});
 </script>
 </body>
 </html>"""
