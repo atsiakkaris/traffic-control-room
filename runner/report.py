@@ -953,7 +953,7 @@ def _build_map_bt_path_list(all_bt_paths, live_data):
         entry = bt_group_live.get(pid, {})
         st = entry.get("status", "unknown")
         paths.append({
-            "id": pid, "name": p["name"],
+            "id": pid, "name": p.get("name") or pid,
             "coords": p["coords"], "status": st,
             "color": STATUS_COLOR.get(st, "#6b7280"),
             "data": entry.get("data", {}),
@@ -2093,9 +2093,12 @@ function makeMarker(s) {
   // Traffic Detection and VMS have per-sensor history in the Stability panel;
   // Bluetooth sites do not, so only offer the jump where a row exists.
   var showHist = (s.group === 'Traffic Detection' || s.group === 'VMS');
-  var bodyHtml = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>'
+  // Click handling isn't bound here — it's wired centrally after all markers
+  // exist, so co-located sensors (see below) can be cycled through instead of
+  // each marker only ever knowing about its own popup.
+  m._panelTitle = s.display_name||s.name||'Sensor '+s.id;
+  m._panelBody  = '<table style="border-collapse:collapse;width:100%">'+rows+'</table>'
     + (showHist ? histLinkHtml(s.group, s.id) : '');
-  m.on('click', function(e) { L.DomEvent.stopPropagation(e); showMapPanel(s.display_name||s.name||'Sensor '+s.id, bodyHtml, e.latlng); });
   return m;
 }
 
@@ -2356,6 +2359,52 @@ _sensors.forEach(function(s) {
 });
 """ + layer_keys_js + """.forEach(function(key) {
   _markersByGroup[key].forEach(function(m){ _layerGroups[key].addLayer(m); });
+});
+
+/* -- Co-located sensor markers: click-to-cycle ---------------------- */
+// Two sensors can share the exact same coordinates (e.g. opposite-direction
+// readings logged at one physical site). Marker clustering handles this
+// visually below disableClusteringAtZoom, but above it every marker is
+// placed individually — at identical pixel positions one completely covers
+// the other, silently making it unclickable with no indication it's even
+// there. Grouping by position and cycling through every marker there on
+// click mirrors how overlapping BT paths are already handled above.
+var _sensorSpots = {};
+_markers.forEach(function(m) {
+  var ll = m.getLatLng();
+  var key = ll.lat.toFixed(5) + ',' + ll.lng.toFixed(5);
+  (_sensorSpots[key] = _sensorSpots[key] || []).push(m);
+});
+var _sensorCycle = {};
+// Opens one specific marker's own panel directly, bypassing the shared cycle
+// counter below — used when the caller already knows exactly which sensor it
+// wants (e.g. "View history →" flying to a specific sid), where advancing a
+// shared position-keyed counter could otherwise land on its co-located
+// neighbour instead of the one actually requested.
+function _openSensorPanel(m, latlng) {
+  showMapPanel(m._panelTitle, m._panelBody, latlng || m.getLatLng());
+}
+Object.keys(_sensorSpots).forEach(function(key) {
+  var group = _sensorSpots[key];
+  if (group.length > 1) {
+    group.forEach(function(m) {
+      m.bindTooltip(
+        '<b>' + group.length + ' sensors here</b> — click to cycle<br>&bull; ' +
+        group.map(function(o){ return o._panelTitle; }).join('<br>&bull; '),
+        {direction: 'top', opacity: 0.95, className: 'bt-overlap-tip'}
+      );
+    });
+  }
+  group.forEach(function(m) {
+    m.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
+      var idx = (_sensorCycle[key] || 0) % group.length;
+      _sensorCycle[key] = idx + 1;
+      var chosen = group[idx];
+      var suffix = group.length > 1 ? ' (' + (idx+1) + ' of ' + group.length + ' here)' : '';
+      showMapPanel(chosen._panelTitle + suffix, chosen._panelBody, e.latlng);
+    });
+  });
 });
 
 var _paths = [];
@@ -2683,7 +2732,7 @@ function flyToSensor(el) {
   _map.flyTo([lat, lon], 15, {duration:0.8});
   setTimeout(function() {
     _markers.forEach(function(m) {
-      if (m._sensorId === sid && m._sensorGroup2 === grp) m.fire('click');
+      if (m._sensorId === sid && m._sensorGroup2 === grp) _openSensorPanel(m, [lat, lon]);
     });
     // highlight ring
     var ring = L.circleMarker([lat, lon], {
@@ -2734,7 +2783,9 @@ function _controlStackBottom(mapEl) {
 
 function showMapPanel(title, bodyHtml, latlng, navHtml) {
   var panel = document.getElementById('mapInfoPanel');
-  document.getElementById('mapInfoTitle').textContent = title;
+  var titleEl = document.getElementById('mapInfoTitle');
+  titleEl.textContent = title;
+  titleEl.title = title;   // native hover tooltip — the header truncates long names with an ellipsis
   document.getElementById('mapInfoBody').innerHTML = bodyHtml;
   var nav = document.getElementById('mapInfoNav');
   nav.innerHTML = navHtml || '';

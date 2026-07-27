@@ -202,7 +202,6 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 ├── update_projects.bat         ← Refresh ownership/commissioning in the DB from QA Locations.xlsx
 ├── qa_tdu.bat / qa_bt.bat / qa_vms.bat  ← Open the per-group QA matching report (needs QA Locations.xlsx)
 ├── bt_paths_map.bat             ← Open the local BT paths review map
-├── bt_paths_map_dupes.bat        ← Same, but showing every duplicate registration uncollapsed
 ├── publish_bt_map.bat            ← Regenerate + write the shared copy to docs/bt-paths-map.html
 └── requirements.txt
 ```

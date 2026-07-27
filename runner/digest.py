@@ -22,7 +22,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/reports/latest.html"
+DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/"
 
 # Percentage ranges for the digest's badge labels, taken straight from the tier
 # definitions so they can't drift out of sync with the actual thresholds.
@@ -300,7 +300,7 @@ def _sensor_table(sensors, show_prev=False):
           {prev_cell}
         </tr>"""
     note = f'<p style="font-size:11px;color:#9ca3af;margin-top:4px"><strong>Showing top 30 of {len(sensors)}</strong></p>' if len(sensors) > 30 else ""
-    prev_header = '<th style="padding:6px 12px;text-align:right;font-weight:500;color:#6b7280;font-size:12px;white-space:nowrap">Prev week</th>' if show_prev else ""
+    prev_header = '<th style="padding:6px 12px;text-align:right;font-weight:500;color:#6b7280;font-size:12px;white-space:nowrap">Previous week</th>' if show_prev else ""
     return f"""
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <thead><tr style="border-bottom:1px solid #e5e7eb">

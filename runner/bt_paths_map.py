@@ -206,8 +206,10 @@ def load_reference_sensors():
     return [s for s in ref_sensors if s.get('lat') is not None and s.get('lon') is not None]
 
 
-def build_html(paths, sensors, ref_sensors, duplicate_groups=None):
+def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
+                dropped_ids=None, show_dropped_by_default=False):
     now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
+    dropped_ids = dropped_ids or set()
     ids = sorted(paths.keys())
     features = []
     for pid in ids:
@@ -218,13 +220,16 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None):
             "name": p.get("name") or pid,
             "coords": coords,
             "suspicious": len(coords) < SUSPICIOUS_MIN_POINTS,
+            "dup_dropped": pid in dropped_ids,
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
     duplicate_groups = duplicate_groups or {}
     duplicate_groups_json = json.dumps(duplicate_groups)
+    show_dropped_default_json = json.dumps(bool(show_dropped_by_default))
     confirmed_dup_count = sum(1 for v in duplicate_groups.values() if v.get("confirmed"))
     ambiguous_dup_count = sum(1 for v in duplicate_groups.values() if not v.get("confirmed"))
+    active_count = len(features) - len(dropped_ids)
     suspicious_count = sum(1 for f in features if f["suspicious"])
 
     sensor_list = [
@@ -306,6 +311,10 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .sensor-toggle-btn.susp:hover{{background:#0b5c56}}
 .sensor-toggle-btn.susp.active{{background:#b7791f}}
 .sensor-toggle-btn.susp.active:hover{{background:#92600f}}
+.sensor-toggle-btn.dup{{background:#c0392b}}
+.sensor-toggle-btn.dup:hover{{background:#992d22}}
+.sensor-toggle-btn.dup.off{{background:#9ca3af}}
+.sensor-toggle-btn.dup.off:hover{{background:#7d8590}}
 .sensor-toggle-btn.export{{background:#27ae60}}
 .sensor-toggle-btn.export:hover{{background:#1e8449}}
 .sensor-toggle-btn.import{{background:#3949ab;margin-top:6px}}
@@ -329,6 +338,7 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .flag-summary-link{{color:#1f4e79;text-decoration:underline;margin-left:auto;cursor:pointer}}
 .flag-list-row{{padding:7px 4px;font-size:12px;cursor:pointer;border-bottom:1px solid #f0f0f0}}
 .flag-list-row:hover{{background:#f4f6f9}}
+.flag-list-id{{color:#888;font-size:11px}}
 .badge{{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:bold;
       margin:6px 4px 0 0}}
 .badge.suspicious{{background:#fde68a;color:#92400e}}
@@ -345,12 +355,12 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 <body>
 <header>
   <h1>Bluetooth Paths — Map</h1>
-  <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{len(features)} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
+  <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
      {len(sensor_list)} API sensors&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors</p>
 </header>
 
 <div class="summary">
-  <div class="card"><div class="num">{len(features)}</div><div class="lbl">Bluetooth paths</div></div>
+  <div class="card"><div class="num">{active_count}</div><div class="lbl">Bluetooth paths</div></div>
   <div class="card"><div class="num">{len(sensor_list)}</div><div class="lbl">API sensors</div></div>
   <div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>
   <div class="card dup"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>
@@ -365,6 +375,7 @@ var FEATURES = {features_json};
 var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
+var SHOW_DUPLICATES = {show_dropped_default_json};
 
 // doubleClickZoom off: cycling through a stack of overlapping paths means
 // clicking the same spot repeatedly, which Leaflet's default dblclick
@@ -618,7 +629,7 @@ function _applySelectionAndEndpoints(id) {{
   applySelection();
   if (id === null) {{ _clearPathEndpoints(); renderInspector(); return; }}
   var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
-  if (obj) _showPathEndpoints(obj.polyline);
+  if (obj) {{ _ensureVisible(obj); _showPathEndpoints(obj.polyline); }}
   renderInspector();
 }}
 
@@ -691,6 +702,24 @@ map.on('click', function() {{ selectPath(null); }});
 pathObjs.forEach(function(o) {{
   if (o.feature.suspicious) o.polyline.setStyle({{dashArray: '2,7'}});
 }});
+
+/* -- Duplicate-registration visibility --------------------------------- */
+// The "dropped" side of a confirmed duplicate is still drawn (so it can be
+// selected/searched/inspected), just not shown on load — otherwise two
+// near-identical lines sit exactly on top of each other with no visual cue
+// that anything is duplicated. The "Show duplicates" toggle reveals them all
+// at once; selecting one directly (click, search, step) reveals just that one
+// regardless of the toggle, so it's never possible to select something
+// invisible.
+var HAS_DROPPED_DUPLICATES = pathObjs.some(function(o) {{ return o.feature.dup_dropped; }});
+if (!SHOW_DUPLICATES) {{
+  pathObjs.forEach(function(o) {{
+    if (o.feature.dup_dropped) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
+  }});
+}}
+function _ensureVisible(o) {{
+  if (o && !map.hasLayer(o.polyline)) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
+}}
 
 /* -- Sequential step-through ------------------------------------------ */
 // Walking every path in a fixed order — not just whatever happens to be
@@ -952,7 +981,7 @@ function renderInspector() {{
     // show which one you're now looking at, not just move the map underneath.
     var rows = flagged.map(function(x) {{
       var icon = x.status === 'flag' ? '&#128681;' : '&#9989;';
-      var label = icon + ' ' + x.name;
+      var label = icon + ' ' + x.name + ' <span class="flag-list-id">(ID ' + x.id + ')</span>';
       if (x.id === selectedId) label = '<b>' + label + '</b>';
       return '<div class="flag-list-row" data-id="' + x.id + '">' + label + '</div>';
     }}).join('');
@@ -1097,6 +1126,32 @@ var SuspiciousToggle = L.Control.extend({{
 }});
 map.addControl(new SuspiciousToggle());
 
+if (HAS_DROPPED_DUPLICATES) {{
+  var ShowDuplicatesToggle = L.Control.extend({{
+    options: {{position: 'topright'}},
+    onAdd: function() {{
+      var btn = L.DomUtil.create('button', 'sensor-toggle-btn dup' + (SHOW_DUPLICATES ? '' : ' off'));
+      btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
+      L.DomEvent.disableClickPropagation(btn);
+      btn.onclick = function(e) {{
+        L.DomEvent.stopPropagation(e);
+        SHOW_DUPLICATES = !SHOW_DUPLICATES;
+        btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
+        btn.classList.toggle('off', !SHOW_DUPLICATES);
+        pathObjs.forEach(function(o) {{
+          if (!o.feature.dup_dropped) return;
+          var has = map.hasLayer(o.polyline);
+          if (SHOW_DUPLICATES && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
+          if (!SHOW_DUPLICATES && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
+        }});
+        renderInspector();
+      }};
+      return btn;
+    }}
+  }});
+  map.addControl(new ShowDuplicatesToggle());
+}}
+
 var ExportCtl = L.Control.extend({{
   options: {{position: 'topright'}},
   onAdd: function() {{
@@ -1226,9 +1281,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=str(REPORT_DIR / "bt_paths_map.html"))
     ap.add_argument("--show-duplicates", action="store_true",
-                     help="Render every duplicate path registration instead of collapsing "
-                          "confirmed duplicates down to one — useful for eyeballing them "
-                          "on the map before removing any from the API.")
+                     help="Start with dropped duplicate registrations visible on load, instead "
+                          "of hidden behind the 'Show duplicates' toggle — useful for eyeballing "
+                          "them on the map before removing any from the API.")
     ap.add_argument("--publish", action="store_true",
                      help="Also write a copy to docs/bt-paths-map.html, the file served by "
                           "GitHub Pages for sharing this tool with colleagues.")
@@ -1237,18 +1292,16 @@ def main():
     paths = fetch_bt_path_coords()
 
     keep_ids, collapsed, ambiguous = find_duplicate_groups(paths)
+    dropped_ids = {pid for _, _, dropped, _ in collapsed for pid in dropped}
     if collapsed:
-        verb = "Found" if args.show_duplicates else "Collapsed"
-        print(f"{verb} {len(collapsed)} duplicate path registration(s)"
-              f"{' (kept 1 of each)' if not args.show_duplicates else ' — showing all, per --show-duplicates'}:")
+        print(f"Found {len(collapsed)} duplicate path registration(s) - dropped copies stay on "
+              f"the map, hidden behind the 'Show duplicates' toggle:")
         for name, kept, dropped, pct in collapsed:
             print(f"  {name}: kept {kept}, dropped {', '.join(dropped)}  (status match {pct*100:.0f}%)")
     if ambiguous:
         print(f"{len(ambiguous)} same-name group(s) left as-is — status diverges, needs manual check:")
         for name, ids, pct in ambiguous:
             print(f"  {name}: ids {', '.join(ids)}  (status match {pct*100:.0f}%)")
-    if not args.show_duplicates:
-        paths = {pid: p for pid, p in paths.items() if pid in keep_ids}
 
     duplicate_groups = {}
     for name, kept, dropped, pct in collapsed:
@@ -1258,13 +1311,16 @@ def main():
 
     sensors = fetch_sensor_coords().get("Bluetooth", {})
     ref_sensors = load_reference_sensors()
-    page = build_html(paths, sensors, ref_sensors, duplicate_groups)
+    page = build_html(paths, sensors, ref_sensors, duplicate_groups,
+                       dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page, encoding="utf-8")
+    active_count = len(paths) - len(dropped_ids)
     print(f"Bluetooth paths map written to {out_path}  "
-          f"({len(paths)} active paths, {len(sensors)} API sensors, {len(ref_sensors)} spreadsheet sensors)")
+          f"({active_count} active paths, {len(dropped_ids)} duplicate(s) hidden by default, "
+          f"{len(sensors)} API sensors, {len(ref_sensors)} spreadsheet sensors)")
 
     if args.publish:
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
