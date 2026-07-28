@@ -241,11 +241,13 @@ def load_reference_sensors():
 
 
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
-                dropped_ids=None, show_dropped_by_default=False):
+                dropped_ids=None, show_dropped_by_default=False, include_live_data=True):
     now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     dropped_ids = dropped_ids or set()
     ids = sorted(paths.keys())
-    live_data = fetch_latest_path_live_data()
+    # Live speed/travel-time is kept local-only — colleagues viewing the published
+    # copy shouldn't see snapshot data that goes stale the moment it's published.
+    live_data = fetch_latest_path_live_data() if include_live_data else {}
     features = []
     for pid in ids:
         p = paths[pid]
@@ -1399,10 +1401,14 @@ def main():
           f"{len(sensors)} API sensors, {len(ref_sensors)} spreadsheet sensors)")
 
     if args.publish:
+        published_page = build_html(paths, sensors, ref_sensors, duplicate_groups,
+                                     dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
+                                     include_live_data=False)
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         published_path = DOCS_DIR / "bt-paths-map.html"
-        published_path.write_text(page, encoding="utf-8")
-        print(f"Published copy written to {published_path} — commit and push to update the shared page.")
+        published_path.write_text(published_page, encoding="utf-8")
+        print(f"Published copy written to {published_path} (no live speed/travel-time data) — "
+              f"commit and push to update the shared page.")
 
 
 if __name__ == "__main__":
