@@ -34,7 +34,7 @@ if _env_path.exists():
 
 from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection
 from qa import load_reference, _haversine_m
-from stability import CYPRUS_TZ
+from stability import CYPRUS_TZ, to_cyprus
 
 REPORT_DIR = Path(__file__).parent.parent / "reports"
 DOCS_DIR = Path(__file__).parent.parent / "docs"
@@ -43,10 +43,10 @@ WORKBOOK = Path(__file__).parent.parent / "QA Locations.xlsx"
 # Rotating categorical palette so adjacent/overlapping paths stay visually
 # distinct without health data to color by.
 PALETTE = [
-    "#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
-    "#42d4d4", "#f032e6", "#9acd32", "#fabed4", "#008080",
-    "#dcbeff", "#9a6324", "#800000", "#aaffc3", "#808000",
-    "#000075", "#1f4e79", "#c0392b", "#27ae60", "#e67e22",
+    "#d02525", "#FF7A5C", "#b8860b", "#F4C800", "#007D34",
+    "#6cdf49", "#49df8f", "#49c4df", "#2575d0", "#000075",
+    "#a149df", "#df49b3", "#d02561", "#808080", "#FF6800",
+    "#593315",
 ]
 
 
@@ -126,10 +126,18 @@ def assign_contrasting_colors(features):
                 conflicts[id_b].add(id_a)
 
     color_idx = {}
-    for i, f in enumerate(features):
+    use_count = [0] * len(PALETTE)
+    for f in features:
         used = {color_idx[pid] for pid in conflicts[f["id"]] if pid in color_idx}
-        chosen = next((idx for idx in range(len(PALETTE)) if idx not in used), i % len(PALETTE))
+        available = [idx for idx in range(len(PALETTE)) if idx not in used]
+        # Picking the first free slot (as before) meant every conflict-free path —
+        # the vast majority, since most paths don't run alongside anything — grabbed
+        # palette index 0 every time, piling the same color onto unrelated paths
+        # across the whole map. Picking the least-used available color instead
+        # spreads all 16 colors out evenly regardless of conflicts.
+        chosen = min(available, key=lambda idx: use_count[idx]) if available else 0
         color_idx[f["id"]] = chosen
+        use_count[chosen] += 1
         f["color"] = PALETTE[chosen]
 
 
@@ -197,6 +205,32 @@ def find_duplicate_groups(paths):
     return keep_ids, collapsed, ambiguous
 
 
+def fetch_latest_path_live_data():
+    """Latest recorded speed_kmh/travel_time_s per BT path, from sensor_results.data —
+    populated only on runs where LIVE_MODE=true. Paths with no such run (LIVE_MODE
+    was off every time, or the path is brand new) are simply absent from the result.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT sensor_id, run_at, data FROM sensor_results "
+        "WHERE group_name='Bluetooth Paths' AND data IS NOT NULL ORDER BY sensor_id, run_at"
+    ).fetchall()
+    conn.close()
+
+    latest = {}
+    for r in rows:
+        try:
+            d = json.loads(r["data"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        latest[r["sensor_id"]] = {
+            "speed_kmh": d.get("speed_kmh"),
+            "travel_time_s": d.get("travel_time_s"),
+            "last_seen": to_cyprus(r["run_at"]),
+        }
+    return latest
+
+
 def load_reference_sensors():
     """Bluetooth sensor rows from QA Locations.xlsx, with usable coordinates only."""
     if not WORKBOOK.exists():
@@ -211,6 +245,7 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     dropped_ids = dropped_ids or set()
     ids = sorted(paths.keys())
+    live_data = fetch_latest_path_live_data()
     features = []
     for pid in ids:
         p = paths[pid]
@@ -221,6 +256,7 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             "coords": coords,
             "suspicious": len(coords) < SUSPICIOUS_MIN_POINTS,
             "dup_dropped": pid in dropped_ids,
+            "live": live_data.get(pid),
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
@@ -241,7 +277,8 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
 
     ref_list = [
         {"name": s["name"], "lat": s["lat"], "lon": s["lon"],
-         "commissioning": s.get("commissioning", "active")}
+         "commissioning": s.get("commissioning", "active"),
+         "project": (s.get("extra", {}) or {}).get("project") or None}
         for s in ref_sensors
     ]
     ref_json = json.dumps(ref_list)
@@ -322,7 +359,7 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .inspector{{position:absolute;left:12px;bottom:12px;z-index:1000;width:300px;max-height:60%;
       display:flex;flex-direction:column;background:#fff;border-radius:8px;
       box-shadow:0 2px 10px rgba(0,0,0,.35);font-size:12px;overflow:hidden}}
-.inspector-hd{{flex:0 0 auto;background:#1f4e79;color:#fff;padding:7px 10px;
+.inspector-hd{{flex:0 0 auto;background:#1f4e79;color:#fff;padding:7px 10px;cursor:move;
       display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:bold}}
 .inspector-hd .nav{{display:flex;align-items:center;gap:6px;font-weight:normal}}
 .inspector-hd .nav button{{background:rgba(255,255,255,.18);border:none;color:#fff;border-radius:4px;
@@ -647,6 +684,14 @@ FEATURES.forEach(function(f) {{
   pl._endLL    = latlngs[latlngs.length - 1];
   pl._coords   = latlngs;
   var detailHtml = '<b>' + f.name + '</b><br>Path ID: ' + f.id + '<br>' + f.coords.length + ' points';
+  if (f.live) {{
+    var spd = f.live.speed_kmh, tt = f.live.travel_time_s;
+    detailHtml += '<br>Speed: ' + (spd === -1 ? '<span style="color:#c0392b">malfunctioning</span>' : (spd != null ? spd + ' km/h' : '&#8212;'));
+    detailHtml += '<br>Travel time: ' + (tt != null ? tt + ' s' : '&#8212;');
+    detailHtml += '<br><span style="color:#888;font-size:11px">as of ' + f.live.last_seen + '</span>';
+  }} else {{
+    detailHtml += '<br><span style="color:#888;font-size:11px">No live speed/travel-time data recorded</span>';
+  }}
   var dup = DUPLICATE_GROUPS[f.name];
   if (dup) {{
     var otherIds = dup.ids.filter(function(id) {{ return id !== f.id; }});
@@ -932,6 +977,36 @@ var insBody, insCounter;
   nextBtn.innerHTML = '&#9654;'; nextBtn.title = 'Next path';
   prevBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); stepTo(-1); }};
   nextBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); stepTo(1); }};
+
+  // Drag the panel by its header — it starts pinned bottom-left, but a
+  // reviewer working a dense overlap cluster often needs it out of the way
+  // of whatever part of the map they're currently looking at.
+  hd.addEventListener('mousedown', function(e) {{
+    if (e.target.closest('.nav')) return;
+    e.preventDefault();
+    var mapRect = map.getContainer().getBoundingClientRect();
+    var wrapRect = wrap.getBoundingClientRect();
+    var offsetX = e.clientX - wrapRect.left;
+    var offsetY = e.clientY - wrapRect.top;
+    wrap.style.left = (wrapRect.left - mapRect.left) + 'px';
+    wrap.style.top = (wrapRect.top - mapRect.top) + 'px';
+    wrap.style.bottom = 'auto';
+    function onMove(ev) {{
+      var x = ev.clientX - mapRect.left - offsetX;
+      var y = ev.clientY - mapRect.top - offsetY;
+      x = Math.max(0, Math.min(x, mapRect.width - wrapRect.width));
+      y = Math.max(0, Math.min(y, mapRect.height - wrapRect.height));
+      wrap.style.left = x + 'px';
+      wrap.style.top = y + 'px';
+    }}
+    function onUp() {{
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }}
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }});
+
   insBody = L.DomUtil.create('div', 'inspector-body', wrap);
 }})();
 
@@ -1066,6 +1141,7 @@ var refMarkersByIdx = [];
 REF_SENSORS.forEach(function(s, idx) {{
   var m = L.marker([s.lat, s.lon], {{icon: makeDiamondIcon('#8e44ad')}});
   var rows = '<b>' + s.name + '</b><br>Spreadsheet location';
+  rows += '<br>Project: ' + (s.project || '<span style="color:#999">none listed</span>');
   var statusLabel = COMMISSIONING_LABEL[s.commissioning];
   if (statusLabel) rows += '<br>Status: ' + statusLabel;
   rows += '<br>' + s.lat.toFixed(5) + ', ' + s.lon.toFixed(5);
