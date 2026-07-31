@@ -72,6 +72,15 @@ OVERLAP_FRACTION  = 0.5  # fraction of a path's samples that must be this close 
 SUSPICIOUS_MIN_POINTS = 5
 
 
+def _path_length_m(coords):
+    """Total length of a traced path — sum of haversine distance between each
+    consecutive pair of points, not a straight line between the endpoints."""
+    return sum(
+        _haversine_m(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1])
+        for i in range(len(coords) - 1)
+    )
+
+
 def _sample_points(coords, n=SAMPLE_POINTS):
     if len(coords) <= n:
         return coords
@@ -259,6 +268,7 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             "suspicious": len(coords) < SUSPICIOUS_MIN_POINTS,
             "dup_dropped": pid in dropped_ids,
             "live": live_data.get(pid),
+            "length_m": round(_path_length_m(coords)) if len(coords) > 1 else None,
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
@@ -686,6 +696,9 @@ FEATURES.forEach(function(f) {{
   pl._endLL    = latlngs[latlngs.length - 1];
   pl._coords   = latlngs;
   var detailHtml = '<b>' + f.name + '</b><br>Path ID: ' + f.id + '<br>' + f.coords.length + ' points';
+  if (f.length_m != null) {{
+    detailHtml += '<br>Length: ' + (f.length_m >= 1000 ? (f.length_m / 1000).toFixed(2) + ' km' : f.length_m + ' m');
+  }}
   if (f.live) {{
     var spd = f.live.speed_kmh, tt = f.live.travel_time_s;
     detailHtml += '<br>Speed: ' + (spd === -1 ? '<span style="color:#c0392b">malfunctioning</span>' : (spd != null ? spd + ' km/h' : '&#8212;'));
