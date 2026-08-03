@@ -2344,6 +2344,7 @@ function _selectPath(pl, latlng, suffix) {
   _highlighted = pl;
   pl.setStyle({color:'#facc15', weight:7, opacity:1});
   pl.bringToFront();
+  if (pl._decorator) pl._decorator.bringToFront();
   _showPathEndpoints(pl);
   showMapPanel(pl._pathName + (suffix || ''), pl._bodyHtml, latlng || pl.getBounds().getCenter(), _pathNavHtml(pl));
 }
