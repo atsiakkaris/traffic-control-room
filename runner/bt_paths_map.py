@@ -65,6 +65,13 @@ SAMPLE_POINTS     = 16   # points sampled evenly along each path for proximity c
 OVERLAP_M         = 120  # metres apart counts as "running alongside"
 OVERLAP_FRACTION  = 0.5  # fraction of a path's samples that must be this close to the other
 
+# Duplicate-candidate geometry check for unnamed paths — much tighter than the
+# "running alongside" check above, since this is standing in for an exact name
+# match: it needs to catch the same route re-traced almost point-for-point,
+# not merely two paths sharing a road.
+DUPLICATE_OVERLAP_M        = 40   # metres — tight; duplicates trace the same physical route
+DUPLICATE_OVERLAP_FRACTION = 0.7  # both directions must be almost fully coincident
+
 # A path traced with only a couple of points is usually a relic of an early,
 # rougher registration pass rather than a deliberately simple short hop —
 # worth a reviewer's eye first when working through a decade of accumulated
@@ -163,20 +170,82 @@ def assign_contrasting_colors(features):
 DUPLICATE_STATUS_MATCH = 0.8
 
 
+def _find_geometric_duplicate_groups(paths, ids):
+    """Group unnamed paths whose geometry is a near-exact match — with no name
+    to compare, location is the only signal available for them at all. Both
+    directions of the overlap fraction must clear the (tight) threshold, so a
+    short path that merely starts along a long one doesn't count — this is
+    deliberately much stricter than the "runs alongside" check used for color
+    conflicts, which only needs a partial, one-directional overlap.
+
+    Uses every traced point rather than the fixed 16-point sample used
+    elsewhere: that sample is fine for the loose "runs alongside" check at
+    120m (used across hundreds of paths at once, where speed matters more),
+    but 16 points spread over a ~20km path are >1km apart — nowhere near
+    dense enough for a real match to reliably land within this check's much
+    tighter 40m tolerance. This check only ever runs pairwise on the handful
+    of unnamed paths whose bounding boxes already overlap, so the extra cost
+    of comparing full point lists is negligible.
+    """
+    ids = [pid for pid in ids if len(paths[pid].get('coords') or []) > 1]
+    samples = {pid: paths[pid]['coords'] for pid in ids}
+    bboxes = {pid: _bbox(paths[pid]['coords']) for pid in ids}
+    buffer_deg = (DUPLICATE_OVERLAP_M + 50) / 111_000
+
+    adjacency = {pid: set() for pid in ids}
+    for i, id_a in enumerate(ids):
+        for id_b in ids[i + 1:]:
+            if not _bboxes_overlap(bboxes[id_a], bboxes[id_b], buffer_deg):
+                continue
+            frac_a = _overlap_fraction(samples[id_a], samples[id_b], DUPLICATE_OVERLAP_M)
+            frac_b = _overlap_fraction(samples[id_b], samples[id_a], DUPLICATE_OVERLAP_M)
+            if min(frac_a, frac_b) >= DUPLICATE_OVERLAP_FRACTION:
+                adjacency[id_a].add(id_b)
+                adjacency[id_b].add(id_a)
+
+    seen, groups = set(), []
+    for pid in ids:
+        if pid in seen or not adjacency[pid]:
+            continue
+        group, stack = set(), [pid]
+        while stack:
+            cur = stack.pop()
+            if cur in group:
+                continue
+            group.add(cur)
+            stack.extend(adjacency[cur] - group)
+        seen |= group
+        groups.append(sorted(group))
+    return groups
+
+
 def find_duplicate_groups(paths):
-    """Group active paths by name; for any name with 2+ ids, decide from status
-    history whether it's a true duplicate (collapse to one) or two genuinely
-    different paths sharing a name (keep both, flag for manual review).
+    """Group active paths that might be the same route registered twice; for
+    any candidate group, decide from status history whether it's a true
+    duplicate (collapse to one) or genuinely different paths that just
+    happened to look alike (keep both, flag for manual review).
+
+    Named paths are grouped by exact name match. Unnamed paths have no name
+    to compare, so they're grouped by near-exact geometry instead — the only
+    signal available for them (see _find_geometric_duplicate_groups).
 
     Returns (keep_ids, collapsed, ambiguous):
       keep_ids   — path_ids to actually render
-      collapsed  — [(name, kept_id, dropped_ids, match_pct)]
-      ambiguous  — [(name, ids, match_pct)] — same name, status diverges, kept
+      collapsed  — [(label, kept_id, dropped_ids, match_pct)]
+      ambiguous  — [(label, ids, match_pct)] — status diverges, kept as-is
     """
     by_name = {}
+    unnamed_ids = []
     for pid, p in paths.items():
-        by_name.setdefault(p.get('name'), []).append(pid)
+        name = p.get('name')
+        if name:
+            by_name.setdefault(name, []).append(pid)
+        else:
+            unnamed_ids.append(pid)
     dup_groups = {name: ids for name, ids in by_name.items() if len(ids) > 1}
+
+    for group_ids in _find_geometric_duplicate_groups(paths, unnamed_ids):
+        dup_groups[f'(unnamed, same location) {group_ids[0]}'] = group_ids
 
     keep_ids = set(paths.keys())
     collapsed, ambiguous = [], []
@@ -412,8 +481,8 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
   <div class="card"><div class="num">{active_count}</div><div class="lbl">Bluetooth paths</div></div>
   <div class="card"><div class="num">{len(sensor_list)}</div><div class="lbl">API sensors</div></div>
   <div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>
-  <div class="card dup"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>
-  {f'<div class="card dup-warn"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
+  {f'<div class="card dup" id="dupCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>' if confirmed_dup_count else '<div class="card dup"><div class="num">0</div><div class="lbl">Duplicate paths</div></div>'}
+  {f'<div class="card dup-warn" id="ambiguousCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
   <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
 </div>
 
@@ -425,6 +494,14 @@ var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
 var SHOW_DUPLICATES = {show_dropped_default_json};
+// Keyed by path id rather than name — features fall back to their id as a
+// display name when the API sends none (see FEATURES below), which would
+// otherwise never match a group keyed by the real (possibly null) name.
+var DUPLICATE_BY_ID = {{}};
+Object.keys(DUPLICATE_GROUPS).forEach(function(name) {{
+  var g = DUPLICATE_GROUPS[name];
+  g.ids.forEach(function(id) {{ DUPLICATE_BY_ID[id] = g; }});
+}});
 
 // doubleClickZoom off: cycling through a stack of overlapping paths means
 // clicking the same spot repeatedly, which Leaflet's default dblclick
@@ -707,7 +784,7 @@ FEATURES.forEach(function(f) {{
   }} else {{
     detailHtml += '<br><span style="color:#888;font-size:11px">No live speed/travel-time data recorded</span>';
   }}
-  var dup = DUPLICATE_GROUPS[f.name];
+  var dup = DUPLICATE_BY_ID[f.id];
   if (dup) {{
     var otherIds = dup.ids.filter(function(id) {{ return id !== f.id; }});
     detailHtml += '<br><span style="color:#c0392b;font-weight:bold">⚠ Duplicate registration</span>' +
@@ -820,6 +897,30 @@ function stepTo(delta) {{
   idx = idx === -1 ? 0 : (idx + delta + list.length) % list.length;
   stepSelect(list[idx].id);
 }}
+
+/* -- "Duplicate paths" / "Same name, needs manual check" cards: click to jump
+   straight to one -- there's no other way to tell which path(s) they refer to
+   without hunting through the console output. Clicking selects the first path
+   (the "kept" one, for confirmed duplicates — the dropped copy stays visible
+   too once selected, regardless of the "Show duplicates" toggle) of the first
+   matching group and flies the map to it, same as clicking a path directly, so
+   its warning shows in the inspector panel. Cycles through groups on repeat
+   clicks, in case more than one exists. */
+function _wireStatCard(cardId, confirmed) {{
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  var groups = Object.keys(DUPLICATE_GROUPS)
+    .filter(function(name) {{ return !!DUPLICATE_GROUPS[name].confirmed === confirmed; }})
+    .map(function(name) {{ return DUPLICATE_GROUPS[name].ids[0]; }});
+  var i = 0;
+  card.addEventListener('click', function() {{
+    if (!groups.length) return;
+    stepSelect(groups[i % groups.length]);
+    i++;
+  }});
+}}
+_wireStatCard('dupCard', true);
+_wireStatCard('ambiguousCard', false);
 
 /* -- Flagging + export -------------------------------------------------- */
 var flagLayer = L.layerGroup().addTo(map);
