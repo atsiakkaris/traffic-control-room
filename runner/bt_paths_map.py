@@ -16,6 +16,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,13 @@ OVERLAP_FRACTION  = 0.5  # fraction of a path's samples that must be this close 
 # not merely two paths sharing a road.
 DUPLICATE_OVERLAP_M        = 40   # metres — tight; duplicates trace the same physical route
 DUPLICATE_OVERLAP_FRACTION = 0.7  # both directions must be almost fully coincident
+# A second, one-directional tier for pairs with very uneven point coverage —
+# e.g. an early, rougher registration (fewer points, doesn't trace quite as
+# far) later re-registered properly. The short side can still be almost
+# entirely contained in the long side's route even though the long side
+# only partly overlaps the short one, which fails the bidirectional check
+# above outright. Caught this way, not auto-collapsed like a confirmed dup.
+DUPLICATE_CONTAINED_FRACTION = 0.85
 
 # A path traced with only a couple of points is usually a relic of an early,
 # rougher registration pass rather than a deliberately simple short hop —
@@ -171,21 +179,28 @@ DUPLICATE_STATUS_MATCH = 0.8
 
 
 def _find_geometric_duplicate_groups(paths, ids):
-    """Group unnamed paths whose geometry is a near-exact match — with no name
-    to compare, location is the only signal available for them at all. Both
-    directions of the overlap fraction must clear the (tight) threshold, so a
-    short path that merely starts along a long one doesn't count — this is
-    deliberately much stricter than the "runs alongside" check used for color
-    conflicts, which only needs a partial, one-directional overlap.
+    """Group paths whose geometry is a near-exact match, regardless of name —
+    two differently-named paths tracing the same road (e.g. re-registered
+    under a new ID without retiring the old one) are just as much a
+    duplicate as two unnamed ones, and location doesn't care what either one
+    is called. Flags a pair if either:
+      - both directions of the overlap fraction clear the tight bidirectional
+        threshold (the two traces are almost fully coincident), or
+      - one path is almost entirely contained in the other (one-directional),
+        which catches a shorter/rougher trace re-registered more completely
+        later without failing the bidirectional check outright.
+    A short path that merely starts along a long one still won't count,
+    since even full containment requires clearing DUPLICATE_CONTAINED_FRACTION
+    of its own points, not just a partial run alongside.
 
     Uses every traced point rather than the fixed 16-point sample used
     elsewhere: that sample is fine for the loose "runs alongside" check at
     120m (used across hundreds of paths at once, where speed matters more),
     but 16 points spread over a ~20km path are >1km apart — nowhere near
     dense enough for a real match to reliably land within this check's much
-    tighter 40m tolerance. This check only ever runs pairwise on the handful
-    of unnamed paths whose bounding boxes already overlap, so the extra cost
-    of comparing full point lists is negligible.
+    tighter 40m tolerance. This check only ever runs pairwise on paths whose
+    bounding boxes already overlap, so the extra cost of comparing full
+    point lists is negligible.
     """
     ids = [pid for pid in ids if len(paths[pid].get('coords') or []) > 1]
     samples = {pid: paths[pid]['coords'] for pid in ids}
@@ -225,9 +240,20 @@ def find_duplicate_groups(paths):
     duplicate (collapse to one) or genuinely different paths that just
     happened to look alike (keep both, flag for manual review).
 
-    Named paths are grouped by exact name match. Unnamed paths have no name
-    to compare, so they're grouped by near-exact geometry instead — the only
-    signal available for them (see _find_geometric_duplicate_groups).
+    Named paths sharing an exact name are grouped directly. Everything else —
+    two differently-named paths, or a named path and an unnamed one — is
+    checked geometrically instead, since exact-name matching alone misses a
+    route re-registered under a new name (or never named at all) without the
+    old copy being retired.
+
+    Paths named in the "A->B" node convention are excluded from the
+    geometric check entirely — that's the reversed-direction checker's
+    territory (see find_reversed_direction_pairs), not this one. A same-
+    direction bug pair's coordinates are, by definition, near-identical to
+    each other, so without this exclusion the geometric check here would
+    catch every bug pair too and silently collapse one path out of each —
+    hiding the exact evidence the bug check exists to surface, and treating
+    a real (if buggy) forward/reverse registration as a spurious duplicate.
 
     Returns (keep_ids, collapsed, ambiguous):
       keep_ids   — path_ids to actually render
@@ -235,17 +261,23 @@ def find_duplicate_groups(paths):
       ambiguous  — [(label, ids, match_pct)] — status diverges, kept as-is
     """
     by_name = {}
-    unnamed_ids = []
     for pid, p in paths.items():
         name = p.get('name')
         if name:
             by_name.setdefault(name, []).append(pid)
-        else:
-            unnamed_ids.append(pid)
     dup_groups = {name: ids for name, ids in by_name.items() if len(ids) > 1}
 
-    for group_ids in _find_geometric_duplicate_groups(paths, unnamed_ids):
-        dup_groups[f'(unnamed, same location) {group_ids[0]}'] = group_ids
+    # Geometric check spans every active path not claimed by the
+    # reversed-direction naming convention, named or not — exact-name groups
+    # above already cover the case where names agree, so this only adds
+    # groups that name matching alone couldn't have found.
+    geometry_candidates = [pid for pid, p in paths.items() if not _REVERSED_NAME_RE.match(p.get('name') or '')]
+    existing_sets = {frozenset(ids) for ids in dup_groups.values()}
+    for group_ids in _find_geometric_duplicate_groups(paths, geometry_candidates):
+        if frozenset(group_ids) in existing_sets:
+            continue
+        names = ', '.join(paths[pid].get('name') or pid for pid in group_ids)
+        dup_groups[f'(geometry match) {names}'] = group_ids
 
     keep_ids = set(paths.keys())
     collapsed, ambiguous = [], []
@@ -281,6 +313,83 @@ def find_duplicate_groups(paths):
     conn.close()
 
     return keep_ids, collapsed, ambiguous
+
+
+# Reversed-direction check -----------------------------------------------
+# Confirmed via manual API reverse-engineering (SWARCO Mistic PathsManager):
+# BuildPathArcs saves the geometry in one fixed direction regardless of which
+# end a reverse-registered path names first. A path named "A->B" whose
+# saved coordinates don't actually start near A and end near B relative to
+# its "B->A" counterpart is evidence of that defect, not a genuine duplicate.
+#
+# Each endpoint is checked independently against this threshold, rather than
+# summing both distances against one flat cutoff — a summed check lets one
+# noisy endpoint (e.g. 31/32: 75m + 127m = 202m) drag an otherwise-obvious
+# same-direction pair over the line into "ambiguous", even though 127m alone
+# is well within normal GPS/arc-snapping noise for a single endpoint.
+REVERSED_CHECK_ENDPOINT_M = 150  # metres — each endpoint independently this close counts as "matches"
+REVERSED_CHECK_CLEAR_M    = 300  # metres — the *other* pairing's combined distance must clear this to be ruled out
+
+_REVERSED_NAME_RE = re.compile(r'^\s*(\S+)\s*->\s*(\S+)\s*$')
+
+
+def find_reversed_direction_pairs(paths):
+    """Check every named "A->B" / "B->A" path pair for whether the saved
+    coordinates are actually reversed, or just a copy in the same order.
+    Only the start/end points are compared — enough to tell "mirrored" from
+    "same order" regardless of path length, and cheap across hundreds of
+    pairs.
+
+    Returns (by_id, groups):
+      by_id  — {path_id: {category, partner_id, same_dist, mirror_dist}}
+      groups — {pair_key: {ids: [id1, id2], category, same_dist, mirror_dist}}
+    category is one of 'bug' (same direction, not reversed), 'ok' (properly
+    mirrored), or 'ambiguous' (neither — likely a genuinely different route
+    between the same two named nodes, not a direction problem).
+    """
+    by_name = {}
+    for pid, p in paths.items():
+        m = _REVERSED_NAME_RE.match(p.get('name') or '')
+        if not m:
+            continue
+        a, b = m.group(1), m.group(2)
+        by_name.setdefault(frozenset([a, b]), []).append((pid, a, b))
+
+    by_id, groups = {}, {}
+    for entries in by_name.values():
+        if len(entries) != 2:
+            continue
+        (pid1, a1, b1), (pid2, a2, b2) = entries
+        if not (a1 == b2 and b1 == a2):
+            continue
+        c1, c2 = paths[pid1].get('coords') or [], paths[pid2].get('coords') or []
+        if len(c1) < 2 or len(c2) < 2:
+            continue
+        start1, end1 = c1[0], c1[-1]
+        start2, end2 = c2[0], c2[-1]
+        mirror_start = _haversine_m(start1[0], start1[1], end2[0], end2[1])
+        mirror_end   = _haversine_m(end1[0], end1[1], start2[0], start2[1])
+        same_start   = _haversine_m(start1[0], start1[1], start2[0], start2[1])
+        same_end     = _haversine_m(end1[0], end1[1], end2[0], end2[1])
+        mirror_dist = mirror_start + mirror_end
+        same_dist = same_start + same_end
+
+        if (same_start < REVERSED_CHECK_ENDPOINT_M and same_end < REVERSED_CHECK_ENDPOINT_M
+                and mirror_dist > REVERSED_CHECK_CLEAR_M):
+            category = 'bug'
+        elif (mirror_start < REVERSED_CHECK_ENDPOINT_M and mirror_end < REVERSED_CHECK_ENDPOINT_M
+                and same_dist > REVERSED_CHECK_CLEAR_M):
+            category = 'ok'
+        else:
+            category = 'ambiguous'
+
+        by_id[pid1] = {'category': category, 'partner_id': pid2, 'same_dist': same_dist, 'mirror_dist': mirror_dist}
+        by_id[pid2] = {'category': category, 'partner_id': pid1, 'same_dist': same_dist, 'mirror_dist': mirror_dist}
+        groups[f'{a1}->{b1} / {a2}->{b2}'] = {
+            'ids': [pid1, pid2], 'category': category,
+            'same_dist': same_dist, 'mirror_dist': mirror_dist,
+        }
+    return by_id, groups
 
 
 def fetch_latest_path_live_data():
@@ -319,9 +428,12 @@ def load_reference_sensors():
 
 
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
-                dropped_ids=None, show_dropped_by_default=False, include_live_data=True):
+                dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
+                reversed_by_id=None, reversed_groups=None):
     now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     dropped_ids = dropped_ids or set()
+    reversed_by_id = reversed_by_id or {}
+    reversed_groups = reversed_groups or {}
     ids = sorted(paths.keys())
     # Live speed/travel-time is kept local-only — colleagues viewing the published
     # copy shouldn't see snapshot data that goes stale the moment it's published.
@@ -338,14 +450,19 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             "dup_dropped": pid in dropped_ids,
             "live": live_data.get(pid),
             "length_m": round(_path_length_m(coords)) if len(coords) > 1 else None,
+            "reversed_check": reversed_by_id.get(pid),
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
     duplicate_groups = duplicate_groups or {}
     duplicate_groups_json = json.dumps(duplicate_groups)
+    reversed_groups_json = json.dumps(reversed_groups)
     show_dropped_default_json = json.dumps(bool(show_dropped_by_default))
     confirmed_dup_count = sum(1 for v in duplicate_groups.values() if v.get("confirmed"))
     ambiguous_dup_count = sum(1 for v in duplicate_groups.values() if not v.get("confirmed"))
+    rev_bug_count = sum(1 for v in reversed_groups.values() if v.get("category") == "bug")
+    rev_amb_count = sum(1 for v in reversed_groups.values() if v.get("category") == "ambiguous")
+    rev_ok_count = sum(1 for v in reversed_groups.values() if v.get("category") == "ok")
     active_count = len(features) - len(dropped_ids)
     suspicious_count = sum(1 for f in features if f["suspicious"])
 
@@ -397,6 +514,14 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .card.dup-warn .num{{color:#e67e22}}
 .card.susp{{border-top-color:#b7791f}}
 .card.susp .num{{color:#b7791f}}
+.card.rev-bug{{border-top-color:#c0392b}}
+.card.rev-bug .num{{color:#c0392b}}
+.card.rev-amb{{border-top-color:#e67e22}}
+.card.rev-amb .num{{color:#e67e22}}
+.card.rev-ok{{border-top-color:#27ae60}}
+.card.rev-ok .num{{color:#27ae60}}
+.sensor-toggle-btn.reversed{{background:#6d28d9}}
+.sensor-toggle-btn.reversed:hover{{background:#5b21b6}}
 #mapFsWrap{{flex:1 1 auto;min-height:0;margin:0 24px 24px;display:flex}}
 #mapFsWrap:fullscreen{{margin:0;padding:12px;background:#f4f6f9;box-sizing:border-box}}
 #mapFsWrap:-webkit-full-screen{{margin:0;padding:12px;background:#f4f6f9;box-sizing:border-box}}
@@ -484,6 +609,9 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
   {f'<div class="card dup" id="dupCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>' if confirmed_dup_count else '<div class="card dup"><div class="num">0</div><div class="lbl">Duplicate paths</div></div>'}
   {f'<div class="card dup-warn" id="ambiguousCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
   <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
+  {f'<div class="card rev-bug" id="revBugCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_bug_count}</div><div class="lbl">Reversed-direction bug</div></div>' if rev_bug_count else ''}
+  {f'<div class="card rev-amb" id="revAmbCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_amb_count}</div><div class="lbl">Reversed check: ambiguous</div></div>' if rev_amb_count else ''}
+  {f'<div class="card rev-ok" id="revOkCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_ok_count}</div><div class="lbl">Reversed check: OK</div></div>' if rev_ok_count else ''}
 </div>
 
 <div id="mapFsWrap"><div id="map"></div></div>
@@ -494,6 +622,7 @@ var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
 var SHOW_DUPLICATES = {show_dropped_default_json};
+var REVERSED_GROUPS = {reversed_groups_json};
 // Keyed by path id rather than name — features fall back to their id as a
 // display name when the API sends none (see FEATURES below), which would
 // otherwise never match a group keyed by the real (possibly null) name.
@@ -589,8 +718,20 @@ var selectedId = null;
 // a dozen overlapping neighbours of similar hue.
 var SELECTED_COLOR = '#facc15';
 
+// Reversed-direction check layer: recolors every path that's part of a
+// checked "A->B"/"B->A" pair by category, and dims everything else, so the
+// bug's footprint reads at a glance without losing the underlying palette
+// (restored the moment the toggle goes back off).
+var REVERSED_MODE = false;
+var REVERSED_COLORS = {{bug: '#c0392b', ambiguous: '#e67e22', ok: '#27ae60'}};
+var REVERSED_DIM_COLOR = '#cfd3d8';
+
 function baseStyle(f, selected) {{
   if (selected) return {{color: SELECTED_COLOR, weight: 10, opacity: 1}};
+  if (REVERSED_MODE) {{
+    if (f.reversed_check) return {{color: REVERSED_COLORS[f.reversed_check.category], weight: 5, opacity: 0.9}};
+    return {{color: REVERSED_DIM_COLOR, weight: 2, opacity: 0.35}};
+  }}
   return {{color: f.color, weight: 4, opacity: 0.8}};
 }}
 
@@ -794,6 +935,16 @@ FEATURES.forEach(function(f) {{
       detailHtml += '<br><span style="color:#e67e22">Not a clean duplicate — needs manual check</span>';
     }}
   }}
+  var rc = f.reversed_check;
+  if (rc) {{
+    var rcLabel = {{bug: 'Same-direction bug — saved coordinates are not actually reversed',
+                    ambiguous: 'Ambiguous — likely a different route between the same nodes, not a direction issue',
+                    ok: 'Properly reversed'}}[rc.category];
+    var rcColor = REVERSED_COLORS[rc.category] || '#888';
+    detailHtml += '<br><span style="color:' + rcColor + ';font-weight:bold">Reversed-direction check: ' + rcLabel + '</span>' +
+                 '<br>Paired with: ID ' + rc.partner_id +
+                 '<br>Same-order distance: ' + Math.round(rc.same_dist) + 'm &nbsp;|&nbsp; mirrored distance: ' + Math.round(rc.mirror_dist) + 'm';
+  }}
   // Selection detail (id, point count, duplicate warning, flag/note controls)
   // lives in the fixed Inspector panel, not a popup here — a popup anchored
   // at the click point fights the sticky hover tooltip for the same spot on
@@ -921,6 +1072,31 @@ function _wireStatCard(cardId, confirmed) {{
 }}
 _wireStatCard('dupCard', true);
 _wireStatCard('ambiguousCard', false);
+
+/* -- Reversed-direction check cards: same click-to-jump pattern, but also
+   switches on the category-colour layer so the group being jumped to is
+   immediately visible in context, not just selected. */
+function _wireReversedCard(cardId, category) {{
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  var groups = Object.keys(REVERSED_GROUPS)
+    .filter(function(key) {{ return REVERSED_GROUPS[key].category === category; }})
+    .map(function(key) {{ return REVERSED_GROUPS[key].ids[0]; }});
+  var i = 0;
+  card.addEventListener('click', function() {{
+    if (!groups.length) return;
+    if (!REVERSED_MODE) {{
+      REVERSED_MODE = true;
+      var btn = document.querySelector('.sensor-toggle-btn.reversed');
+      if (btn) {{ btn.innerHTML = 'Reversed-direction check: ON'; btn.classList.remove('off'); }}
+    }}
+    stepSelect(groups[i % groups.length]);
+    i++;
+  }});
+}}
+_wireReversedCard('revBugCard', 'bug');
+_wireReversedCard('revAmbCard', 'ambiguous');
+_wireReversedCard('revOkCard', 'ok');
 
 /* -- Flagging + export -------------------------------------------------- */
 var flagLayer = L.layerGroup().addTo(map);
@@ -1344,6 +1520,27 @@ if (HAS_DROPPED_DUPLICATES) {{
   map.addControl(new ShowDuplicatesToggle());
 }}
 
+var HAS_REVERSED_CHECK = pathObjs.some(function(o) {{ return !!o.feature.reversed_check; }});
+if (HAS_REVERSED_CHECK) {{
+  var ReversedCheckToggle = L.Control.extend({{
+    options: {{position: 'topright'}},
+    onAdd: function() {{
+      var btn = L.DomUtil.create('button', 'sensor-toggle-btn reversed off');
+      btn.innerHTML = 'Reversed-direction check: OFF';
+      L.DomEvent.disableClickPropagation(btn);
+      btn.onclick = function(e) {{
+        L.DomEvent.stopPropagation(e);
+        REVERSED_MODE = !REVERSED_MODE;
+        btn.innerHTML = 'Reversed-direction check: ' + (REVERSED_MODE ? 'ON' : 'OFF');
+        btn.classList.toggle('off', !REVERSED_MODE);
+        applySelection();
+      }};
+      return btn;
+    }}
+  }});
+  map.addControl(new ReversedCheckToggle());
+}}
+
 var ExportCtl = L.Control.extend({{
   options: {{position: 'topright'}},
   onAdd: function() {{
@@ -1501,10 +1698,19 @@ def main():
     for name, ids, pct in ambiguous:
         duplicate_groups[name] = {"ids": ids, "match_pct": pct, "confirmed": False}
 
+    reversed_by_id, reversed_groups = find_reversed_direction_pairs(paths)
+    if reversed_groups:
+        bug_n = sum(1 for v in reversed_groups.values() if v['category'] == 'bug')
+        amb_n = sum(1 for v in reversed_groups.values() if v['category'] == 'ambiguous')
+        ok_n = sum(1 for v in reversed_groups.values() if v['category'] == 'ok')
+        print(f"Reversed-direction check: {bug_n} bug, {amb_n} ambiguous, {ok_n} ok "
+              f"(of {len(reversed_groups)} named reverse pairs)")
+
     sensors = fetch_sensor_coords().get("Bluetooth", {})
     ref_sensors = load_reference_sensors()
     page = build_html(paths, sensors, ref_sensors, duplicate_groups,
-                       dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates)
+                       dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
+                       reversed_by_id=reversed_by_id, reversed_groups=reversed_groups)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1517,7 +1723,8 @@ def main():
     if args.publish:
         published_page = build_html(paths, sensors, ref_sensors, duplicate_groups,
                                      dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
-                                     include_live_data=False)
+                                     include_live_data=False,
+                                     reversed_by_id=reversed_by_id, reversed_groups=reversed_groups)
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         published_path = DOCS_DIR / "bt-paths-map.html"
         published_path.write_text(published_page, encoding="utf-8")
