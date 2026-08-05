@@ -32,7 +32,7 @@ def extract_measurement_site_coords(response_text):
                 result[sid] = {
                     "lat": float(lat_el.text),
                     "lon": float(lon_el.text),
-                    "name": name_el.text if name_el is not None else sid,
+                    "name": name_el.text if name_el is not None and name_el.text else sid,
                     "site_code": code_el.text if code_el is not None else None,
                 }
             except (ValueError, TypeError):
@@ -54,8 +54,8 @@ def extract_vms_coords(response_text):
         lon_el = ctrl.find(".//{*}longitude")
         desc_el = ctrl.find(".//{*}description//{*}value")
         ext_id_el = ctrl.find(".//{*}externalIdentifier")
-        name = (desc_el.text if desc_el is not None else
-                ext_id_el.text if ext_id_el is not None else cid)
+        name = (desc_el.text if desc_el is not None and desc_el.text else
+                ext_id_el.text if ext_id_el is not None and ext_id_el.text else cid)
         if lat_el is not None and lon_el is not None:
             try:
                 result[cid] = {
@@ -79,7 +79,7 @@ def extract_bt_path_coords(response_text):
         if not pid:
             continue
         name_el = loc.find(".//{*}predefinedLocationName//{*}value")
-        name = name_el.text if name_el is not None else pid
+        name = name_el.text if name_el is not None and name_el.text else pid
         pos_el = loc.find(".//{*}posList")
         if pos_el is None or not pos_el.text:
             continue
