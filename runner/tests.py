@@ -7,6 +7,7 @@ Each public function takes the raw response text and returns:
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from stability import CYPRUS_TZ
 
 
 def _parse_xml(text):
@@ -33,13 +34,18 @@ def valid_xml(response_text: str) -> dict:
 
 # ─── VMS ─────────────────────────────────────────────────────────────────────
 
-def vms_controller_status(response_text: str) -> dict:
+DEFAULT_VMS_STALE_HOURS = 3
+
+
+def vms_controller_status(response_text: str, stale_hours: int = DEFAULT_VMS_STALE_HOURS) -> dict:
     root, err = _parse_xml(response_text)
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
 
     controllers = root.findall(".//{*}vmsControllerStatus")
-    working, not_working, no_status = [], [], []
+    now = datetime.now(timezone.utc)
+    working, not_working, no_status, stale = [], [], [], []
+    fresh_ok, status_checked = 0, 0
     sensors_map = {}
     measurements_map = {}
 
@@ -48,9 +54,32 @@ def vms_controller_status(response_text: str) -> dict:
         cid = cid_el.get("id", "unknown") if cid_el is not None else "unknown"
 
         ws_el = ctrl.find(".//{*}workingStatus")
+        ts_el = ctrl.find(".//{*}statusUpdateTime")
+
+        is_stale = False
+        age_hours = None
+        if ws_el is not None and ts_el is not None and ts_el.text:
+            status_checked += 1
+            try:
+                ts_dt = datetime.fromisoformat(ts_el.text.strip())
+                if ts_dt.tzinfo is None:
+                    # statusUpdateTime has no offset in the raw feed, unlike the
+                    # sibling publicationTime — it's naive Cyprus local time, not UTC.
+                    ts_dt = ts_dt.replace(tzinfo=CYPRUS_TZ)
+                age_hours = (now - ts_dt).total_seconds() / 3600
+                if age_hours > stale_hours:
+                    is_stale = True
+                else:
+                    fresh_ok += 1
+            except (ValueError, TypeError):
+                pass
+
         if ws_el is None:
             no_status.append(cid)
             sensors_map[cid] = "no_status"
+        elif is_stale:
+            stale.append(cid)
+            sensors_map[cid] = "stale"
         elif ws_el.text == "working":
             working.append(cid)
             sensors_map[cid] = "working"
@@ -60,13 +89,20 @@ def vms_controller_status(response_text: str) -> dict:
 
         lines = [el.text.strip() for el in ctrl.findall(".//{*}textLine/{*}textLine")
                  if el.text and el.text.strip()]
-        measurements_map[cid] = {"message": " | ".join(lines) if lines else None}
+        measurements_map[cid] = {
+            "message":   " | ".join(lines) if lines else None,
+            "age_hours": round(age_hours, 1) if age_hours is not None else None,
+        }
 
     detail_lines = [
         f"Working: {len(working)}",
         f"Not working: {len(not_working)}" + (f" — IDs: {', '.join(not_working)}" if not_working else ""),
         f"No status: {len(no_status)}" + (f" — {', '.join(no_status)}" if no_status else ""),
     ]
+    if status_checked:
+        detail_lines.append(f"Fresh: {fresh_ok}/{status_checked} (limit: {stale_hours}h)")
+    if stale:
+        detail_lines.append(f"Stale: {len(stale)} — IDs: {', '.join(stale)}")
     return {
         "passed": True,  # feed delivered data; health shown separately in dashboard
         "detail": " | ".join(detail_lines),
@@ -98,7 +134,10 @@ def predefined_paths_count(response_text: str) -> dict:
     }
 
 
-def bt_paths_speed_and_traveltime(response_text: str) -> dict:
+DEFAULT_STALE_HOURS = 3
+
+
+def bt_paths_speed_and_traveltime(response_text: str, stale_hours: int = DEFAULT_STALE_HOURS) -> dict:
     root, err = _parse_xml(response_text)
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
@@ -108,7 +147,8 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
     if total == 0:
         return {"passed": False, "detail": "No predefinedLocationReference elements found"}
 
-    speed_ok, ttime_ok, failing = 0, 0, []
+    now = datetime.now(timezone.utc)
+    speed_ok, ttime_ok, fresh_ok, stale_checked, failing, stale = 0, 0, 0, 0, [], []
     sensors_map = {}
     measurements_map = {}
 
@@ -117,25 +157,46 @@ def bt_paths_speed_and_traveltime(response_text: str) -> dict:
         ext = path.find(".//{*}_predefinedLocationExtension")
         speed_el = ext.find("obs_speed") if ext is not None else None
         ttime_el = ext.find("obs_t_time") if ext is not None else None
+        ts_el    = ext.find("measurement_timestamp") if ext is not None else None
         spd   = _safe_float(speed_el)
         ttime = _safe_float(ttime_el)
 
+        is_stale = False
+        age_hours = None
+        if ts_el is not None and ts_el.text:
+            stale_checked += 1
+            try:
+                ts_dt = datetime.fromisoformat(ts_el.text.strip().replace("Z", "+00:00"))
+                age_hours = (now - ts_dt).total_seconds() / 3600
+                if age_hours > stale_hours:
+                    is_stale = True
+                else:
+                    fresh_ok += 1
+            except (ValueError, TypeError):
+                pass
+
+        has_data = bool(spd and spd > 0) and bool(ttime and ttime > 0)
         if spd and spd > 0:
             speed_ok += 1
         if ttime and ttime > 0:
             ttime_ok += 1
-        if not (spd and spd > 0) or not (ttime and ttime > 0):
+        if not has_data:
             failing.append(pid)
+        if is_stale:
+            stale.append(pid)
 
-        sensors_map[pid] = "failing" if (not (spd and spd > 0) or not (ttime and ttime > 0)) else "ok"
+        sensors_map[pid] = "failing" if not has_data else ("stale" if is_stale else "ok")
         measurements_map[pid] = {
             "speed_kmh":    round(spd,   1) if spd   is not None else None,
             "travel_time_s": round(ttime, 0) if ttime is not None else None,
+            "age_hours":    round(age_hours, 1) if age_hours is not None else None,
         }
 
     detail = (
         f"Speed OK: {speed_ok}/{total} | Travel time OK: {ttime_ok}/{total}"
+        + (f" | Fresh: {fresh_ok}/{stale_checked} (limit: {stale_hours}h)" if stale_checked else "")
         + (f" | Failing paths: {', '.join(failing)}" if failing else "")
+        + (f" | Stale paths: {', '.join(stale)}" if stale else "")
     )
     return {"passed": True, "detail": detail, "sensors": sensors_map, "measurements": measurements_map}
 

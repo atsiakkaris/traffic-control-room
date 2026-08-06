@@ -49,11 +49,11 @@ To update the copy shared with colleagues at the link above, run
 | **Traffic Detection** | [TD Live](https://www.traffic4cyprus.org.cy/swarco3/api/Data/MeasuredDataPublication) | Feed freshness; sensor speed status (working / no traffic / malfunctioning / no data); average flow rate |
 | **Bluetooth** | [BT Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/BTMeasurementSiteTablePublication) | Valid XML; total device count |
 | **Bluetooth** | [BT Paths Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationPublication) | Valid XML; predefined path count |
-| **Bluetooth** | [BT Paths Live (FCD)](https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationDataPublication) | Feed freshness; speed and travel time per path |
+| **Bluetooth** | [BT Paths Live (FCD)](https://www.traffic4cyprus.org.cy/swarco3/api/Data/PredefinedLocationDataPublication) | Feed freshness; speed and travel time per path; per-path measurement freshness (catches a frozen/stalled live feed even when speed/travel-time values still look valid) |
 | **VMS** | [VMS Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsTablePublication) | Valid XML |
-| **VMS** | [VMS Live Data](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsPublication) | Feed freshness; working / not-working / no-status controller counts |
+| **VMS** | [VMS Live Data](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsPublication) | Feed freshness; working / not-working / no-status controller counts; per-controller status freshness (catches a controller stuck re-reporting an old status) |
 
-All live endpoints also check: HTTP 200 status, response time within limit, and feed freshness (data ≤ 5 min old).
+All live endpoints also check: HTTP 200 status, response time within limit, and feed freshness (data ≤ 5 min old) — that last one only confirms the API responded just now, not that the values inside are new. For BT Paths and VMS specifically, each record's own timestamp (`measurement_timestamp` / `statusUpdateTime`) is checked separately (≤3h) since the two can disagree.
 
 ---
 

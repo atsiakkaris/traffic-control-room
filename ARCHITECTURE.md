@@ -75,6 +75,22 @@ and the staleness-warning threshold. `runner/report.py` reads this into
 `GROUP_META` at import time and drives colors, icons, and column headers off
 it — nothing about a group's visual identity is hardcoded in Python.
 
+**Three unrelated things are all called "freshness"/"staleness" in this
+codebase — don't conflate them:**
+1. `feed_freshness` check (`runner/tests.py`) — is the outer DATEX II
+   `publicationTime` envelope recent (default 5 min)? This only proves the
+   API responded just now, not that the data inside is new.
+2. `staleness_threshold_hours` here in `ui_labels.yaml` (default 9h) — is the
+   *whole scheduled run* overdue? Drives a dashboard banner if `run_tests.py`
+   hasn't executed recently at all.
+3. `bt_paths_speed_and_traveltime`'s per-path `stale_hours`, and
+   `vms_controller_status`'s per-controller `stale_hours`
+   (`DEFAULT_STALE_HOURS`/`DEFAULT_VMS_STALE_HOURS` in `runner/tests.py`,
+   both default 3h) — is *this specific record's* own timestamp recent?
+   A feed can pass #1 and #2 (API is up, runs are happening on schedule) while
+   every individual record inside is a frozen snapshot — which is exactly
+   what happened and went unnoticed for weeks (§3).
+
 ### `config/projects.csv`
 
 Maps a project/contractor name to an accountability level:
@@ -123,10 +139,29 @@ The two that matter most for per-sensor health:
 
 - `vms_controller_status` — walks `vmsControllerStatus` elements, classifies
   each as `working` / `not_working` / `no_status` based on the
-  `workingStatus` field.
+  `workingStatus` field, or `stale` if `statusUpdateTime` is older than
+  `DEFAULT_VMS_STALE_HOURS` (default 3h) regardless of what `workingStatus`
+  says — same reasoning as the BT staleness check below: a controller stuck
+  re-reporting an old "working" is a false all-clear, and one stuck on an old
+  "notWorking" means we no longer actually know its current state either.
+  `statusUpdateTime` is naive local time in the raw feed (no UTC offset,
+  unlike the sibling `publicationTime`) — parsed against `stability.CYPRUS_TZ`
+  (DST-aware), not assumed to be UTC.
 - `sensor_speed_status` — walks `siteMeasurements` (Traffic Detection),
   classifies each as `working` / `no_traffic` (speed=0) / `malfunctioning`
   (speed=-1) / `no_measurement` (missing).
+- `bt_paths_speed_and_traveltime` — walks predefined BT paths, classifies each
+  as `ok` / `failing` (no `obs_speed`/`obs_t_time`) / `stale` (has data, but
+  `measurement_timestamp` is older than `DEFAULT_STALE_HOURS`, default 3h).
+  The two failure reasons are kept as distinct status strings — not merged
+  into one `failing` — specifically so the dashboard card and the underlying
+  fault-age tracking can tell "sensor isn't reporting" apart from "the whole
+  live-computation pipeline stopped producing new measurements but keeps
+  re-serving the last snapshot," which is a real outage this check exists to
+  catch (found once already: 419/431 paths frozen on a single timestamp for
+  weeks, undetected because the old version only checked `> 0`, never *when*).
+  Neither `failing` nor `stale` is in `stability.GOOD_STATUSES`, so both count
+  against the group's health % the same way.
 
 Both return a `sensors_map` used by `run_tests.py` to populate `sensor_results`
 — the authoritative record every health number is computed from. They also bake
@@ -152,6 +187,12 @@ Three extractor functions pull lat/lon out of DATEX II inventory XML:
 
 These feed `sensor_coords` (points, used for the map markers and QA matching)
 and `bt_path_coords` (polylines, used to draw path lines on the map).
+
+All three extractors fall back to the site/controller/path **ID** as the
+`name` whenever the API's name element is missing *or* present-but-empty
+(`<value lang="en-US"/>` with no text) — the latter happens for a real subset
+of predefined BT paths and is easy to miss with a naive `is not None` check,
+since the element exists, it's just empty.
 
 ---
 
@@ -289,7 +330,25 @@ Leaflet map with no other groups and no health data.
   auto-collapsed to one entry (the rest noted in the console output), a
   partial match is left for manual review (flagged in the UI, not collapsed).
   `--show-duplicates` disables collapsing entirely, for eyeballing every
-  registration before deciding what to retire from the API.
+  registration before deciding what to retire from the API. It's also run a
+  second time purely on **geometry** (`_find_geometric_duplicate_groups`),
+  to catch duplicates that don't share a name (including named-vs-unnamed
+  pairs) — this geometric pass excludes any path whose name matches the
+  `A->B` reversed-direction pattern below, since that pair is intentionally
+  a duplicate-looking case the reversed-direction check owns instead.
+- **Reversed-direction check** (`find_reversed_direction_pairs`) — every pair
+  of paths named `A->B` / `B->A` (regex `_REVERSED_NAME_RE`) has its saved
+  start/end coordinates compared to tell a properly mirrored pair from one
+  where the "reverse" registration actually saved the same direction as the
+  forward one (a real backend defect — see the API investigation that
+  motivated this check). Classified `bug` / `ok` / `ambiguous` using
+  independent per-endpoint distance thresholds (`REVERSED_CHECK_ENDPOINT_M`
+  = 150m to count as "matches", `REVERSED_CHECK_CLEAR_M` = 300m the other
+  pairing must clear to rule it out) rather than a single summed-distance
+  threshold, which under-caught same-direction bugs on longer paths. Only
+  paths whose name fits the `A->B` pattern are eligible — paths with empty
+  or non-conforming names (even after the ID fallback above) are invisible
+  to this check and rely on the geometric duplicate pass instead.
 - **Overlap detection** — point-to-polyline distance checks flag paths whose
   lines run suspiciously close together; clicking a line or endpoint marker
   cycles through the overlapping candidates in place, bolding whichever one is

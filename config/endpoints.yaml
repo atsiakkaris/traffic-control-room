@@ -44,7 +44,7 @@ groups:
         checks:
           - valid_xml
           - feed_freshness          # publicationTime must be within freshness_minutes
-          - vms_controller_status   # parses working / not-working / no-status controllers
+          - vms_controller_status   # parses working / not-working / no-status controllers, and statusUpdateTime freshness
 
   - name: Bluetooth
     description: Bluetooth devices installed on the road network.
@@ -77,7 +77,7 @@ groups:
         checks:
           - valid_xml
           - feed_freshness                  # publicationTime must be within freshness_minutes
-          - bt_paths_speed_and_traveltime   # all paths must have speed>0 and traveltime>0
+          - bt_paths_speed_and_traveltime   # all paths must have speed>0/traveltime>0, and measurement_timestamp fresh
 
   - name: Traffic Detection
     description: Urban Traffic Counter Loop sensors on the road network.

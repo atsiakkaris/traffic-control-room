@@ -68,14 +68,18 @@ def parse_vms_detail(text):
     working = re.search(r"Working: (\d+)", text)
     not_working = re.search(r"Not working: (\d+)", text)
     no_status = re.search(r"No status: (\d+)", text)
+    stale = re.search(r"Stale: (\d+)", text)
     ids_match = re.search(r"Not working: \d+ — ([\d ,\(\)a-zA-Z]+?)(?:\||\Z)", text)
     ns_ids_match = re.search(r"No status: \d+ — ([\d ,]+?)(?:\||\Z)", text)
+    stale_ids_match = re.search(r"Stale: \d+ — IDs: ([\d ,]+?)(?:\||\Z)", text)
     return {
         "working": int(working.group(1)) if working else 0,
         "not_working": int(not_working.group(1)) if not_working else 0,
         "no_status": int(no_status.group(1)) if no_status else 0,
+        "stale": int(stale.group(1)) if stale else 0,
         "not_working_ids": ids_match.group(1).strip() if ids_match else "",
         "no_status_ids": ns_ids_match.group(1).strip() if ns_ids_match else "",
+        "stale_ids": stale_ids_match.group(1).strip() if stale_ids_match else "",
     }
 
 
@@ -230,6 +234,9 @@ def _humanize_failure(check_name, full_failure_reason):
     if check_name == "valid_xml":
         return "Response is not valid XML — the API may be down or returning an error page"
     if check_name == "vms_controller_status":
+        sm = re.search(r"Stale: (\d+)", fr)
+        if sm:
+            return f"{sm.group(1)} VMS controller(s) reporting stale status (data hasn't updated in over the freshness limit)"
         m = re.search(r"Not working: (\d+)", fr)
         n = int(m.group(1)) if m else "?"
         return f"{n} VMS controller(s) reported as not working"
@@ -238,6 +245,10 @@ def _humanize_failure(check_name, full_failure_reason):
         n = int(m.group(1)) if m else "?"
         return f"{n} traffic sensor(s) reporting speed = -1 (hardware fault)"
     if check_name == "bt_paths_speed_and_traveltime":
+        sm = re.search(r"Stale paths: ([^|]+)", fr)
+        if sm:
+            n = len(sm.group(1).split(","))
+            return f"{n} BT path(s) reporting stale measurements (data hasn't updated in over the freshness limit)"
         m = re.search(r"Speed OK: (\d+)/(\d+)", fr)
         if m:
             failing = int(m.group(2)) - int(m.group(1))
@@ -1238,11 +1249,12 @@ def generate_report() -> str:
             if "vms_controller_status" in cs:
                 d = parse_vms_detail(cs)
                 if d:
-                    vms_total = d['working'] + d['not_working'] + d['no_status']
+                    vms_total = d['working'] + d['not_working'] + d['no_status'] + d['stale']
                     vms_pct = round(d['working'] / vms_total * 100) if vms_total else 0
                     bar_color = _health_color(vms_pct)
                     not_working_ids = sensor_data.get("not_working", [])
                     no_status_ids   = sensor_data.get("no_status", [])
+                    stale_ids       = sensor_data.get("stale", [])
                     extra += f"""
                     <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                       <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">VMS Controllers</div>
@@ -1256,9 +1268,11 @@ def generate_report() -> str:
                         <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
                         <span style="color:#e24b4a"><b>{d['not_working']}</b> not working</span>
                         <span style="color:#888"><b>{d['no_status']}</b> no status</span>
+                        <span style="color:#e58e0a"><b>{d['stale']}</b> stale</span>
                       </div>
                       {_collapsible_ids("not working", "#e24b4a", not_working_ids)}
                       {_collapsible_ids("no status", "#888", no_status_ids)}
+                      {_collapsible_ids("stale (status hasn't updated recently)", "#e58e0a", stale_ids)}
                     </div>"""
             elif "bt_paths_speed_and_traveltime" in cs:
                 d = parse_bt_detail(cs)
@@ -1266,6 +1280,7 @@ def generate_report() -> str:
                     pct = round(d['speed_ok'] / d['total'] * 100) if d['total'] else 0
                     bar_color = _health_color(pct)
                     failing_ids = sensor_data.get("failing", [])
+                    stale_ids = sensor_data.get("stale", [])
                     extra += f"""
                     <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                       <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Bluetooth Paths with data</div>
@@ -1275,7 +1290,8 @@ def generate_report() -> str:
                         </div>
                         <span style="color:var(--color-text-primary);font-weight:500">{d['speed_ok']}/{d['total']}</span>
                       </div>
-                      {_collapsible_ids("failing paths", "#e24b4a", failing_ids)}
+                      {_collapsible_ids("failing paths (no speed/travel time)", "#e24b4a", failing_ids)}
+                      {_collapsible_ids("stale paths (data hasn't updated recently)", "#e58e0a", stale_ids)}
                     </div>"""
             elif "sensor_speed_status" in cs:
                 d = parse_sensor_detail(cs)
