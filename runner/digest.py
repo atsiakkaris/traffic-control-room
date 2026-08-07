@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import html
 import logging
@@ -442,6 +443,47 @@ def _contract_summary_html(census, sensor_names):
                     f'Which sensors are failing</div>{details}</div>' if details else "")
 
 
+def _render_note_html(text):
+    """Editor's note body: raw HTML passes through untouched — no escaping —
+    so bold/italic/color spans/links typed directly as HTML tags just work.
+    Not escaping is deliberate here: DIGEST_NOTE is operator-authored (a
+    GitHub repo variable only repo admins can set), unlike sensor names or
+    any other field in this file that originates from the API feed. The
+    only added convenience is turning blank lines into paragraph breaks and
+    grouping consecutive "- " lines into a bullet list, so the author isn't
+    forced to hand-write <p>/<ul> for ordinary text.
+
+    If the text already starts with a tag (e.g. pasted from a WYSIWYG editor
+    that emitted its own <p>/<ul> structure), it's passed through completely
+    unmodified instead — auto-wrapping it too would double-nest <p><p>...
+    </p></p>, and re-splitting already-tagged paragraphs on blank lines would
+    just as easily mangle a <ul> whose <li> lines aren't blank-line separated."""
+    text = text.strip()
+    if text.startswith('<'):
+        return text
+
+    parts = []
+    for block in re.split(r'\n\s*\n', text):
+        lines = [l.strip() for l in block.split('\n') if l.strip()]
+        if lines and all(l.startswith('- ') for l in lines):
+            items = "".join(f'<li style="margin-bottom:4px">{l[2:]}</li>' for l in lines)
+            parts.append(f'<ul style="margin:0 0 10px;padding-left:20px">{items}</ul>')
+        else:
+            parts.append(f'<p style="margin:0 0 10px">{"<br>".join(lines)}</p>')
+    return "".join(parts)
+
+
+def _note_section(note):
+    if not note or not note.strip():
+        return ""
+    return f"""
+    <div class="dg-note" style="background:#fff8e6;border:1px solid #fac775;border-radius:8px;padding:14px 18px;margin-bottom:24px">
+      <div class="dg-note-title" style="font-size:14px;font-weight:700;color:#633806;margin-bottom:2px">Editor's Note</div>
+      <div class="dg-note-title" style="font-size:12px;font-weight:600;color:#633806;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">📌 This week</div>
+      <div style="font-size:13px;color:#374151;line-height:1.5">{_render_note_html(note)}</div>
+    </div>"""
+
+
 def build_html(d):
     generated_at = datetime.now(CYPRUS_TZ).strftime("%d %b %Y %H:%M EEST")
 
@@ -490,7 +532,50 @@ def build_html(d):
     </div>"""
 
     return f"""
-    <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#111;max-width:680px;margin:0 auto;padding:24px">
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
+    <style>
+      /* Dark-mode support for mail clients that honour prefers-color-scheme
+         in an embedded <style> block (Apple Mail, new Outlook/Outlook.com,
+         Gmail webmail/app, Yahoo). Clients that support neither (old
+         Outlook desktop) just render the light version below untouched —
+         there's no way around that short of the recipient updating Outlook.
+
+         The rest of this file is plain inline-styled HTML (email-safe, no
+         classes needed for the light theme itself). Rather than converting
+         every element to a class, dark over rides target the literal inline
+         color values directly via attribute substring selectors — e.g.
+         [style*="color:#111827"] matches any element whose style attribute
+         contains that exact substring. This only works because those hex
+         values are used consistently for one semantic role each; the three
+         tier colors that are ALSO used as text-on-their-own-matching-pastel-
+         background (badge legend swatches, big stat tiles) are deliberately
+         left out of these rules — overriding them here would repaint text
+         that's sitting on an unchanged light chip, breaking contrast the
+         other way. Those three (Always on / Intermittent / Critical) get
+         explicit dg-c-good/warn/bad classes instead, only on the two
+         neutral-background spots (small per-group table) where a literal
+         override would otherwise go dark-on-dark. */
+      @media (prefers-color-scheme: dark) {{
+        body {{ background:#111318 !important; color:#f0f2f5 !important; }}
+        [style*="color:#111827"], [style*="color:#374151"] {{ color:#f0f2f5 !important; }}
+        [style*="color:#6b7280"] {{ color:#9ca3af !important; }}
+        [style*="solid #e5e7eb"] {{ border-color:rgba(255,255,255,0.14) !important; }}
+        [style*="solid #f3f4f6"] {{ border-color:rgba(255,255,255,0.08) !important; }}
+        [style*="background:#f9fafb"] {{ background:#1c1f26 !important; }}
+        [style*="background:#e5e7eb"] {{ background:#30363d !important; }}
+        .dg-note {{ background:#241e0d !important; border-color:#7c5a15 !important; }}
+        .dg-note-title {{ color:#fbbf24 !important; }}
+        .dg-c-good {{ color:#34d399 !important; }}
+        .dg-c-warn {{ color:#fbbf24 !important; }}
+        .dg-c-bad  {{ color:#f87171 !important; }}
+      }}
+    </style>
+    </head>
+    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#111;background:#ffffff;max-width:680px;margin:0 auto;padding:24px">
 
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:4px">
       <tr>
@@ -504,6 +589,8 @@ def build_html(d):
       It highlights sensors that went offline, are performing below expectations, or have changed
       significantly since last week.
     </p>
+
+    {_note_section(os.environ.get("DIGEST_NOTE", ""))}
 
     {badge_legend}
 
@@ -545,11 +632,11 @@ def build_html(d):
         <tr style="border-bottom:1px solid #e5e7eb">
           <th style="padding:5px 8px;text-align:left;font-weight:500;color:#9ca3af">Group</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#9ca3af">Total</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#085041">Always on</th>
+          <th class="dg-c-good" style="padding:5px 8px;text-align:center;font-weight:500;color:#085041">Always on</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#1d9e75">Healthy</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#633806">Intermittent</th>
+          <th class="dg-c-warn" style="padding:5px 8px;text-align:center;font-weight:500;color:#633806">Intermittent</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e58e0a">Unstable</th>
-          <th style="padding:5px 8px;text-align:center;font-weight:500;color:#9b1c1c">Critical</th>
+          <th class="dg-c-bad" style="padding:5px 8px;text-align:center;font-weight:500;color:#9b1c1c">Critical</th>
           <th style="padding:5px 8px;text-align:center;font-weight:500;color:#e24b4a">No good runs</th>
         </tr>
       </thead>
@@ -557,11 +644,11 @@ def build_html(d):
         {"".join(f'''<tr style="border-bottom:1px solid #f3f4f6">
           <td style="padding:5px 8px;color:#374151">{g}</td>
           <td style="padding:5px 8px;text-align:center;color:#374151">{c['total']}</td>
-          <td style="padding:5px 8px;text-align:center;color:#085041">{c['always_on']}</td>
+          <td class="dg-c-good" style="padding:5px 8px;text-align:center;color:#085041">{c['always_on']}</td>
           <td style="padding:5px 8px;text-align:center;color:#1d9e75">{c['healthy']}</td>
-          <td style="padding:5px 8px;text-align:center;color:#633806">{c['intermittent']}</td>
+          <td class="dg-c-warn" style="padding:5px 8px;text-align:center;color:#633806">{c['intermittent']}</td>
           <td style="padding:5px 8px;text-align:center;color:#e58e0a">{c['unstable']}</td>
-          <td style="padding:5px 8px;text-align:center;color:#9b1c1c">{c['critical']}</td>
+          <td class="dg-c-bad" style="padding:5px 8px;text-align:center;color:#9b1c1c">{c['critical']}</td>
           <td style="padding:5px 8px;text-align:center;color:#e24b4a">{c['offline']}</td>
         </tr>''' for g, c in d['groups'].items())}
       </tbody>
@@ -673,6 +760,14 @@ def send_digest():
 if __name__ == "__main__":
     if "--preview" in sys.argv:
         import webbrowser
+        # Preview-only convenience: paste the note into this gitignored file
+        # instead of wrestling with multi-line env vars in cmd.exe (which has
+        # no here-string and executes each pasted line as its own command).
+        # Only read here, never in send_digest() — the real send must always
+        # come from the DIGEST_NOTE repo variable, not a stray local file.
+        note_file = Path(__file__).parent.parent / "digest_note.local.html"
+        if not os.environ.get("DIGEST_NOTE") and note_file.exists():
+            os.environ["DIGEST_NOTE"] = note_file.read_text(encoding="utf-8")
         d    = build_digest()
         html = build_html(d)
         out  = Path(__file__).parent.parent / "reports" / "digest_preview.html"
