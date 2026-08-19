@@ -495,6 +495,8 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<script data-goatcounter="https://traffic-control-room.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden}}

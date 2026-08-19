@@ -6,6 +6,7 @@ import os
 import re
 import json
 import html as _html
+import hashlib
 import yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -22,6 +23,55 @@ from labels import sensor_display_name
 from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
                        tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS,
                        to_cyprus, current_state, load_project_accountability, contract_census)
+from digest import _render_note_html
+
+
+# Local-preview convenience only, same reasoning as digest_note.local.html:
+# gitignored, so it never exists on the Actions runner — the real banner
+# always comes from the DASHBOARD_NOTE repo variable.
+_DASHBOARD_NOTE_PATH = Path(__file__).parent.parent / "dashboard_note.local.html"
+
+
+def _dashboard_note():
+    note = os.environ.get("DASHBOARD_NOTE", "")
+    if not note and _DASHBOARD_NOTE_PATH.exists():
+        note = _DASHBOARD_NOTE_PATH.read_text(encoding="utf-8")
+    return note.strip()
+
+
+def _dashboard_note_banner(note):
+    """Option-A stripe banner: a thin amber bar under the header, dismissible,
+    with an expandable details panel. Dismissal is keyed to a hash of the note
+    text (stored in localStorage) so editing the note un-dismisses it, but
+    leaving it unchanged keeps it dismissed across visits."""
+    if not note:
+        return ""
+    note_id = hashlib.sha1(note.encode("utf-8")).hexdigest()[:10]
+    return f"""
+<div id="dashNoteStripe" data-note-id="{note_id}" style="display:none;background:#faeeda;color:#633806;border-bottom:2px solid #e58e0a;font-size:13px">
+  <div style="padding:8px 28px;display:flex;align-items:center;gap:10px">
+    <i class="ti ti-alert-triangle" style="font-size:15px" aria-hidden="true"></i>
+    <span style="flex:1">Known issue — <span onclick="toggleDashNote()" style="text-decoration:underline;cursor:pointer">view details</span></span>
+    <i class="ti ti-x" onclick="dismissDashNote()" style="cursor:pointer;font-size:14px" role="button" aria-label="Dismiss"></i>
+  </div>
+  <div id="dashNoteBody" style="display:none;padding:0 28px 14px;line-height:1.5">{_render_note_html(note)}</div>
+</div>
+<script>
+(function() {{
+  var noteId = "{note_id}";
+  if (localStorage.getItem('dashNoteDismissed') !== noteId) {{
+    document.getElementById('dashNoteStripe').style.display = '';
+  }}
+  window.toggleDashNote = function() {{
+    var b = document.getElementById('dashNoteBody');
+    b.style.display = b.style.display === 'none' ? '' : 'none';
+  }};
+  window.dismissDashNote = function() {{
+    localStorage.setItem('dashNoteDismissed', noteId);
+    document.getElementById('dashNoteStripe').style.display = 'none';
+  }};
+}})();
+</script>"""
 
 
 # Load UI labels from config — falls back to defaults if file is missing
@@ -191,7 +241,13 @@ def _chart_datasets_js(group_meta, chart_series):
             f'label: {json.dumps(meta.get("history_label", gname))}, '
             f'data: {chart_series[gname]}, '
             f'borderColor: {json.dumps(meta.get("color", "#6b7280"))}, '
-            "backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: true"
+            # spanGaps:false so a run with no recorded sensor data (e.g. every
+            # check erroring out from an expired SSL cert) shows as a real
+            # break in the line, not a smoothed-over interpolation between
+            # the last good point and the next one — that interpolation was
+            # actively misleading, drawing a fake gradual recovery through a
+            # period where the feed was fully down the whole time.
+            "backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: false"
             " }"
         )
     return ",\n      ".join(datasets)
@@ -461,10 +517,13 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
         safe_sid = composite_id.replace("'", "\\'")
         rows += f"""
         <tr data-group="{s['group_name']}" data-display="{(display_sensor_id or s['sensor_id']).lower()}" data-tokens="{tokens_attr}" data-pct="{'' if excluded else pct}" data-awaiting="{'1' if excluded else '0'}" onclick="_toggleTrend('{safe_sid}',this)" style="cursor:pointer">
-          <td style="width:18px;padding-right:4px"><span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s">&#9654;</span></td>
+          <td style="width:34px;padding-right:4px;white-space:nowrap">
+            <span title="{_html.escape(state_tip)}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:{state_color};margin-right:8px;cursor:help;vertical-align:middle"></span>
+            <span id="chev-{composite_id}" style="font-size:9px;color:var(--color-text-secondary);display:inline-block;transition:transform .2s;vertical-align:middle">&#9654;</span>
+          </td>
           <td style="font-size:12px;color:var(--color-text-secondary);white-space:nowrap">{display_group}</td>
           <td style="font-size:12px;font-family:monospace;max-width:260px;word-break:break-word;white-space:normal">{sid_cell}</td>
-          <td style="white-space:nowrap">{project_cell}</td>
+          <td class="col-project" style="white-space:nowrap">{project_cell}</td>
           <td style="white-space:nowrap">{state_cell}</td>
           <td style="white-space:nowrap">{sparks}</td>
           <td style="white-space:nowrap"><span title="{badge_tip}" style="font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;background:{badge_bg};color:{badge_color};cursor:help">{badge_label}</span></td>
@@ -527,7 +586,7 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
       </select>
     </div>
     <table id="sensorTable">
-      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th>Project</th>
+      <thead><tr><th style="width:18px"></th><th>Group</th><th>Sensor ID</th><th id="colProjectHead">Project</th>
         <th title="What the sensor is doing right now, and how long it has been failing">Current state</th>
         <th>History (last 20 runs)</th>
         <th title="Lifetime reliability across every run ever recorded — how much this sensor can be trusted">Stability (lifetime)</th>
@@ -561,6 +620,16 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
           if (trow) tbody.appendChild(trow);
         }});
       }}
+
+      // The Project column is always "n/a" for Bluetooth Paths (they're sensor
+      // combinations, not owned equipment) — hide the dead column when that's
+      // the only group in view, rather than wasting width on it every row.
+      var hideProject = group === 'Bluetooth Paths';
+      var projHead = document.getElementById('colProjectHead');
+      if (projHead) projHead.style.display = hideProject ? 'none' : '';
+      document.querySelectorAll('#sensorTable .col-project').forEach(function(td) {{
+        td.style.display = hideProject ? 'none' : '';
+      }});
 
       // apply visibility filters
       tbody.querySelectorAll('tr').forEach(function(tr) {{
@@ -800,10 +869,14 @@ def build_contract_summary_html(census, bt_path_names=None, all_sensor_coords=No
                         if c["not_live"] else '<span style="color:var(--color-text-secondary)">0</span>')
         click = (f' onclick="_toggleContract(\'{cid}\')" style="cursor:pointer"' if has_faults
                  else '')
+        dot_color = "#7f8c8d" if (has_faults and c["acct"] == "out_of_support") else ("#e24b4a" if has_faults else "#1d9e75")
+        dot_tip = "Persistent faults present" if has_faults else "No persistent faults"
         rows += (
             f'<tr{click}>'
             f'<td style="padding:6px 8px;border-top:0.5px solid var(--color-border-tertiary)">'
-            f'<div style="font-size:13px;color:var(--color-text-primary)">{chevron}{name}</div>'
+            f'<div style="font-size:13px;color:var(--color-text-primary)">'
+            f'<span title="{dot_tip}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:{dot_color};margin-right:7px;cursor:help"></span>'
+            f'{chevron}{name}</div>'
             f'<div style="font-size:10px;color:var(--color-text-secondary);padding-left:15px">{groups}</div></td>'
             f'<td style="padding:6px 8px;text-align:center;border-top:0.5px solid var(--color-border-tertiary)"><span style="font-size:10px;font-weight:500;'
             f'padding:1px 7px;border-radius:10px;background:{bg};color:{fg};white-space:nowrap">{label}</span></td>'
@@ -1228,6 +1301,16 @@ def generate_report() -> str:
         sensor_data_key = "Bluetooth Paths" if group_name == "Bluetooth" else group_name
         sensor_data = latest_sensor_statuses.get(sensor_data_key, {})
 
+        def _kpi_tile(count, label, bg, fg):
+            return (f'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;'
+                    f'font-weight:500;padding:3px 10px;border-radius:8px;background:{bg};color:{fg}">'
+                    f'<b>{count}</b>{label}</span>')
+
+        _KPI_GOOD    = ("#e1f5ee", "#085041")
+        _KPI_FAULT   = ("#fcebeb", "#e24b4a")
+        _KPI_STALE   = ("#faeeda", "#633806")
+        _KPI_NEUTRAL = ("var(--color-border-tertiary)", "var(--color-text-secondary)")
+
         def _collapsible_ids(label, color, ids):
             if not ids:
                 return ""
@@ -1264,11 +1347,11 @@ def generate_report() -> str:
                         </div>
                         <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{vms_total}</span>
                       </div>
-                      <div style="display:flex;gap:16px;margin-bottom:4px">
-                        <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
-                        <span style="color:#e24b4a"><b>{d['not_working']}</b> not working</span>
-                        <span style="color:#888"><b>{d['no_status']}</b> no status</span>
-                        <span style="color:#e58e0a"><b>{d['stale']}</b> stale</span>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                        {_kpi_tile(d['working'], ' working', *_KPI_GOOD)}
+                        {_kpi_tile(d['not_working'], ' not working', *_KPI_FAULT)}
+                        {_kpi_tile(d['no_status'], ' no status', *_KPI_NEUTRAL)}
+                        {_kpi_tile(d['stale'], ' stale', *_KPI_STALE)}
                       </div>
                       {_collapsible_ids("not working", "#e24b4a", not_working_ids)}
                       {_collapsible_ids("no status", "#888", no_status_ids)}
@@ -1310,11 +1393,11 @@ def generate_report() -> str:
                         </div>
                         <span style="color:var(--color-text-primary);font-weight:500">{d['working']}/{d['total']}</span>
                       </div>
-                      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px">
-                        <span style="color:#1d9e75"><b>{d['working']}</b> working</span>
-                        <span style="color:#888"><b>{d['no_traffic']}</b> no traffic</span>
-                        <span style="color:#e24b4a"><b>{d['malfunctioning']}</b> malfunctioning</span>
-                        <span style="color:#888"><b>{d['no_measurement']}</b> no data</span>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                        {_kpi_tile(d['working'], ' working', *_KPI_GOOD)}
+                        {_kpi_tile(d['no_traffic'], ' no traffic', *_KPI_NEUTRAL)}
+                        {_kpi_tile(d['malfunctioning'], ' malfunctioning', *_KPI_FAULT)}
+                        {_kpi_tile(d['no_measurement'], ' no data', *_KPI_NEUTRAL)}
                       </div>
                       {_collapsible_ids("malfunctioning", "#e24b4a", malfunctioning_ids)}
                       {_collapsible_ids("no traffic", "#888", no_traffic_ids)}
@@ -1330,7 +1413,7 @@ def generate_report() -> str:
             f'<i class="ti ti-map-pin" style="font-size:12px"></i>View on map</button></div>'
         ) if layer_key else ""
         return f"""
-        <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:12px;padding:20px;flex:1;min-width:260px">
+        <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-top:3px solid {status_color};border-radius:12px;padding:20px;flex:1;min-width:260px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
             <i class="ti {icon}" style="font-size:22px;color:var(--color-text-secondary)" aria-hidden="true"></i>
             <div style="flex:1">
@@ -1433,7 +1516,14 @@ def generate_report() -> str:
     else:
         map_panel_html = (
             '<div id="mapFsWrap">'
-            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'
+            '<button class="map-toggle" id="btn-mapfilters" onclick="toggleMapFilters(this)" '
+            'style="display:inline-flex;align-items:center;gap:5px">'
+            '<i class="ti ti-adjustments-horizontal" style="font-size:13px" aria-hidden="true"></i>Filters</button>'
+            '</div>'
+            '<div id="mapFiltersPanel" style="display:none;margin-bottom:12px;padding:10px 10px 2px;'
+            'background:var(--surface);border:0.5px solid var(--border);border-radius:8px">'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Show:</span>'
             '<button class="map-toggle active" id="btn-showall" onclick="toggleShowAll(this)" style="margin-right:4px">Show all</button>'
             + map_layer_buttons
@@ -1442,7 +1532,7 @@ def generate_report() -> str:
             '<button class="map-toggle active" data-filter="all" onclick="setFilter(this,\'all\')">All</button>'
             '<button class="map-toggle" data-filter="issues" onclick="setFilter(this,\'issues\')">Issues only</button>'
             '</div>'
-            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">'
             '<span style="font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px">Contract:</span>'
             '<select id="contractFilter" onchange="setContractFilter(this.value)" '
             'style="font-size:11px;padding:4px 10px;border-radius:6px;border:0.5px solid var(--border);'
@@ -1450,6 +1540,7 @@ def generate_report() -> str:
             '<span style="flex:1"></span>'
             '<button class="map-toggle" id="btn-notlive" onclick="toggleNotLive(this)" title="Show or hide sensors that are awaiting power or decommissioned">Hide not-live</button>'
             '<button class="map-toggle" id="btn-basemap" onclick="toggleBasemap(this)" title="Switch between street and satellite base map">Satellite</button>'
+            '</div>'
             '</div>'
             '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:7px 10px;'
             'background:var(--surface);border:0.5px solid var(--border);border-radius:8px">'
@@ -1499,6 +1590,8 @@ def generate_report() -> str:
     sensor_pct = round(sensor_good / sensor_total_count * 100)
     sensor_bar_color = "#1d9e75" if sensor_pct >= 90 else ("#e58e0a" if sensor_pct >= 55 else "#e24b4a")
 
+    dashboard_note_banner = _dashboard_note_banner(_dashboard_note())
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1506,6 +1599,8 @@ def generate_report() -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_UI.get('page_title', 'ITS Infrastructure Health')}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<script data-goatcounter="https://traffic-control-room.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
@@ -1626,9 +1721,17 @@ def generate_report() -> str:
 </head>
 <body>
 <div id="stale-banner" style="display:none;background:#7c3aed;color:#fff;text-align:center;padding:8px 16px;font-size:12px;font-weight:500"><i class="ti ti-alert-triangle" style="vertical-align:-2px;margin-right:6px"></i>Data may be outdated — monitoring may be disrupted.</div>
+{dashboard_note_banner}
 <header>
   <div>
-    <h1><i class="ti ti-traffic-lights" style="font-size:17px;vertical-align:-2px;margin-right:8px" aria-hidden="true"></i>{_UI.get('page_title', 'ITS Infrastructure Health')}</h1>
+    <h1 style="display:flex;align-items:center;gap:10px">
+      <span style="display:flex;gap:4px" aria-hidden="true">
+        <span style="width:9px;height:9px;border-radius:50%;background:#e24b4a"></span>
+        <span style="width:9px;height:9px;border-radius:50%;background:#e58e0a"></span>
+        <span style="width:9px;height:9px;border-radius:50%;background:#1d9e75"></span>
+      </span>
+      {_UI.get('page_title', 'ITS Infrastructure Health')}
+    </h1>
     <div class="meta">Last checked {run_time} Cyprus time &nbsp;·&nbsp; running since {first_run_date}</div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
@@ -1822,8 +1925,25 @@ function toggleDark() {{
   }}
 }}
 
+var _trendZonesPlugin = {{
+  id: 'trendZones',
+  beforeDraw: function(chart) {{
+    var yScale = chart.scales.y, xScale = chart.scales.x, ctx = chart.ctx;
+    var zones = [[90,100,'rgba(29,158,117,0.07)'],[55,90,'rgba(229,142,10,0.06)'],[0,55,'rgba(226,75,74,0.06)']];
+    ctx.save();
+    zones.forEach(function(z) {{
+      var yTop = yScale.getPixelForValue(z[1]);
+      var yBot = yScale.getPixelForValue(z[0]);
+      ctx.fillStyle = z[2];
+      ctx.fillRect(xScale.left, yTop, xScale.right - xScale.left, yBot - yTop);
+    }});
+    ctx.restore();
+  }}
+}};
+
 window._healthTrendChart = new Chart(document.getElementById('trendChart'), {{
   type: 'line',
+  plugins: [_trendZonesPlugin],
   data: {{
     labels: {chart_labels},
     datasets: [
@@ -1876,7 +1996,7 @@ def _build_map_script(map_sensors_json, map_bt_paths_json, history_json, group_m
     icon_size_js   = json.dumps({g: m.get("icon_size", 24) for g, m in gm.items()})
     icon_shape_js  = json.dumps({g: m["icon_shape"] for g, m in gm.items() if m.get("icon_shape")})
     legend_rows = "+".join(
-        "row(iconBox({icon},{color}{shape})+'<span style=\"color:#1a1a2e\">{label}</span>')".format(
+        "row(iconBox({icon},{color}{shape})+'<span style=\"color:var(--text)\">{label}</span>')".format(
             icon=json.dumps(m.get("icon", "ti-circle")),
             color="'#6b7280'",
             shape=(f",{json.dumps(m['icon_shape'])}" if m.get("icon_shape") else ""),
@@ -1950,11 +2070,13 @@ L.control.zoom({position: 'topright'}).addTo(_map);
 function _fixLeafletTop() {
   // Keep the zoom controls clear of the sticky page header — but only by
   // however much the header is actually covering the map's top edge right
-  // now. The header is position:sticky, so it only overlaps the map once
-  // the page is scrolled far enough; using its full height unconditionally
-  // (as if it always overlapped) wasted that much space above the controls
-  // even when nothing needed clearing. In fullscreen the header isn't on
-  // screen at all, so there's never an offset there.
+  // now, so the controls sit at the map's true top-right corner whenever
+  // there's no overlap (i.e. most of the time), and only get pushed down
+  // during the brief scroll range where the sticky header genuinely covers
+  // that corner. A constant offset (e.g. always clearing the header's full
+  // height) looks wrong the rest of the time — it strands the controls well
+  // below the corner even when nothing needs clearing. In fullscreen the
+  // header isn't on screen at all, so there's never an offset there.
   var hdr = document.querySelector('header');
   var mapEl = document.getElementById('sensorMap');
   var isFs = document.fullscreenElement || document.webkitFullscreenElement;
@@ -1966,7 +2088,14 @@ function _fixLeafletTop() {
 }
 _fixLeafletTop();
 window.addEventListener('resize', _fixLeafletTop);
-window.addEventListener('scroll', _fixLeafletTop, {passive: true});
+// rAF-throttled so recalculating on every scroll event doesn't visibly lag
+// or stutter — at most one reposition per animation frame.
+var _leafletTopScrollQueued = false;
+window.addEventListener('scroll', function() {
+  if (_leafletTopScrollQueued) return;
+  _leafletTopScrollQueued = true;
+  requestAnimationFrame(function() { _leafletTopScrollQueued = false; _fixLeafletTop(); });
+}, {passive: true});
 _map.on('click', function() { closeMapPanel(); });
 
 // The info panel lives inside the map container; a click on it must not fall
@@ -2458,7 +2587,7 @@ var _legend = L.control({position:'bottomleft'});
 var _legendOpen = true;
 _legend.onAdd = function() {
   var d = L.DomUtil.create('div');
-  d.style.cssText = 'background:#fff;border-radius:10px;font-size:11px;line-height:1.6;min-width:168px;'+
+  d.style.cssText = 'background:var(--surface);border-radius:10px;font-size:11px;line-height:1.6;min-width:168px;'+
     'pointer-events:auto;cursor:default;box-shadow:0 2px 10px rgba(0,0,0,0.18);overflow:hidden';
   L.DomEvent.disableClickPropagation(d);
   function row(html) { return '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'+html+'</div>'; }
@@ -2478,34 +2607,34 @@ _legend.onAdd = function() {
            ';border-radius:2px;flex-shrink:0"></span>';
   }
   var body =
-    '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
+    '<div style="font-weight:600;color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px">Sensor type</div>'+
     """ + legend_rows + """+
-    row(line('#1d9e75','3')+'<span style="color:#1a1a2e">BT Path (OK)</span>')+
-    row(line('#e24b4a','4')+'<span style="color:#1a1a2e">BT Path (issue)</span>')+
-    row(line('#9ca3af','2')+'<span style="color:#1a1a2e">BT Path (no data)</span>')+
+    row(line('#1d9e75','3')+'<span style="color:var(--text)">BT Path (OK)</span>')+
+    row(line('#e24b4a','4')+'<span style="color:var(--text)">BT Path (issue)</span>')+
+    row(line('#9ca3af','2')+'<span style="color:var(--text)">BT Path (no data)</span>')+
     row('<span style="display:inline-flex;gap:3px;flex-shrink:0">'+
         '<span style="width:13px;height:13px;border-radius:50%;background:#1d9e75;border:1.5px solid #fff;'+
         'display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff">A</span>'+
         '<span style="width:13px;height:13px;border-radius:50%;background:#1a1a2e;border:1.5px solid #fff;'+
         'display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff">B</span>'+
-        '</span><span style="color:#1a1a2e">Path start / end (click a path)</span>')+
+        '</span><span style="color:var(--text)">Path start / end (click a path)</span>')+
     row('<span style="display:inline-flex;gap:3px;flex-shrink:0">'+
         '<span style="width:11px;height:11px;border-radius:50%;background:#7bc4a4;border:1.5px solid #fff;'+
         'display:inline-flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;color:#fff">a</span>'+
         '<span style="width:11px;height:11px;border-radius:50%;background:#6b7280;border:1.5px solid #fff;'+
         'display:inline-flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;color:#fff">b</span>'+
-        '</span><span style="color:#1a1a2e">Adjacent path start / end</span>')+
-    '<div style="font-weight:600;color:#444;font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin:7px 0 4px">Status</div>'+
-    row(dot('#1d9e75')+'<span style="color:#1a1a2e">Working / OK</span>')+
-    row(dot('#e24b4a')+'<span style="color:#1a1a2e">Issue / Fault</span>')+
-    row(dot('#9ca3af')+'<span style="color:#1a1a2e">No data / No status</span>')+
-    row(dot('#e58e0a')+'<span style="color:#1a1a2e">Stale / Missing</span>');
+        '</span><span style="color:var(--text)">Adjacent path start / end</span>')+
+    '<div style="font-weight:600;color:var(--muted);font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin:7px 0 4px">Status</div>'+
+    row(dot('#1d9e75')+'<span style="color:var(--text)">Working / OK</span>')+
+    row(dot('#e24b4a')+'<span style="color:var(--text)">Issue / Fault</span>')+
+    row(dot('#9ca3af')+'<span style="color:var(--text)">No data / No status</span>')+
+    row(dot('#e58e0a')+'<span style="color:var(--text)">Stale / Missing</span>');
   function render() {
     d.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;'+
-      'padding:8px 12px;cursor:pointer;border-bottom:'+(_legendOpen?'1px solid #eee':'none')+'" id="_legendHdr">'+
-      '<span style="font-weight:700;font-size:12px;color:#1a1a2e">Legend</span>'+
-      '<span style="font-size:14px;color:#555;margin-left:10px;line-height:1">'+(_legendOpen?'&#x25BE;':'&#x25B4;')+'</span>'+
+      'padding:8px 12px;cursor:pointer;border-bottom:'+(_legendOpen?'1px solid var(--border)':'none')+'" id="_legendHdr">'+
+      '<span style="font-weight:700;font-size:12px;color:var(--text)">Legend</span>'+
+      '<span style="font-size:14px;color:var(--muted);margin-left:10px;line-height:1">'+(_legendOpen?'&#x25BE;':'&#x25B4;')+'</span>'+
       '</div>'+
       (_legendOpen ? '<div style="padding:8px 12px 10px">'+body+'</div>' : '');
     d.querySelector('#_legendHdr').onclick = function(ev) {
@@ -2563,6 +2692,14 @@ function toggleLayer(btn, key) {
   btn.classList.toggle('active', _activeLayers[key]);
   _syncShowAll();
   applyVisibility();
+}
+
+function toggleMapFilters(btn) {
+  var panel = document.getElementById('mapFiltersPanel');
+  if (!panel) return;
+  var open = panel.style.display === 'none';
+  panel.style.display = open ? '' : 'none';
+  btn.classList.toggle('active', open);
 }
 
 function toggleShowAll(btn) {

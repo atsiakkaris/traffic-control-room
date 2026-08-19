@@ -33,6 +33,7 @@ jobs:
           GMAIL_APP_PW:  ${{ secrets.GMAIL_APP_PW }}
           NOTIFY_EMAIL:  ${{ secrets.NOTIFY_EMAIL }}
           DB_PATH:       results/history.db
+          DASHBOARD_NOTE: ${{ vars.DASHBOARD_NOTE }}
         run: python runner/run_tests.py
 
       - name: Commit results
