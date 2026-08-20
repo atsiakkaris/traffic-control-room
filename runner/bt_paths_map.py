@@ -499,17 +499,35 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
         async src="//gc.zgo.at/count.js"></script>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#f4f6f9; --surface:#fff; --surface2:#f8f9fa; --border:#e5e7eb; --border-soft:#eee;
+  --text:#222; --muted:#666; --hover:#f0f6ff;
+}}
+body.dark{{
+  --bg:#12151a; --surface:#1c1f26; --surface2:#20242c; --border:#2b3038; --border-soft:#262a32;
+  --text:#e8eaed; --muted:#9aa1ab; --hover:#232a35;
+}}
 html,body{{height:100%;overflow:hidden}}
-body{{font-family:Arial,sans-serif;font-size:13px;background:#f4f6f9;color:#222;
-      display:flex;flex-direction:column}}
-header{{flex:0 0 auto;background:#1f4e79;color:#fff;padding:16px 24px}}
+body{{font-family:Arial,sans-serif;font-size:13px;background:var(--bg);color:var(--text);
+      display:flex;flex-direction:column;transition:background .15s,color .15s}}
+header{{flex:0 0 auto;background:#1f4e79;color:#fff;padding:16px 24px;
+        display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}}
 header h1{{font-size:20px;font-weight:bold}}
 header p{{font-size:12px;opacity:.8;margin-top:4px}}
-.summary{{flex:0 0 auto;display:flex;gap:12px;padding:16px 24px;flex-wrap:wrap}}
-.card{{background:#fff;border-radius:6px;padding:14px 20px;min-width:130px;
+.dm-btn{{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:6px;
+      padding:8px 14px;font-size:12px;font-weight:bold;cursor:pointer;white-space:nowrap;
+      display:flex;align-items:center;gap:6px}}
+.dm-btn:hover{{background:rgba(255,255,255,.24)}}
+.summary{{flex:0 0 auto;display:flex;gap:20px;padding:16px 24px;flex-wrap:wrap;align-items:flex-start}}
+.summary-group{{display:flex;flex-direction:column;gap:6px}}
+.summary-group + .summary-group{{border-left:1px solid var(--border);padding-left:20px}}
+.summary-group-title{{font-size:10.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.04em;
+      color:var(--muted)}}
+.summary-group-cards{{display:flex;gap:12px;flex-wrap:wrap}}
+.card{{background:var(--surface);border-radius:6px;padding:14px 20px;min-width:130px;
        box-shadow:0 1px 4px rgba(0,0,0,.1);text-align:center;border-top:3px solid #1f4e79}}
 .card .num{{font-size:26px;font-weight:bold;color:#1f4e79}}
-.card .lbl{{font-size:11px;color:#666;margin-top:3px}}
+.card .lbl{{font-size:11px;color:var(--muted);margin-top:3px}}
 .card.dup{{border-top-color:#c0392b}}
 .card.dup .num{{color:#c0392b}}
 .card.dup-warn{{border-top-color:#e67e22}}
@@ -525,11 +543,17 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .sensor-toggle-btn.reversed{{background:#6d28d9}}
 .sensor-toggle-btn.reversed:hover{{background:#5b21b6}}
 #mapFsWrap{{flex:1 1 auto;min-height:0;margin:0 24px 24px;display:flex}}
-#mapFsWrap:fullscreen{{margin:0;padding:12px;background:#f4f6f9;box-sizing:border-box}}
-#mapFsWrap:-webkit-full-screen{{margin:0;padding:12px;background:#f4f6f9;box-sizing:border-box}}
+#mapFsWrap:fullscreen{{margin:0;padding:12px;background:var(--bg);box-sizing:border-box}}
+#mapFsWrap:-webkit-full-screen{{margin:0;padding:12px;background:var(--bg);box-sizing:border-box}}
 #map{{flex:1 1 auto;min-height:0;border-radius:6px;
       box-shadow:0 1px 6px rgba(0,0,0,.15)}}
-.leaflet-popup-content b{{color:#1a1a2e}}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{{background:var(--surface);color:var(--text)}}
+.leaflet-popup-content b{{color:var(--text)}}
+.leaflet-bar a{{background:var(--surface);color:var(--text);border-bottom-color:var(--border)}}
+.leaflet-bar a:hover{{background:var(--hover)}}
+.leaflet-control-attribution{{background:rgba(255,255,255,.7)}}
+body.dark .leaflet-control-attribution{{background:rgba(28,31,38,.75);color:var(--muted)}}
+body.dark .leaflet-control-attribution a{{color:var(--muted)}}
 .sensor-toggle-btn{{background:#1f4e79;color:#fff;border:none;border-radius:4px;
       padding:8px 12px;font-size:12px;font-weight:bold;cursor:pointer;
       box-shadow:0 1px 4px rgba(0,0,0,.4);white-space:nowrap}}
@@ -543,15 +567,15 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .search-ctl{{position:absolute;top:12px;left:50%;transform:translateX(-50%);
       z-index:1000;width:320px}}
 .search-ctl input{{width:100%;padding:8px 12px;border:none;border-radius:4px;font-size:13px;
-      box-shadow:0 1px 4px rgba(0,0,0,.4);box-sizing:border-box}}
-.search-results{{background:#fff;border-radius:4px;margin-top:4px;max-height:280px;overflow-y:auto;
+      box-shadow:0 1px 4px rgba(0,0,0,.4);box-sizing:border-box;background:var(--surface);color:var(--text)}}
+.search-results{{background:var(--surface);border-radius:4px;margin-top:4px;max-height:280px;overflow-y:auto;
       box-shadow:0 2px 8px rgba(0,0,0,.3);display:none}}
 .search-results.visible{{display:block}}
-.search-result{{padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #eee}}
+.search-result{{padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid var(--border-soft)}}
 .search-result:last-child{{border-bottom:none}}
-.search-result:hover{{background:#f0f6ff}}
-.search-result .type{{color:#888;font-size:10px;text-transform:uppercase;letter-spacing:.03em}}
-.search-empty{{padding:8px 12px;font-size:12px;color:#888}}
+.search-result:hover{{background:var(--hover)}}
+.search-result .type{{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.03em}}
+.search-empty{{padding:8px 12px;font-size:12px;color:var(--muted)}}
 .sensor-toggle-btn.susp{{background:#0f766e}}
 .sensor-toggle-btn.susp:hover{{background:#0b5c56}}
 .sensor-toggle-btn.susp.active{{background:#b7791f}}
@@ -565,8 +589,8 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .sensor-toggle-btn.import{{background:#3949ab;margin-top:6px}}
 .sensor-toggle-btn.import:hover{{background:#2c3a82}}
 .inspector{{position:absolute;left:12px;bottom:12px;z-index:1000;width:300px;max-height:60%;
-      display:flex;flex-direction:column;background:#fff;border-radius:8px;
-      box-shadow:0 2px 10px rgba(0,0,0,.35);font-size:12px;overflow:hidden}}
+      display:flex;flex-direction:column;background:var(--surface);border-radius:8px;
+      box-shadow:0 2px 10px rgba(0,0,0,.35);font-size:12px;overflow:hidden;color:var(--text)}}
 .inspector-hd{{flex:0 0 auto;background:#1f4e79;color:#fff;padding:7px 10px;cursor:move;
       display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:bold}}
 .inspector-hd .nav{{display:flex;align-items:center;gap:6px;font-weight:normal}}
@@ -575,50 +599,109 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .inspector-hd .nav button:hover{{background:rgba(255,255,255,.32)}}
 .inspector-hd .nav span{{font-size:11px;opacity:.9;min-width:52px;text-align:center}}
 .inspector-body{{padding:10px 12px;overflow-y:auto}}
-.inspector-body .empty{{color:#888;font-style:italic}}
-.flag-summary{{display:flex;align-items:center;gap:4px;font-size:11px;color:#555;
-      padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid #eee;flex-wrap:wrap}}
+.inspector-body .empty{{color:var(--muted);font-style:italic}}
+.flag-summary{{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted);
+      padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--border-soft);flex-wrap:wrap}}
 .flag-cycle-toggle{{cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px}}
 .flag-cycle-toggle input{{cursor:pointer;margin:0}}
-.flag-summary-link{{color:#1f4e79;text-decoration:underline;margin-left:auto;cursor:pointer}}
-.flag-list-row{{padding:7px 4px;font-size:12px;cursor:pointer;border-bottom:1px solid #f0f0f0}}
-.flag-list-row:hover{{background:#f4f6f9}}
-.flag-list-id{{color:#888;font-size:11px}}
+.flag-summary-link{{color:#4a90c4;text-decoration:underline;margin-left:auto;cursor:pointer}}
+.flag-list-row{{padding:7px 4px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border-soft)}}
+.flag-list-row:hover{{background:var(--hover)}}
+.flag-list-id{{color:var(--muted);font-size:11px}}
 .badge{{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:bold;
       margin:6px 4px 0 0}}
 .badge.suspicious{{background:#fde68a;color:#92400e}}
 .flag-row{{display:flex;gap:6px;margin-top:9px}}
-.flag-row button{{flex:1;border:1px solid #ddd;background:#f8f9fa;border-radius:4px;padding:5px 4px;
-      font-size:11px;cursor:pointer}}
-.flag-row button:hover{{background:#eef1f4}}
+.flag-row button{{flex:1;border:1px solid var(--border);background:var(--surface2);border-radius:4px;padding:5px 4px;
+      font-size:11px;cursor:pointer;color:var(--text)}}
+.flag-row button:hover{{background:var(--hover)}}
 .flag-row button.active-flag{{background:#c0392b;color:#fff;border-color:#c0392b}}
 .flag-row button.active-ok{{background:#27ae60;color:#fff;border-color:#27ae60}}
-.inspector-body textarea{{width:100%;margin-top:6px;font-size:11px;padding:5px;border:1px solid #ddd;
-      border-radius:4px;resize:vertical;min-height:36px;font-family:inherit}}
+.inspector-body textarea{{width:100%;margin-top:6px;font-size:11px;padding:5px;border:1px solid var(--border);
+      border-radius:4px;resize:vertical;min-height:36px;font-family:inherit;background:var(--surface);color:var(--text)}}
+.legend-ctl{{background:var(--surface);color:var(--text);border-radius:8px;
+      box-shadow:0 2px 10px rgba(0,0,0,.3);font-size:11.5px;width:190px;overflow:hidden}}
+.legend-hd{{padding:7px 10px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;
+      font-weight:bold;user-select:none}}
+.legend-hd .chev{{font-size:9px;transition:transform .15s}}
+.legend-ctl.collapsed .chev{{transform:rotate(-90deg)}}
+.legend-body{{padding:0 10px 10px}}
+.legend-ctl.collapsed .legend-body{{display:none}}
+.legend-sec{{margin-top:8px}}
+.legend-sec:first-child{{margin-top:0}}
+.legend-sec-title{{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:4px}}
+.legend-row{{display:flex;align-items:center;gap:7px;padding:2px 0}}
+.legend-swatch{{flex:0 0 auto;width:14px;height:14px;display:flex;align-items:center;justify-content:center}}
+.legend-dot{{width:9px;height:9px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.2)}}
+.legend-diamond{{width:8px;height:8px;transform:rotate(45deg)}}
+.legend-line{{width:16px;height:0;border-top:3px solid}}
+.legend-line.dashed{{border-top-style:dashed}}
+/* Collapsed = same 30x30 square-icon look as the fullscreen/recentre/zoom
+   buttons above it in the stack, so it reads as one of them, not a stray
+   pill. Only widens into the labelled panel once opened. */
+.filters-ctl{{background:var(--surface);color:var(--text);border-radius:4px;
+      box-shadow:0 1px 5px rgba(0,0,0,.65);font-size:12px;overflow:hidden;width:186px}}
+.filters-ctl.collapsed{{width:30px}}
+.filters-hd{{height:30px;padding:0 10px;cursor:pointer;display:flex;align-items:center;gap:6px;
+      font-weight:bold;user-select:none;white-space:nowrap}}
+.filters-ctl.collapsed .filters-hd{{padding:0;justify-content:center}}
+.filters-hd i{{font-size:15px;flex:0 0 auto}}
+.filters-ctl.collapsed .filters-hd .lbl,
+.filters-ctl.collapsed .filters-hd .chev{{display:none}}
+.filters-hd .chev{{margin-left:auto;font-size:9px}}
+.filters-body{{display:flex;flex-direction:column;gap:6px;padding:0 10px 10px}}
+.filters-ctl.collapsed .filters-body{{display:none}}
+.filters-body .sensor-toggle-btn{{box-shadow:none;margin-top:0 !important;width:100%}}
 </style>
 </head>
 <body>
 <header>
-  <h1>Bluetooth Paths — Map</h1>
-  <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
-     {len(sensor_list)} API sensors&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors</p>
+  <div>
+    <h1>Bluetooth Paths — Map</h1>
+    <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
+       {len(sensor_list)} API sensors&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors</p>
+  </div>
+  <button class="dm-btn" onclick="toggleDark()" id="dmBtn" aria-label="Toggle dark mode">
+    <i class="ti ti-sun" id="dmIcon" aria-hidden="true"></i><span id="dmLabel">Light</span>
+  </button>
 </header>
 
 <div class="summary">
-  <div class="card"><div class="num">{active_count}</div><div class="lbl">Bluetooth paths</div></div>
-  <div class="card"><div class="num">{len(sensor_list)}</div><div class="lbl">API sensors</div></div>
-  <div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>
-  {f'<div class="card dup" id="dupCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>' if confirmed_dup_count else '<div class="card dup"><div class="num">0</div><div class="lbl">Duplicate paths</div></div>'}
-  {f'<div class="card dup-warn" id="ambiguousCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
-  <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
-  {f'<div class="card rev-bug" id="revBugCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_bug_count}</div><div class="lbl">Reversed-direction bug</div></div>' if rev_bug_count else ''}
-  {f'<div class="card rev-amb" id="revAmbCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_amb_count}</div><div class="lbl">Reversed check: ambiguous</div></div>' if rev_amb_count else ''}
-  {f'<div class="card rev-ok" id="revOkCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_ok_count}</div><div class="lbl">Reversed check: OK</div></div>' if rev_ok_count else ''}
+  <div class="summary-group">
+    <div class="summary-group-title">Inventory</div>
+    <div class="summary-group-cards">
+      <div class="card"><div class="num">{active_count}</div><div class="lbl">Bluetooth paths</div></div>
+      <div class="card"><div class="num">{len(sensor_list)}</div><div class="lbl">API sensors</div></div>
+      <div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>
+    </div>
+  </div>
+  <div class="summary-group">
+    <div class="summary-group-title">Duplicate registrations</div>
+    <div class="summary-group-cards">
+      {f'<div class="card dup" id="dupCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>' if confirmed_dup_count else '<div class="card dup"><div class="num">0</div><div class="lbl">Duplicate paths</div></div>'}
+      {f'<div class="card dup-warn" id="ambiguousCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
+    </div>
+  </div>
+  <div class="summary-group">
+    <div class="summary-group-title">Data quality checks</div>
+    <div class="summary-group-cards">
+      <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
+      {f'<div class="card rev-bug" id="revBugCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_bug_count}</div><div class="lbl">Reversed-direction bug</div></div>' if rev_bug_count else ''}
+      {f'<div class="card rev-amb" id="revAmbCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_amb_count}</div><div class="lbl">Reversed check: ambiguous</div></div>' if rev_amb_count else ''}
+      {f'<div class="card rev-ok" id="revOkCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_ok_count}</div><div class="lbl">Reversed check: OK</div></div>' if rev_ok_count else ''}
+    </div>
+  </div>
 </div>
 
 <div id="mapFsWrap"><div id="map"></div></div>
 
 <script>
+// Flagging/notes and CSV import-export are the reviewer's own working tools —
+// meaningless (and confusing) on the published copy colleagues open read-only,
+// since flags live in each browser's own localStorage and never sync between
+// viewers. Reuse the include_live_data signal: it already means "this is the
+// published copy", not the local review session.
+var QA_MODE = {json.dumps(bool(include_live_data))};
 var FEATURES = {features_json};
 var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
@@ -638,7 +721,7 @@ Object.keys(DUPLICATE_GROUPS).forEach(function(name) {{
 // clicking the same spot repeatedly, which Leaflet's default dblclick
 // handling would otherwise read as "zoom in" and yank the view out from
 // under you mid-review.
-var DEFAULT_VIEW = {{center: [{center_lat}, {center_lon}], zoom: 9}};
+var DEFAULT_VIEW = {{center: [{center_lat}, {center_lon}], zoom: 10}};
 var map = L.map('map', {{zoomControl:false, doubleClickZoom:false}}).setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
 
 // Topright stack, added in visual top-to-bottom order: fullscreen, recentre, zoom.
@@ -681,6 +764,28 @@ map.addControl(new RecentreControl());
 
 L.control.zoom({{position: 'topright'}}).addTo(map);
 
+// Every sensor/duplicate/reversed-check/export toggle below lives inside this
+// one collapsible panel instead of each being its own floating button —
+// otherwise the topright corner grows a new button per feature (was up to
+// 7 stacked buttons) and none of them read as a group.
+var FiltersPanel = L.Control.extend({{
+  options: {{position: 'topright'}},
+  onAdd: function() {{
+    var box = L.DomUtil.create('div', 'filters-ctl collapsed');
+    L.DomEvent.disableClickPropagation(box);
+    var hd = L.DomUtil.create('div', 'filters-hd', box);
+    hd.innerHTML = '<i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span class="lbl">Filters</span><span class="chev">&#9660;</span>';
+    hd.title = 'Filters';
+    var body = L.DomUtil.create('div', 'filters-body', box);
+    hd.onclick = function() {{ box.classList.toggle('collapsed'); }};
+    this._body = body;
+    return box;
+  }}
+}});
+var filtersPanel = new FiltersPanel();
+map.addControl(filtersPanel);
+var filtersBody = filtersPanel._body;
+
 function toggleMapFullscreen() {{
   var el = document.getElementById('mapFsWrap');
   var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
@@ -698,18 +803,39 @@ function _onFsChange() {{
 }}
 document.addEventListener('fullscreenchange', _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-  attribution: '© OpenStreetMap contributors', maxZoom: 19
-}}).addTo(map);
+var LIGHT_TILES = {{url: 'https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+  attribution: '© OpenStreetMap contributors'}};
+var DARK_TILES = {{url: 'https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+  attribution: '© OpenStreetMap contributors © <a href="https://carto.com/attributions">CARTO</a>'}};
+var tileLayer = L.tileLayer(LIGHT_TILES.url, {{attribution: LIGHT_TILES.attribution, maxZoom: 19}}).addTo(map);
+
+var _dark = true;
+document.body.classList.add('dark');
+map.removeLayer(tileLayer);
+tileLayer = L.tileLayer(DARK_TILES.url, {{attribution: DARK_TILES.attribution, maxZoom: 19}}).addTo(map);
+function toggleDark() {{
+  _dark = !_dark;
+  document.body.classList.toggle('dark', _dark);
+  document.getElementById('dmIcon').className = _dark ? 'ti ti-sun' : 'ti ti-moon';
+  document.getElementById('dmLabel').textContent = _dark ? 'Light' : 'Dark';
+  map.removeLayer(tileLayer);
+  var t = _dark ? DARK_TILES : LIGHT_TILES;
+  tileLayer = L.tileLayer(t.url, {{attribution: t.attribution, maxZoom: 19}}).addTo(map);
+  tileLayer.bringToBack();
+}}
 
 var SUSPICIOUS_MIN_POINTS = {SUSPICIOUS_MIN_POINTS};
 var SUSPICIOUS_ONLY = false;
 
 // Reviewer's findings, keyed by path id, persisted locally so a multi-session
 // review of ~500 legacy paths doesn't lose progress on reload: {{id: {{status: 'flag'|'ok', note: string}}}}
+// Always declared (even off QA_MODE) since a few read-only helpers below
+// reference it unconditionally — but the published copy never touches
+// localStorage for it, so it stays permanently empty for every viewer.
 var FLAGS = {{}};
-try {{ FLAGS = JSON.parse(localStorage.getItem('btPathFlags') || '{{}}'); }} catch (e) {{ FLAGS = {{}}; }}
-function saveFlags() {{ localStorage.setItem('btPathFlags', JSON.stringify(FLAGS)); }}
+if (QA_MODE) {{
+  try {{ FLAGS = JSON.parse(localStorage.getItem('btPathFlags') || '{{}}'); }} catch (e) {{ FLAGS = {{}}; }}
+}}
 
 /* -- Paths: click to highlight ------------------------------------ */
 var pathObjs = [];
@@ -1090,7 +1216,7 @@ function _wireReversedCard(cardId, category) {{
     if (!REVERSED_MODE) {{
       REVERSED_MODE = true;
       var btn = document.querySelector('.sensor-toggle-btn.reversed');
-      if (btn) {{ btn.innerHTML = 'Reversed-direction check: ON'; btn.classList.remove('off'); }}
+      if (btn) {{ btn.innerHTML = 'Reversed check: ON'; btn.classList.remove('off'); }}
     }}
     stepSelect(groups[i % groups.length]);
     i++;
@@ -1100,9 +1226,11 @@ _wireReversedCard('revBugCard', 'bug');
 _wireReversedCard('revAmbCard', 'ambiguous');
 _wireReversedCard('revOkCard', 'ok');
 
-/* -- Flagging + export -------------------------------------------------- */
+/* -- Flagging + export (QA_MODE only — see the QA_MODE comment above) --- */
+if (QA_MODE) {{
 var flagLayer = L.layerGroup().addTo(map);
 var flagMarkers = {{}};
+function saveFlags() {{ localStorage.setItem('btPathFlags', JSON.stringify(FLAGS)); }}
 
 // A bare emoji has no background of its own, so a red flag glyph disappears
 // against a red (issue-coloured) path underneath it. A solid-fill teardrop
@@ -1254,6 +1382,7 @@ function importFindings(file) {{
   }};
   reader.readAsText(file);
 }}
+}} // end if (QA_MODE) — flagging + export
 
 /* -- Inspector panel: selection detail, suspicious badge, flag/note ---- */
 var insBody, insCounter;
@@ -1383,22 +1512,24 @@ function renderInspector() {{
     ? '<span class="badge suspicious" title="Fewer than ' + SUSPICIOUS_MIN_POINTS + ' points">Suspicious</span>'
     : '';
   insBody.innerHTML = flagSummary + obj.detailHtml + susp +
-    '<div class="flag-row"><button id="flagBtn">&#128681; Flag</button><button id="okBtn">&#9989; OK</button></div>' +
-    '<textarea id="insNote" placeholder="Notes for this path…"></textarea>';
+    (QA_MODE ? '<div class="flag-row"><button id="flagBtn">&#128681; Flag</button><button id="okBtn">&#9989; OK</button></div>' +
+    '<textarea id="insNote" placeholder="Notes for this path…"></textarea>' : '');
 
-  var flagState = (FLAGS[f.id] || {{}}).status || '';
-  var flagBtn = document.getElementById('flagBtn'), okBtn = document.getElementById('okBtn');
-  flagBtn.classList.toggle('active-flag', flagState === 'flag');
-  okBtn.classList.toggle('active-ok', flagState === 'ok');
-  // Both buttons replace insBody's contents (to refresh flag state), and that
-  // DOM mutation mid-click can let the click "escape" disableClickPropagation
-  // — stop it explicitly before triggering the refresh, or the click reaches
-  // the map underneath and deselects the very path being flagged.
-  flagBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); setFlag(f.id, 'flag'); }};
-  okBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); setFlag(f.id, 'ok'); }};
-  var noteEl = document.getElementById('insNote');
-  noteEl.value = (FLAGS[f.id] || {{}}).note || '';
-  noteEl.onchange = function() {{ setNote(f.id, noteEl.value); }};
+  if (QA_MODE) {{
+    var flagState = (FLAGS[f.id] || {{}}).status || '';
+    var flagBtn = document.getElementById('flagBtn'), okBtn = document.getElementById('okBtn');
+    flagBtn.classList.toggle('active-flag', flagState === 'flag');
+    okBtn.classList.toggle('active-ok', flagState === 'ok');
+    // Both buttons replace insBody's contents (to refresh flag state), and that
+    // DOM mutation mid-click can let the click "escape" disableClickPropagation
+    // — stop it explicitly before triggering the refresh, or the click reaches
+    // the map underneath and deselects the very path being flagged.
+    flagBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); setFlag(f.id, 'flag'); }};
+    okBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); setFlag(f.id, 'ok'); }};
+    var noteEl = document.getElementById('insNote');
+    noteEl.value = (FLAGS[f.id] || {{}}).note || '';
+    noteEl.onchange = function() {{ setNote(f.id, noteEl.value); }};
+  }}
   _wireFlagSummaryToggle();
 }}
 renderInspector();
@@ -1417,7 +1548,8 @@ SENSORS.forEach(function(s) {{
   m.addTo(sensorLayer);
   sensorMarkersById[s.id] = m;
 }});
-sensorLayer.addTo(map);
+// Off by default — these two inventory overlays are diagnostic detail, not
+// what most visits to this map need to see first.
 
 function makeDiamondIcon(color) {{
   return L.divIcon({{
@@ -1443,148 +1575,144 @@ REF_SENSORS.forEach(function(s, idx) {{
   m.addTo(refLayer);
   refMarkersByIdx[idx] = m;
 }});
-refLayer.addTo(map);
+// Off by default — see sensorLayer above.
 
-function makeToggle(label, layer, extraClass) {{
-  return L.Control.extend({{
-    options: {{position: 'topright'}},
-    onAdd: function() {{
-      var btn = L.DomUtil.create('button', 'sensor-toggle-btn' + (extraClass ? ' ' + extraClass : ''));
+function makeToggleBtn(label, layer, extraClass) {{
+  var btn = L.DomUtil.create('button', 'sensor-toggle-btn off' + (extraClass ? ' ' + extraClass : ''), filtersBody);
+  btn.innerHTML = label + ': OFF';
+  btn.onclick = function() {{
+    if (map.hasLayer(layer)) {{
+      map.removeLayer(layer);
+      btn.innerHTML = label + ': OFF';
+      btn.classList.add('off');
+    }} else {{
+      layer.addTo(map);
       btn.innerHTML = label + ': ON';
-      L.DomEvent.disableClickPropagation(btn);
-      btn.onclick = function() {{
-        if (map.hasLayer(layer)) {{
-          map.removeLayer(layer);
-          btn.innerHTML = label + ': OFF';
-          btn.classList.add('off');
-        }} else {{
-          layer.addTo(map);
-          btn.innerHTML = label + ': ON';
-          btn.classList.remove('off');
-        }}
-      }};
-      return btn;
+      btn.classList.remove('off');
     }}
-  }});
+  }};
+  return btn;
 }}
-var apiToggleCtl = new (makeToggle('API sensors', sensorLayer))();
-var refToggleCtl = new (makeToggle('Spreadsheet sensors', refLayer, 'ref'))();
-map.addControl(apiToggleCtl);
-map.addControl(refToggleCtl);
+var apiToggleCtl = makeToggleBtn('API sensors', sensorLayer);
+var refToggleCtl = makeToggleBtn('Spreadsheet sensors', refLayer, 'ref');
 
-var SuspiciousToggle = L.Control.extend({{
-  options: {{position: 'topright'}},
-  onAdd: function() {{
-    var btn = L.DomUtil.create('button', 'sensor-toggle-btn susp');
-    btn.innerHTML = 'Suspicious only: OFF';
-    L.DomEvent.disableClickPropagation(btn);
+(function() {{
+  var btn = L.DomUtil.create('button', 'sensor-toggle-btn susp', filtersBody);
+  btn.innerHTML = 'Suspicious only: OFF';
+  btn.onclick = function(e) {{
+    L.DomEvent.stopPropagation(e);
+    SUSPICIOUS_ONLY = !SUSPICIOUS_ONLY;
+    btn.innerHTML = 'Suspicious only: ' + (SUSPICIOUS_ONLY ? 'ON' : 'OFF');
+    btn.classList.toggle('active', SUSPICIOUS_ONLY);
+    pathObjs.forEach(function(o) {{
+      var show = !SUSPICIOUS_ONLY || o.feature.suspicious;
+      var has = map.hasLayer(o.polyline);
+      if (show && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
+      if (!show && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
+    }});
+    renderInspector();
+  }};
+}})();
+
+if (HAS_DROPPED_DUPLICATES) {{
+  (function() {{
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn dup' + (SHOW_DUPLICATES ? '' : ' off'), filtersBody);
+    btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
     btn.onclick = function(e) {{
       L.DomEvent.stopPropagation(e);
-      SUSPICIOUS_ONLY = !SUSPICIOUS_ONLY;
-      btn.innerHTML = 'Suspicious only: ' + (SUSPICIOUS_ONLY ? 'ON' : 'OFF');
-      btn.classList.toggle('active', SUSPICIOUS_ONLY);
+      SHOW_DUPLICATES = !SHOW_DUPLICATES;
+      btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
+      btn.classList.toggle('off', !SHOW_DUPLICATES);
       pathObjs.forEach(function(o) {{
-        var show = !SUSPICIOUS_ONLY || o.feature.suspicious;
+        if (!o.feature.dup_dropped) return;
         var has = map.hasLayer(o.polyline);
-        if (show && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
-        if (!show && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
+        if (SHOW_DUPLICATES && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
+        if (!SHOW_DUPLICATES && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
       }});
       renderInspector();
     }};
-    return btn;
-  }}
-}});
-map.addControl(new SuspiciousToggle());
-
-if (HAS_DROPPED_DUPLICATES) {{
-  var ShowDuplicatesToggle = L.Control.extend({{
-    options: {{position: 'topright'}},
-    onAdd: function() {{
-      var btn = L.DomUtil.create('button', 'sensor-toggle-btn dup' + (SHOW_DUPLICATES ? '' : ' off'));
-      btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
-      L.DomEvent.disableClickPropagation(btn);
-      btn.onclick = function(e) {{
-        L.DomEvent.stopPropagation(e);
-        SHOW_DUPLICATES = !SHOW_DUPLICATES;
-        btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
-        btn.classList.toggle('off', !SHOW_DUPLICATES);
-        pathObjs.forEach(function(o) {{
-          if (!o.feature.dup_dropped) return;
-          var has = map.hasLayer(o.polyline);
-          if (SHOW_DUPLICATES && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
-          if (!SHOW_DUPLICATES && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
-        }});
-        renderInspector();
-      }};
-      return btn;
-    }}
-  }});
-  map.addControl(new ShowDuplicatesToggle());
+  }})();
 }}
 
 var HAS_REVERSED_CHECK = pathObjs.some(function(o) {{ return !!o.feature.reversed_check; }});
 if (HAS_REVERSED_CHECK) {{
-  var ReversedCheckToggle = L.Control.extend({{
-    options: {{position: 'topright'}},
-    onAdd: function() {{
-      var btn = L.DomUtil.create('button', 'sensor-toggle-btn reversed off');
-      btn.innerHTML = 'Reversed-direction check: OFF';
-      L.DomEvent.disableClickPropagation(btn);
-      btn.onclick = function(e) {{
-        L.DomEvent.stopPropagation(e);
-        REVERSED_MODE = !REVERSED_MODE;
-        btn.innerHTML = 'Reversed-direction check: ' + (REVERSED_MODE ? 'ON' : 'OFF');
-        btn.classList.toggle('off', !REVERSED_MODE);
-        applySelection();
-      }};
-      return btn;
-    }}
-  }});
-  map.addControl(new ReversedCheckToggle());
+  (function() {{
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn reversed off', filtersBody);
+    btn.innerHTML = 'Reversed check: OFF';
+    btn.onclick = function(e) {{
+      L.DomEvent.stopPropagation(e);
+      REVERSED_MODE = !REVERSED_MODE;
+      btn.innerHTML = 'Reversed check: ' + (REVERSED_MODE ? 'ON' : 'OFF');
+      btn.classList.toggle('off', !REVERSED_MODE);
+      applySelection();
+    }};
+  }})();
 }}
 
-var ExportCtl = L.Control.extend({{
-  options: {{position: 'topright'}},
+var LegendControl = L.Control.extend({{
+  options: {{position: 'bottomright'}},
   onAdd: function() {{
-    var btn = L.DomUtil.create('button', 'sensor-toggle-btn export');
-    btn.innerHTML = 'Export findings &#8659;';
-    L.DomEvent.disableClickPropagation(btn);
-    btn.onclick = exportFindings;
-    return btn;
+    var box = L.DomUtil.create('div', 'legend-ctl');
+    L.DomEvent.disableClickPropagation(box);
+    var reversedRows = HAS_REVERSED_CHECK ?
+      '<div class="legend-sec">' +
+        '<div class="legend-sec-title">Reversed-direction check<br>(when toggle is on)</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.bug + '"></span></span>Bug — direction reversed</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ambiguous + '"></span></span>Ambiguous — needs a look</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ok + '"></span></span>OK — direction confirmed</div>' +
+      '</div>' : '';
+    box.innerHTML =
+      '<div class="legend-hd" id="legendHd">Legend <span class="chev">&#9660;</span></div>' +
+      '<div class="legend-body">' +
+        '<div class="legend-sec">' +
+          '<div class="legend-sec-title">Sensors</div>' +
+          '<div class="legend-row"><span class="legend-swatch"><span class="legend-dot" style="background:#1f4e79"></span></span>API sensor</div>' +
+          '<div class="legend-row"><span class="legend-swatch"><span class="legend-diamond" style="background:#8e44ad"></span></span>Spreadsheet sensor</div>' +
+        '</div>' +
+        '<div class="legend-sec">' +
+          '<div class="legend-sec-title">Paths</div>' +
+          '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:#3b82c4"></span></span>Each path has its own color</div>' +
+          '<div class="legend-row"><span class="legend-swatch"><span class="legend-line dashed" style="border-color:#3b82c4"></span></span>Suspicious (&lt;' + SUSPICIOUS_MIN_POINTS + ' points)</div>' +
+          '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + SELECTED_COLOR + '"></span></span>Selected path</div>' +
+        '</div>' +
+        reversedRows +
+      '</div>';
+    var hd = box.querySelector('#legendHd');
+    hd.onclick = function() {{ box.classList.toggle('collapsed'); }};
+    return box;
   }}
 }});
-map.addControl(new ExportCtl());
+map.addControl(new LegendControl());
 
-var ImportCtl = L.Control.extend({{
-  options: {{position: 'topright'}},
-  onAdd: function() {{
-    var wrap = L.DomUtil.create('div');
-    var btn = L.DomUtil.create('button', 'sensor-toggle-btn import', wrap);
-    btn.innerHTML = 'Import findings &#8657;';
-    var fileInput = L.DomUtil.create('input', '', wrap);
-    fileInput.type = 'file';
-    fileInput.accept = '.csv';
-    fileInput.style.display = 'none';
-    L.DomEvent.disableClickPropagation(wrap);
-    btn.onclick = function() {{ fileInput.click(); }};
-    fileInput.onchange = function() {{
-      importFindings(fileInput.files[0]);
-      fileInput.value = '';   // allow re-importing the same file
-    }};
-    return wrap;
-  }}
-}});
-map.addControl(new ImportCtl());
+if (QA_MODE) {{
+  var exportBtn = L.DomUtil.create('button', 'sensor-toggle-btn export', filtersBody);
+  exportBtn.innerHTML = 'Export findings &#8659;';
+  exportBtn.onclick = exportFindings;
+
+  var importWrap = L.DomUtil.create('div', '', filtersBody);
+  var importBtn = L.DomUtil.create('button', 'sensor-toggle-btn import', importWrap);
+  importBtn.innerHTML = 'Import findings &#8657;';
+  var fileInput = L.DomUtil.create('input', '', importWrap);
+  fileInput.type = 'file';
+  fileInput.accept = '.csv';
+  fileInput.style.display = 'none';
+  importBtn.onclick = function() {{ fileInput.click(); }};
+  fileInput.onchange = function() {{
+    importFindings(fileInput.files[0]);
+    fileInput.value = '';   // allow re-importing the same file
+  }};
+}}
 
 // Turns a toggleable layer back on (and syncs its button) if search jumps to
 // something currently hidden — otherwise the marker/popup a search result
 // points at wouldn't actually be visible.
-function showLayer(layer, ctl, label) {{
+function showLayer(layer, btn, label) {{
   if (map.hasLayer(layer)) return;
   layer.addTo(map);
-  var btn = ctl.getContainer();
   btn.innerHTML = label + ': ON';
   btn.classList.remove('off');
+  var panel = btn.closest('.filters-ctl');
+  if (panel) panel.classList.remove('collapsed');
 }}
 
 /* -- Search: paths + both sensor inventories ------------------------ */
