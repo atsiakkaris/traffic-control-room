@@ -159,17 +159,42 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
 
 
 def _process_coords(coords_type, response_text, group_name, run_status):
-    """Extract, upsert, and retire coordinates for a passed inventory endpoint."""
+    """Extract, upsert, and retire coordinates for a passed inventory endpoint.
+
+    Returns the extracted {id: ...} dict (or None) so callers can reconcile it
+    against a paired live endpoint's reported sensor IDs — see
+    _reconcile_missing_sensors().
+    """
     handler = _COORDS_HANDLERS.get(coords_type)
     if handler is None:
-        return
+        return None
     extract_fn, upsert_fn, retire_fn, entity_label = handler
     coords = extract_fn(response_text)
     if run_status == "pass" and coords:
         upsert_fn(coords, group_name)
         retire_fn(coords, group_name)
+        return coords
     elif run_status == "pass" and not coords:
         log.warning("[%s] Inventory passed but returned no %s — skipping retire", group_name, entity_label)
+    return None
+
+
+def _reconcile_missing_sensors(run_id, run_at, sensor_group, inventory_ids, live_ids):
+    """Insert a status="missing" row for every inventory sensor absent from the
+    live feed this run — a sensor that silently dropped out of the live
+    response otherwise leaves no trace at all (see ITS review roadmap item #1:
+    a shrinking denominator can raise a group's health % with nothing fixed).
+
+    Only called when the live endpoint's own fetch succeeded — if the whole
+    feed is down, every sensor would look "missing", which is the
+    feed-freshness/error check's job to report, not this one's.
+    """
+    missing = set(inventory_ids) - set(live_ids)
+    for sensor_id in sorted(missing):
+        insert_sensor_result(run_id, run_at, sensor_group, sensor_id, "missing", None)
+    if missing:
+        log.info("[%s] %d sensor(s) missing from live feed: %s",
+                  sensor_group, len(missing), ", ".join(sorted(missing)))
 
 
 def run_all():
@@ -197,6 +222,9 @@ def run_all():
 
     for group in config.get("groups", []):
         group_name = group["name"]
+        inventory_ids_by_endpoint = {}   # endpoint name -> ids seen this run (only inventory endpoints)
+        reconcile_todo = []              # [(sensor_group, inventory_endpoint_name, live_ids)]
+
         for ep in group.get("endpoints", []):
             log.info("[%s] %s …", group_name, ep["name"])
             r = run_single(ep, base_url, swarco)
@@ -219,7 +247,8 @@ def run_all():
             )
 
             sensor_group = ep.get("sensor_group", group_name)
-            for sensor_id, s_status in r.get("sensors", {}).items():
+            live_ids_seen = r.get("sensors", {})
+            for sensor_id, s_status in live_ids_seen.items():
                 mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
@@ -228,7 +257,17 @@ def run_all():
             # failed fetch must not wipe active sensors.
             coords_type = ep.get("coords_extract")
             if r.get("response_text") and coords_type:
-                _process_coords(coords_type, r["response_text"], group_name, r["status"])
+                coords = _process_coords(coords_type, r["response_text"], group_name, r["status"])
+                if coords:
+                    inventory_ids_by_endpoint[ep["name"]] = set(coords.keys())
+
+            # Queue live-feed reconciliation (see _reconcile_missing_sensors) — only
+            # when this endpoint's own fetch got a real response, so a fully-down
+            # feed doesn't flag every sensor as "missing" (that's the freshness/
+            # error check's job, not this one's).
+            reconcile_against = ep.get("reconcile_against")
+            if reconcile_against and r.get("response_text"):
+                reconcile_todo.append((sensor_group, reconcile_against, set(live_ids_seen.keys())))
 
             icon = _STATUS_ICON.get(r["status"], "?")
             log.info("  %s  %s  (%s ms)", icon, r["status"].upper(), r["response_ms"])
@@ -239,6 +278,14 @@ def run_all():
             log.info("")
 
             all_results.append({**ep, "group": group_name, **r})
+
+        for sensor_group, inventory_endpoint_name, live_ids in reconcile_todo:
+            inventory_ids = inventory_ids_by_endpoint.get(inventory_endpoint_name)
+            if inventory_ids is None:
+                # Inventory endpoint failed or returned nothing this run — can't
+                # tell a real dropout from an inventory hiccup, so skip.
+                continue
+            _reconcile_missing_sensors(run_id, run_at, sensor_group, inventory_ids, live_ids)
 
     insert_run(run_id, run_at, totals)
 

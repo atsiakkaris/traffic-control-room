@@ -41,6 +41,7 @@ groups:
         expected_status: 200
         max_response_ms: 5000
         health_check: vms_controller_status
+        reconcile_against: VMS Inventory   # flag any controller in the inventory but absent from this feed as "missing"
         checks:
           - valid_xml
           - feed_freshness          # publicationTime must be within freshness_minutes
@@ -74,6 +75,7 @@ groups:
         max_response_ms: 30000
         sensor_group: "Bluetooth Paths"   # results stored under this group, not "Bluetooth"
         health_check: bt_paths_speed_and_traveltime
+        reconcile_against: Bluetooth Paths Inventory   # flag any path in the inventory but absent from this feed as "missing"
         checks:
           - valid_xml
           - feed_freshness                  # publicationTime must be within freshness_minutes
@@ -96,6 +98,7 @@ groups:
         expected_status: 200
         max_response_ms: 5000
         health_check: sensor_speed_status
+        reconcile_against: Traffic Detection Inventory   # flag any sensor in the inventory but absent from this feed as "missing"
         checks:
           - valid_xml
           - feed_freshness        # publicationTime must be within freshness_minutes
