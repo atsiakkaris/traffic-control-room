@@ -24,6 +24,9 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/"
+# Tagged with UTM params so GoatCounter can attribute these clicks to the
+# digest email specifically, separate from other traffic to the same URL.
+DASHBOARD_URL_TAGGED = DASHBOARD_URL + "?utm_source=digest&utm_medium=email&utm_campaign=weekly_digest"
 
 # Percentage ranges for the digest's badge labels, taken straight from the tier
 # definitions so they can't drift out of sync with the actual thresholds.
@@ -580,7 +583,7 @@ def build_html(d):
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:4px">
       <tr>
         <td><h2 style="margin:0;font-size:20px">Cyprus ITS — Weekly Network Health Digest</h2></td>
-        <td align="right" style="white-space:nowrap"><a href="{DASHBOARD_URL}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;white-space:nowrap">See dashboard →</a></td>
+        <td align="right" style="white-space:nowrap"><a href="{DASHBOARD_URL_TAGGED}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;white-space:nowrap">See dashboard →</a></td>
       </tr>
     </table>
     <p style="color:#6b7280;font-size:13px;margin:0 0 12px">{d['week_start']} — {d['week_end']} &nbsp;·&nbsp; Generated {generated_at} &nbsp;·&nbsp; {d['run_count']} runs</p>
@@ -714,7 +717,7 @@ def build_html(d):
              retired_table)}
 
     <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb">
-      <a href="{DASHBOARD_URL}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500">See dashboard →</a>
+      <a href="{DASHBOARD_URL_TAGGED}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500">See dashboard →</a>
     </div>
 
     <p style="color:#9ca3af;font-size:11px;margin-top:24px">Cyprus ITS Infrastructure Monitor · Sent every Monday at 07:30 EEST</p>

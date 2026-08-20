@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sensor Report Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1b2027;
+    --ink-soft: #4b5259;
+    --paper: #f6f4ee;
+    --surface: #ffffff;
+    --line: #ddd8cb;
+    --line-soft: #e9e6dc;
+    --accent: #1f5c7a;
+    --accent-soft: #e3edf1;
+    --good: #2f8f5b;
+    --good-bg: #e6f3ec;
+    --warn: #c98500;
+    --warn-bg: #faf0dc;
+    --bad: #c0392b;
+    --bad-bg: #fbe9e6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.55;
+  }
+  .page { max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px; font-weight: 500; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 0.6rem;
+  }
+
+  /* ── controls panel ─────────────────────────────────────────── */
+  .controls {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.25rem 1.4rem; margin-bottom: 2rem;
+  }
+  .controls h1 {
+    font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700;
+    font-size: 1.6rem; margin: 0 0 1rem;
+  }
+  .field-row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--ink-soft);
+  }
+  select, input[type=date] {
+    font-family: "Public Sans", sans-serif; font-size: 13.5px; color: var(--ink);
+    background: var(--paper); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 10px; min-width: 160px;
+  }
+  .sensor-picker {
+    display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 130px; overflow-y: auto;
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--paper);
+  }
+  .sensor-picker label {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;
+  }
+  .sensor-picker input { cursor: pointer; }
+  .picker-tools { display: flex; gap: 10px; margin-bottom: 8px; }
+  .picker-tools button {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--accent);
+    background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline;
+  }
+  .generate-btn {
+    font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700; font-size: 14.5px;
+    color: #fff; background: var(--accent); border: none; border-radius: 8px;
+    padding: 10px 22px; cursor: pointer; letter-spacing: 0.01em;
+  }
+  .generate-btn:hover { opacity: 0.9; }
+  .generate-btn:disabled { opacity: 0.5; cursor: default; }
+  .hint { font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
+
+  /* ── report output (mirrors the styled report design) ─────────── */
+  [contenteditable="true"] {
+    outline: none; border-radius: 4px; transition: background 0.15s;
+  }
+  [contenteditable="true"]:hover { background: var(--accent-soft); }
+  [contenteditable="true"]:focus { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); }
+
+  h1.title {
+    font-family: "Barlow Semi Condensed", "Public Sans", sans-serif; font-weight: 700;
+    font-size: clamp(1.8rem, 4.5vw, 2.6rem); letter-spacing: -0.01em; text-wrap: balance;
+    margin: 0 0 0.5rem; line-height: 1.05;
+  }
+  .dek { font-size: 15px; color: var(--ink-soft); max-width: 66ch; margin: 0 0 1rem; }
+  .meta-row {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; font-size: 13px; color: var(--ink-soft);
+    padding-top: 1rem; border-top: 1px solid var(--line); margin-bottom: 2rem;
+  }
+  .meta-row span b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  h2 {
+    font-family: "Barlow Semi Condensed", sans-serif; font-weight: 700; font-size: 1.3rem;
+    letter-spacing: -0.005em; margin: 0 0 1rem;
+  }
+  section { margin-bottom: 2.5rem; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1rem 1.1rem; position: relative; overflow: hidden;
+  }
+  .kpi .stripe { position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .kpi .id {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 500;
+    letter-spacing: 0.04em; color: var(--ink-soft); margin: 0 0 2px;
+  }
+  .kpi .loc { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+  .kpi .pct {
+    font-family: "IBM Plex Mono", monospace; font-size: 1.8rem; font-weight: 600;
+    font-variant-numeric: tabular-nums; line-height: 1; margin: 0;
+  }
+  .kpi .pct-label { font-size: 11px; color: var(--ink-soft); margin: 4px 0 0; }
+
+  .chart-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1.25rem 1.4rem 1.4rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--ink-soft); margin-bottom: 4px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+  .chart-wrap { position: relative; width: 100%; margin-top: 0.6rem; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .chart-wrap .gridlines line { stroke: var(--line-soft); stroke-width: 1; }
+  .chart-wrap .axis-label text { font-family: "IBM Plex Mono", monospace; font-size: 10px; fill: var(--ink-soft); }
+  .chart-wrap .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  table {
+    width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  thead th {
+    text-align: left; font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 500;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft);
+    padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--line-soft);
+  }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  td.sensor b { font-weight: 600; }
+  td.sensor .sid { color: var(--ink-soft); font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 11.5px; font-weight: 600; font-family: "IBM Plex Mono", monospace; }
+
+  .note {
+    font-size: 13.5px; color: var(--ink-soft); border-top: 1px solid var(--line);
+    padding-top: 1.1rem; margin-top: 0.5rem;
+  }
+  .note b { color: var(--ink); font-weight: 600; }
+
+  .toolbar { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 1rem; }
+  .toolbar button {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-soft);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  .toolbar button:hover { color: var(--ink); border-color: var(--ink-soft); }
+
+  @media print {
+    .controls, .toolbar { display: none !important; }
+    [contenteditable="true"]:hover, [contenteditable="true"]:focus { background: none; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="controls">
+    <p class="eyebrow">Ad-hoc sensor report</p>
+    <h1>Build a report</h1>
+    <div class="field-row">
+      <div class="field">
+        <label for="groupSelect">Group</label>
+        <select id="groupSelect"></select>
+      </div>
+      <div class="field">
+        <label for="startDate">From</label>
+        <input type="date" id="startDate">
+      </div>
+      <div class="field">
+        <label for="endDate">To</label>
+        <input type="date" id="endDate">
+      </div>
+    </div>
+    <div class="field">
+      <label>Sensors</label>
+      <div class="picker-tools">
+        <button type="button" id="selectAllBtn">Select all</button>
+        <button type="button" id="selectNoneBtn">Clear</button>
+      </div>
+      <div class="sensor-picker" id="sensorPicker"></div>
+    </div>
+    <div style="margin-top: 16px; display: flex; align-items: center; gap: 14px;">
+      <button class="generate-btn" id="generateBtn" disabled>Generate report</button>
+      <span class="hint" id="statusHint">Loading history.db&hellip;</span>
+    </div>
+  </div>
+
+  <div id="output" style="display:none">
+    <div class="toolbar">
+      <button type="button" id="printBtn">Print / save as PDF</button>
+    </div>
+
+    <p class="eyebrow">Sensor health report</p>
+    <h1 class="title" contenteditable="true" id="reportTitle">Report title</h1>
+    <p class="dek" contenteditable="true" id="reportDek">Summary line goes here.</p>
+    <div class="meta-row" id="metaRow"></div>
+
+    <section>
+      <h2>Lifetime uptime, by sensor</h2>
+      <div class="kpi-grid" id="kpiGrid"></div>
+    </section>
+
+    <section>
+      <h2>Weekly uptime trend</h2>
+      <div class="chart-card">
+        <div class="legend" id="chartLegend"></div>
+        <div class="chart-wrap" id="chartWrap"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Sensor comparison</h2>
+      <table id="compareTable"></table>
+    </section>
+
+    <p class="note" contenteditable="true" id="narrative">Narrative goes here.</p>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<script>
+(function () {
+  var GOOD = { working: true, ok: true };
+  var TIER_MIN_RUNS = 5;
+  var ATTENTION_WINDOW = 20;
+  var ATTENTION_FAIL_RATIO = 0.80;
+  var TIERS = [
+    { key: 'always_on',    label: 'Always on',    min: 99, fg: '#085041', bg: '#e1f5ee' },
+    { key: 'healthy',      label: 'Healthy',      min: 90, fg: '#27500a', bg: '#c0dd97' },
+    { key: 'intermittent', label: 'Intermittent', min: 70, fg: '#633806', bg: '#faeeda' },
+    { key: 'unstable',     label: 'Unstable',     min: 40, fg: '#412402', bg: '#fac775' },
+    { key: 'critical',     label: 'Critical',     min: 1,  fg: '#501313', bg: '#f09595' },
+    { key: 'offline',      label: 'Always off',   min: 0,  fg: '#ffffff', bg: '#e24b4a' }
+  ];
+  var PALETTE = ['#1f5c7a', '#c98500', '#c0392b', '#2f8f5b', '#7a4fa0', '#a05a2c', '#1a7a7a', '#8a3d6b'];
+  var DASH = [[], [6, 3], [2, 2], [10, 3, 2, 3], [4, 2, 1, 2], [8, 2], [1, 2], [12, 4, 2, 4]];
+
+  var db, statusHint = document.getElementById('statusHint'), generateBtn = document.getElementById('generateBtn');
+
+  function tierFor(good, total) {
+    if (!total) return null;
+    if (good === 0) return TIERS[5];
+    var pct = good / total * 100;
+    for (var i = 0; i < TIERS.length - 1; i++) if (pct >= TIERS[i].min) return TIERS[i];
+    return TIERS[4];
+  }
+
+  initSqlJs({ locateFile: function (f) { return 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/' + f; } })
+    .then(function (SQL) {
+      return fetch('../results/history.db').then(function (r) {
+        if (!r.ok) throw new Error('fetch failed: ' + r.status);
+        return r.arrayBuffer();
+      }).then(function (buf) {
+        db = new SQL.Database(new Uint8Array(buf));
+        setup();
+      });
+    })
+    .catch(function (err) {
+      statusHint.textContent = 'Could not load history.db (' + err.message + '). Open this file from the reports/ folder, in the same place as history.db\'s ../results/ directory.';
+    });
+
+  function q(sql, params) {
+    var stmt = db.prepare(sql);
+    if (params) stmt.bind(params);
+    var rows = [];
+    while (stmt.step()) rows.push(stmt.getAsObject());
+    stmt.free();
+    return rows;
+  }
+
+  function setup() {
+    var groups = q("SELECT DISTINCT group_name FROM sensor_results ORDER BY group_name").map(function (r) { return r.group_name; });
+    var groupSelect = document.getElementById('groupSelect');
+    groups.forEach(function (g) {
+      var opt = document.createElement('option'); opt.value = g; opt.textContent = g;
+      groupSelect.appendChild(opt);
+    });
+
+    var range = q("SELECT MIN(run_at) a, MAX(run_at) b FROM sensor_results")[0];
+    document.getElementById('startDate').value = range.a.slice(0, 10);
+    document.getElementById('endDate').value = range.b.slice(0, 10);
+
+    groupSelect.addEventListener('change', populateSensors);
+    populateSensors();
+
+    document.getElementById('selectAllBtn').addEventListener('click', function () {
+      document.querySelectorAll('#sensorPicker input').forEach(function (c) { c.checked = true; });
+      refreshGenerateState();
+    });
+    document.getElementById('selectNoneBtn').addEventListener('click', function () {
+      document.querySelectorAll('#sensorPicker input').forEach(function (c) { c.checked = false; });
+      refreshGenerateState();
+    });
+
+    generateBtn.disabled = false;
+    statusHint.textContent = 'Ready.';
+    generateBtn.addEventListener('click', generateReport);
+    document.getElementById('printBtn').addEventListener('click', function () { window.print(); });
+  }
+
+  function populateSensors() {
+    var group = document.getElementById('groupSelect').value;
+    var rows = q(
+      "SELECT DISTINCT sr.sensor_id sid, sc.name loc FROM sensor_results sr " +
+      "LEFT JOIN sensor_coords sc ON sc.sensor_id = sr.sensor_id AND sc.group_name = sr.group_name " +
+      "WHERE sr.group_name = ?", [group]
+    );
+    rows.sort(function (a, b) { return (parseInt(a.sid, 10) || 0) - (parseInt(b.sid, 10) || 0); });
+    var picker = document.getElementById('sensorPicker');
+    picker.innerHTML = '';
+    rows.forEach(function (r) {
+      var label = document.createElement('label');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.value = r.sid; cb.addEventListener('change', refreshGenerateState);
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode((r.loc ? r.loc + ' ' : '') + '(' + group + ' ' + r.sid + ')'));
+      picker.appendChild(label);
+    });
+    refreshGenerateState();
+  }
+
+  function refreshGenerateState() {
+    var any = document.querySelectorAll('#sensorPicker input:checked').length > 0;
+    generateBtn.disabled = !any;
+  }
+
+  function weekStart(dateStr) {
+    var d = new Date(dateStr + 'T00:00:00Z');
+    var day = (d.getUTCDay() + 6) % 7; // Monday = 0
+    d.setUTCDate(d.getUTCDate() - day);
+    return d.toISOString().slice(0, 10);
+  }
+  function fmtWeek(iso) {
+    var d = new Date(iso + 'T00:00:00Z');
+    return d.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+
+  function generateReport() {
+    var group = document.getElementById('groupSelect').value;
+    var start = document.getElementById('startDate').value;
+    var end = document.getElementById('endDate').value;
+    var sensorIds = Array.prototype.slice.call(document.querySelectorAll('#sensorPicker input:checked')).map(function (c) { return c.value; });
+
+    var sensors = sensorIds.map(function (sid, i) {
+      var rows = q(
+        "SELECT run_at, status FROM sensor_results WHERE group_name = ? AND sensor_id = ? " +
+        "AND run_at >= ? AND run_at <= ? ORDER BY run_at",
+        [group, sid, start + 'T00:00:00', end + 'T23:59:59']
+      );
+      var loc = q("SELECT name FROM sensor_coords WHERE group_name = ? AND sensor_id = ?", [group, sid])[0];
+      var total = rows.length, good = 0;
+      rows.forEach(function (r) { if (GOOD[r.status]) good++; });
+      var last20 = rows.slice(-ATTENTION_WINDOW);
+      var g20 = 0; last20.forEach(function (r) { if (GOOD[r.status]) g20++; });
+      var tier = tierFor(good, total);
+
+      // outage spans >= 1 day
+      var spans = [], curStatus = null, spanStart = null, prev = null;
+      rows.forEach(function (r) {
+        var isGood = !!GOOD[r.status];
+        if (curStatus === null) { curStatus = isGood; spanStart = r.run_at; }
+        else if (isGood !== curStatus) {
+          spans.push({ good: curStatus, start: spanStart, end: prev });
+          curStatus = isGood; spanStart = r.run_at;
+        }
+        prev = r.run_at;
+      });
+      if (curStatus !== null) spans.push({ good: curStatus, start: spanStart, end: prev });
+      var outages = spans.filter(function (s) {
+        return !s.good && (new Date(s.end) - new Date(s.start)) / 86400000 >= 1;
+      }).map(function (s) { return Object.assign({}, s, { days: (new Date(s.end) - new Date(s.start)) / 86400000 }); });
+
+      // weekly buckets
+      var weekly = {};
+      rows.forEach(function (r) {
+        var wk = weekStart(r.run_at.slice(0, 10));
+        if (!weekly[wk]) weekly[wk] = [0, 0];
+        weekly[wk][0]++;
+        if (GOOD[r.status]) weekly[wk][1]++;
+      });
+
+      return {
+        sid: sid, loc: loc ? loc.name : null, total: total, good: good,
+        pct: total ? good / total * 100 : null,
+        g20: g20, t20: last20.length,
+        tier: tier, outages: outages, weekly: weekly,
+        color: PALETTE[i % PALETTE.length], dash: DASH[i % DASH.length]
+      };
+    });
+
+    renderReport(group, start, end, sensors);
+  }
+
+  function renderReport(group, start, end, sensors) {
+    document.getElementById('output').style.display = '';
+    document.getElementById('reportTitle').textContent = group + ' — sensor report';
+    document.getElementById('reportDek').textContent =
+      sensors.length + (sensors.length === 1 ? ' sensor' : ' sensors') + ' in ' + group + ', compared over the selected date range.';
+    document.getElementById('metaRow').innerHTML =
+      '<span>Sensors: <b>' + sensors.length + '</b></span>' +
+      '<span>Window: <b>' + start + '</b> → <b>' + end + '</b></span>' +
+      '<span>Check interval: <b>6h</b></span>';
+
+    // KPI cards
+    var kpiGrid = document.getElementById('kpiGrid');
+    kpiGrid.innerHTML = '';
+    sensors.forEach(function (s) {
+      var pctStr = s.pct === null ? '—' : s.pct.toFixed(1) + '%';
+      var stripeColor = s.tier ? s.tier.bg : '#ccc';
+      var textColor = s.tier ? s.tier.fg : 'var(--ink-soft)';
+      var div = document.createElement('div');
+      div.className = 'kpi';
+      div.innerHTML =
+        '<div class="stripe" style="background:' + (s.tier ? cssStripe(s.tier) : '#ccc') + '"></div>' +
+        '<p class="id">' + group + ' ' + s.sid + '</p>' +
+        '<p class="loc">' + (s.loc || '—') + '</p>' +
+        '<p class="pct" style="color:' + (s.tier ? tierAccent(s.tier) : 'var(--ink)') + '">' + pctStr + '</p>' +
+        '<p class="pct-label">lifetime uptime · ' + (s.tier ? s.tier.label : 'no data') + '</p>';
+      kpiGrid.appendChild(div);
+    });
+
+    // legend + chart
+    var legend = document.getElementById('chartLegend');
+    legend.innerHTML = sensors.map(function (s) {
+      return '<span><i style="background:' + s.color + '"></i>' + (s.loc || (group + ' ' + s.sid)) + ' (' + group + ' ' + s.sid + ')</span>';
+    }).join('');
+    document.getElementById('chartWrap').innerHTML = buildChartSvg(sensors);
+
+    // table
+    var table = document.getElementById('compareTable');
+    var rowsHtml = sensors.map(function (s) {
+      var pctStr = s.pct === null ? '—' : s.pct.toFixed(1) + '%';
+      var w20 = s.t20 ? Math.round(s.g20 / s.t20 * 100) + '%' : '—';
+      var pillBg = s.tier ? cssStripe(s.tier) : '#ccc';
+      var pillFg = s.tier ? tierAccent(s.tier) : 'var(--ink-soft)';
+      return '<tr>' +
+        '<td class="sensor"><b>' + (s.loc || ('Sensor ' + s.sid)) + '</b>&nbsp;<span class="sid">' + group + ' ' + s.sid + '</span></td>' +
+        '<td class="num">' + pctStr + '</td>' +
+        '<td class="num">' + w20 + '</td>' +
+        '<td class="num"><span class="pill" style="background:' + pillBg + ';color:' + pillFg + '">' + (s.tier ? s.tier.label : 'no data') + '</span></td>' +
+        '</tr>';
+    }).join('');
+    table.innerHTML =
+      '<thead><tr><th>Sensor</th><th class="num">Lifetime</th><th class="num">Last 20 runs</th><th class="num">Tier</th></tr></thead>' +
+      '<tbody>' + rowsHtml + '</tbody>';
+
+    document.getElementById('narrative').innerHTML = buildNarrative(group, sensors);
+    document.getElementById('output').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function cssStripe(tier) { return tier.bg; }
+  function tierAccent(tier) {
+    // Use the tier's fg color directly as the accent for large numbers, except
+    // "offline" whose fg is white (meant for its own bg) — fall back to its bg.
+    return tier.key === 'offline' ? tier.bg : tier.fg;
+  }
+
+  function buildChartSvg(sensors) {
+    var allWeeks = {};
+    sensors.forEach(function (s) { Object.keys(s.weekly).forEach(function (w) { allWeeks[w] = true; }); });
+    var weeks = Object.keys(allWeeks).sort();
+    if (!weeks.length) return '<p class="hint">No data in this range.</p>';
+
+    var W = 800, x0 = 46, x1 = 780, y0 = 14, y1 = 234;
+    var n = weeks.length;
+    function xpos(i) { return n === 1 ? (x0 + x1) / 2 : x0 + (x1 - x0) * i / (n - 1); }
+    function ypos(v) { return y1 - (y1 - y0) * (v / 100); }
+
+    var svg = '<svg viewBox="0 0 800 262" role="img" aria-label="Weekly uptime chart" preserveAspectRatio="xMidYMid meet">';
+    svg += '<g class="gridlines">';
+    [0, 25, 50, 75, 100].forEach(function (v) {
+      svg += '<line x1="' + x0 + '" x2="' + x1 + '" y1="' + ypos(v).toFixed(1) + '" y2="' + ypos(v).toFixed(1) + '"></line>';
+    });
+    svg += '</g><g class="axis-label">';
+    [0, 25, 50, 75, 100].forEach(function (v) {
+      svg += '<text x="' + (x0 - 6) + '" y="' + (ypos(v) + 4).toFixed(1) + '" text-anchor="end">' + v + '%</text>';
+    });
+    svg += '</g><g class="axis-label">';
+    var labelStep = Math.max(1, Math.ceil(n / 14));
+    weeks.forEach(function (w, i) {
+      if (i % labelStep !== 0 && i !== n - 1) return;
+      var anchor = i === 0 ? 'start' : (i === n - 1 ? 'end' : 'middle');
+      svg += '<text x="' + xpos(i).toFixed(1) + '" y="255" text-anchor="' + anchor + '">' + fmtWeek(w) + '</text>';
+    });
+    svg += '</g>';
+
+    sensors.forEach(function (s) {
+      var pts = weeks.map(function (w, i) {
+        var wk = s.weekly[w];
+        var v = wk ? wk[1] / wk[0] * 100 : null;
+        return v === null ? null : xpos(i).toFixed(1) + ',' + ypos(v).toFixed(1);
+      }).filter(function (p) { return p !== null; });
+      if (pts.length < 2) return;
+      svg += '<polyline class="line" stroke="' + s.color + '"' +
+        (s.dash.length ? ' stroke-dasharray="' + s.dash.join(' ') + '"' : '') +
+        ' points="' + pts.join(' ') + '"></polyline>';
+    });
+    svg += '</svg>';
+    return svg;
+  }
+
+  function buildNarrative(group, sensors) {
+    var withData = sensors.filter(function (s) { return s.total >= TIER_MIN_RUNS; });
+    if (!withData.length) return 'Not enough data in this range to summarize.';
+
+    var best = withData.reduce(function (a, b) { return (b.pct > a.pct) ? b : a; });
+    var worst = withData.reduce(function (a, b) { return (b.pct < a.pct) ? b : a; });
+
+    var allOutages = [];
+    sensors.forEach(function (s) {
+      s.outages.forEach(function (o) { allOutages.push(Object.assign({}, o, { sid: s.sid, loc: s.loc })); });
+    });
+    allOutages.sort(function (a, b) { return b.days - a.days; });
+
+    var parts = [];
+    parts.push('<b>' + sensors.length + ' sensor' + (sensors.length === 1 ? '' : 's') + '</b> analysed in ' + group + '.');
+    if (withData.length > 1) {
+      parts.push((worst.loc || ('Sensor ' + worst.sid)) + ' (' + group + ' ' + worst.sid + ') has the lowest lifetime uptime at ' +
+        worst.pct.toFixed(1) + '%, versus ' + best.pct.toFixed(1) + '% for ' + (best.loc || ('Sensor ' + best.sid)) + '.');
+    } else {
+      parts.push((worst.loc || ('Sensor ' + worst.sid)) + ' shows ' + worst.pct.toFixed(1) + '% lifetime uptime over this range.');
+    }
+    if (allOutages.length) {
+      var top = allOutages[0];
+      parts.push('The longest recorded outage was ' + top.days.toFixed(1) + ' days (' + top.start.slice(0, 10) + ' → ' + top.end.slice(0, 10) + '), on ' +
+        (top.loc || ('sensor ' + top.sid)) + '.');
+    }
+    return parts.join(' ');
+  }
+})();
+</script>
+</body>
+</html>
