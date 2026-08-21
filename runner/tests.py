@@ -34,7 +34,7 @@ def valid_xml(response_text: str) -> dict:
 
 # ─── VMS ─────────────────────────────────────────────────────────────────────
 
-DEFAULT_VMS_STALE_HOURS = 3
+DEFAULT_VMS_STALE_HOURS = 1
 
 
 def vms_controller_status(response_text: str, stale_hours: int = DEFAULT_VMS_STALE_HOURS) -> dict:
@@ -134,7 +134,7 @@ def predefined_paths_count(response_text: str) -> dict:
     }
 
 
-DEFAULT_STALE_HOURS = 3
+DEFAULT_STALE_HOURS = 1
 
 
 def bt_paths_speed_and_traveltime(response_text: str, stale_hours: int = DEFAULT_STALE_HOURS) -> dict:
