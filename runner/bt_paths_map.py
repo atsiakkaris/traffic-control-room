@@ -1296,14 +1296,14 @@ function exportFindings() {{
   var rows = [['Path ID', 'Name', 'Status', 'Note', 'Suspicious', 'Duplicate']];
   Object.keys(FLAGS).forEach(function(id) {{
     var flag = FLAGS[id];
-    if (!flag || (!flag.status && !flag.note)) return;
+    if (!flag || flag.status !== 'flag') return;
     var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
     var name = obj ? obj.feature.name : id;
     var susp = obj && obj.feature.suspicious ? 'yes' : 'no';
     var dup = DUPLICATE_GROUPS[name] ? 'yes' : 'no';
     rows.push([id, name, flag.status || '', (flag.note || '').replace(/\\n/g, ' '), susp, dup]);
   }});
-  if (rows.length === 1) {{ alert('No flagged paths yet — use Flag/OK in the panel at bottom-left first.'); return; }}
+  if (rows.length === 1) {{ alert('No flagged paths yet — use Flag in the panel at bottom-left first.'); return; }}
   var csv = rows.map(function(r) {{
     return r.map(function(v) {{ return '"' + String(v).replace(/"/g, '""') + '"'; }}).join(',');
   }}).join('\\n');
