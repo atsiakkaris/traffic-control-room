@@ -23,20 +23,26 @@
   <button data-target="frame-btmap">BT Paths Map</button>
 </div>
 <div id="frames">
-  <iframe id="frame-dashboard" class="active" src="reports/latest.html"></iframe>
-  <iframe id="frame-btmap" src="docs/bt-paths-map.html"></iframe>
+  <iframe id="frame-dashboard" class="active" data-src="reports/latest.html"></iframe>
+  <iframe id="frame-btmap" data-src="docs/bt-paths-map.html"></iframe>
 </div>
 <script>
+  // Forward the shell's query string (e.g. UTM tags from the digest email link)
+  // onto the iframe's src, since iframes don't inherit the parent page's params.
+  function loadFrame(frame) {
+    if (!frame.src && frame.dataset.src) frame.src = frame.dataset.src + window.location.search;
+  }
+  loadFrame(document.getElementById('frame-dashboard'));
   document.querySelectorAll('#tabs button').forEach(function (btn) {
     btn.addEventListener('click', function () {
       document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.remove('active'); });
       document.querySelectorAll('#frames iframe').forEach(function (f) { f.classList.remove('active'); });
       btn.classList.add('active');
-      document.getElementById(btn.getAttribute('data-target')).classList.add('active');
+      var frame = document.getElementById(btn.getAttribute('data-target'));
+      frame.classList.add('active');
+      loadFrame(frame);
     });
   });
 </script>
-<script data-goatcounter="https://traffic-control-room.goatcounter.com/count"
-        async src="//gc.zgo.at/count.js"></script>
 </body>
 </html>
