@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db import (init_db, insert_run, insert_result, insert_sensor_result,
                 upsert_sensor_coords, upsert_bt_path_coords,
                 retire_missing_sensors, retire_missing_bt_paths,
-                fetch_sensor_ids_for_run)
+                fetch_sensor_ids_for_run, set_feed_measurement_timestamp)
 from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report
@@ -132,6 +132,8 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
                         result.setdefault("sensors", {}).update(check_result["sensors"])
                     if check_result.get("measurements"):
                         result.setdefault("measurements", {}).update(check_result["measurements"])
+                    if check_result.get("common_measurement_timestamp"):
+                        result["common_measurement_timestamp"] = check_result["common_measurement_timestamp"]
                 except Exception as e:
                     failures.append(f"{check_name} raised exception: {e}")
 
@@ -251,6 +253,9 @@ def run_all():
             for sensor_id, s_status in live_ids_seen.items():
                 mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
+
+            if r.get("common_measurement_timestamp"):
+                set_feed_measurement_timestamp(sensor_group, r["common_measurement_timestamp"])
 
             # Extract and store coordinates from inventory endpoints.
             # Only retire when the feed explicitly passed — an empty coord set from a

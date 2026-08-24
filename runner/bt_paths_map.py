@@ -33,9 +33,10 @@ if _env_path.exists():
             _k, _, _v = _line.partition('=')
             os.environ.setdefault(_k.strip(), _v.strip())
 
-from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection
+from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection, get_feed_measurement_timestamp
 from qa import load_reference, _haversine_m
-from stability import CYPRUS_TZ, to_cyprus
+from stability import CYPRUS_TZ, to_cyprus, format_duration_since, BT_PATHS_FEED_NAME
+from tests import DEFAULT_STALE_HOURS
 
 REPORT_DIR = Path(__file__).parent.parent / "reports"
 DOCS_DIR = Path(__file__).parent.parent / "docs"
@@ -431,6 +432,24 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                 dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
                 reversed_by_id=None, reversed_groups=None):
     now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
+    # Same feed_state row the dashboard banner reads — shown here too so
+    # anyone on the map (including the published copy) sees the live feed is
+    # frozen, not just people looking at the main dashboard. feed_since gets
+    # overwritten every run regardless of health, so only warn once it's
+    # actually past the stale threshold — a fresh feed would otherwise always
+    # show a spurious "ongoing 1h" from format_duration_since's floor.
+    feed_since = get_feed_measurement_timestamp(BT_PATHS_FEED_NAME)
+    feed_stale_duration = None
+    if feed_since:
+        try:
+            _since_dt = datetime.fromisoformat(feed_since.replace("Z", "+00:00"))
+            if _since_dt.tzinfo is None:
+                _since_dt = _since_dt.replace(tzinfo=timezone.utc)
+            _age_hours = (datetime.now(timezone.utc) - _since_dt).total_seconds() / 3600
+            if _age_hours > DEFAULT_STALE_HOURS:
+                feed_stale_duration = format_duration_since(feed_since)
+        except (ValueError, TypeError):
+            pass
     dropped_ids = dropped_ids or set()
     reversed_by_id = reversed_by_id or {}
     reversed_groups = reversed_groups or {}
@@ -660,6 +679,7 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
     <h1>Bluetooth Paths — Map</h1>
     <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
        {len(sensor_list)} API sensors&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors</p>
+    {f'<p style="opacity:1;color:#ffc978;font-weight:bold;margin-top:6px"><i class="ti ti-alert-triangle" style="font-size:12px" aria-hidden="true"></i>&nbsp; Live feed frozen since {to_cyprus(feed_since)} (ongoing {feed_stale_duration})</p>' if feed_stale_duration else ''}
   </div>
   <button class="dm-btn" onclick="toggleDark()" id="dmBtn" aria-label="Toggle dark mode">
     <i class="ti ti-sun" id="dmIcon" aria-hidden="true"></i><span id="dmLabel">Light</span>

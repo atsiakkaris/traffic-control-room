@@ -13,6 +13,11 @@ from zoneinfo import ZoneInfo
 
 CYPRUS_TZ = ZoneInfo("Asia/Nicosia")
 
+# feed_state key for the BT paths live endpoint — matches its `sensor_group`
+# in config/endpoints.yaml. Shared so report.py and bt_paths_map.py always
+# look up the same row.
+BT_PATHS_FEED_NAME = "Bluetooth Paths"
+
 PROJECTS_CSV = Path(__file__).parent.parent / "config" / "projects.csv"
 
 # Sensor statuses that count as "good" when computing health percentages
@@ -224,6 +229,27 @@ def to_cyprus(utc_iso: str) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(CYPRUS_TZ).strftime("%d/%m/%y %H:%M")
+
+
+def format_duration_since(since_str):
+    """'2026-08-21T13:01:00' -> '3d 4h' (relative to now). None if unset/unparseable/future.
+    Shared by the dashboard banner and the BT paths map so both describe the
+    same feed-staleness duration identically."""
+    if not since_str:
+        return None
+    try:
+        since_dt = datetime.fromisoformat(since_str.replace("Z", "+00:00"))
+        if since_dt.tzinfo is None:
+            since_dt = since_dt.replace(tzinfo=timezone.utc)
+        total_hours = (datetime.now(timezone.utc) - since_dt).total_seconds() / 3600
+        if total_hours < 0:
+            return None
+        days, hours = divmod(int(total_hours), 24)
+        if days >= 1:
+            return f"{days}d {hours}h" if days < 3 else f"{days}d"
+        return f"{max(1, int(total_hours))}h"
+    except (ValueError, TypeError):
+        return None
 
 
 # Plain-English reason for each raw sensor status. Shared so the dashboard and

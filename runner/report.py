@@ -6,7 +6,6 @@ import os
 import re
 import json
 import html as _html
-import hashlib
 import yaml
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -18,11 +17,12 @@ def _json_safe(obj):
     can't break out of the script element. Produces valid JSON/JS either way."""
     return json.dumps(obj).replace("<", "\\u003c")
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects, get_feed_measurement_timestamp
 from labels import sensor_display_name
 from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
                        tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS,
-                       to_cyprus, current_state, load_project_accountability, contract_census)
+                       to_cyprus, current_state, load_project_accountability, contract_census,
+                       format_duration_since, BT_PATHS_FEED_NAME)
 from digest import _render_note_html
 
 
@@ -39,35 +39,42 @@ def _dashboard_note():
     return note.strip()
 
 
-def _dashboard_note_banner(note):
+def _dashboard_note_since():
+    """The most common measurement_timestamp (mode, not max) across the BT
+    paths live feed, recorded every run in feed_state (see run_tests.py /
+    db.py) — no manual date entry. If the feed is frozen, this value stops
+    advancing on its own, and the "ongoing Xd" label grows automatically
+    until it moves again."""
+    return get_feed_measurement_timestamp(BT_PATHS_FEED_NAME)
+
+
+def _dashboard_note_banner(note, since=None):
     """Option-A stripe banner: a thin amber bar under the header, dismissible,
-    with an expandable details panel. Dismissal is keyed to a hash of the note
-    text (stored in localStorage) so editing the note un-dismisses it, but
-    leaving it unchanged keeps it dismissed across visits."""
+    with an expandable details panel. Dismissal only hides it for the current
+    page view — no persistence — so it reappears on the next refresh/visit
+    until the note itself is cleared from DASHBOARD_NOTE. If `since` (from
+    DASHBOARD_NOTE_SINCE) is set, an "ongoing Xd" label is computed fresh on
+    every regeneration — no manual duration upkeep needed in the note text."""
     if not note:
         return ""
-    note_id = hashlib.sha1(note.encode("utf-8")).hexdigest()[:10]
+    duration = format_duration_since(since)
+    label = f"Known issue (ongoing {duration})" if duration else "Known issue"
     return f"""
-<div id="dashNoteStripe" data-note-id="{note_id}" style="display:none;background:#faeeda;color:#633806;border-bottom:2px solid #e58e0a;font-size:13px">
+<div id="dashNoteStripe" style="background:#faeeda;color:#633806;border-bottom:2px solid #e58e0a;font-size:13px">
   <div style="padding:8px 28px;display:flex;align-items:center;gap:10px">
     <i class="ti ti-alert-triangle" style="font-size:15px" aria-hidden="true"></i>
-    <span style="flex:1">Known issue — <span onclick="toggleDashNote()" style="text-decoration:underline;cursor:pointer">view details</span></span>
-    <i class="ti ti-x" onclick="dismissDashNote()" style="cursor:pointer;font-size:14px" role="button" aria-label="Dismiss"></i>
+    <span style="flex:1">{label} — <span onclick="toggleDashNote()" style="text-decoration:underline;cursor:pointer">view details</span></span>
+    <i class="ti ti-x" onclick="dismissDashNote()" style="cursor:pointer;font-size:14px" role="button" aria-label="Hide for now"></i>
   </div>
   <div id="dashNoteBody" style="display:none;padding:0 28px 14px;line-height:1.5">{_render_note_html(note)}</div>
 </div>
 <script>
 (function() {{
-  var noteId = "{note_id}";
-  if (localStorage.getItem('dashNoteDismissed') !== noteId) {{
-    document.getElementById('dashNoteStripe').style.display = '';
-  }}
   window.toggleDashNote = function() {{
     var b = document.getElementById('dashNoteBody');
     b.style.display = b.style.display === 'none' ? '' : 'none';
   }};
   window.dismissDashNote = function() {{
-    localStorage.setItem('dashNoteDismissed', noteId);
     document.getElementById('dashNoteStripe').style.display = 'none';
   }};
 }})();
@@ -1590,7 +1597,7 @@ def generate_report() -> str:
     sensor_pct = round(sensor_good / sensor_total_count * 100)
     sensor_bar_color = "#1d9e75" if sensor_pct >= 90 else ("#e58e0a" if sensor_pct >= 55 else "#e24b4a")
 
-    dashboard_note_banner = _dashboard_note_banner(_dashboard_note())
+    dashboard_note_banner = _dashboard_note_banner(_dashboard_note(), _dashboard_note_since())
 
     html = f"""<!DOCTYPE html>
 <html lang="en">

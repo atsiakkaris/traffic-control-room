@@ -75,6 +75,12 @@ _SCHEMA = """
         updated_at    TEXT,
         PRIMARY KEY (sensor_id, group_name)
     );
+
+    CREATE TABLE IF NOT EXISTS feed_state (
+        feed_name              TEXT PRIMARY KEY,
+        measurement_timestamp  TEXT NOT NULL,
+        updated_at             TEXT NOT NULL
+    );
 """
 
 
@@ -498,3 +504,31 @@ def fetch_sensor_stability():
             sensors[key] = {"group_name": row["group_name"], "sensor_id": row["sensor_id"], "history": []}
         sensors[key]["history"].append({"run_at": row["run_at"], "status": row["status"]})
     return list(sensors.values())
+
+
+def set_feed_measurement_timestamp(feed_name, measurement_timestamp):
+    """Record a representative measurement_timestamp for a live feed this run
+    (caller decides how — e.g. mode across all sensors). Unconditional (not
+    gated behind LIVE_MODE like sensor_results.data) —
+    it's a single small string per feed, not bulky per-sensor data. Drives the
+    dashboard note's auto-computed "ongoing Xd" duration with no manual date
+    entry: report.py just reads whatever was last stored here."""
+    if not measurement_timestamp:
+        return
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO feed_state (feed_name, measurement_timestamp, updated_at) VALUES (?,?,?) "
+        "ON CONFLICT(feed_name) DO UPDATE SET measurement_timestamp=excluded.measurement_timestamp, updated_at=excluded.updated_at",
+        (feed_name, measurement_timestamp, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_feed_measurement_timestamp(feed_name):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT measurement_timestamp FROM feed_state WHERE feed_name = ?", (feed_name,)
+    ).fetchone()
+    conn.close()
+    return row["measurement_timestamp"] if row else None
