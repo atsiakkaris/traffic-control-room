@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db import (init_db, insert_run, insert_result, insert_sensor_result,
                 upsert_sensor_coords, upsert_bt_path_coords,
                 retire_missing_sensors, retire_missing_bt_paths,
-                fetch_sensor_ids_for_run, set_feed_measurement_timestamp)
+                set_feed_measurement_timestamp)
 from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report

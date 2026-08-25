@@ -771,10 +771,10 @@ if __name__ == "__main__":
         note_file = Path(__file__).parent.parent / "digest_note.local.html"
         if not os.environ.get("DIGEST_NOTE") and note_file.exists():
             os.environ["DIGEST_NOTE"] = note_file.read_text(encoding="utf-8")
-        d    = build_digest()
-        html = build_html(d)
-        out  = Path(__file__).parent.parent / "reports" / "digest_preview.html"
-        out.write_text(html, encoding="utf-8")
+        d         = build_digest()
+        html_body = build_html(d)
+        out       = Path(__file__).parent.parent / "reports" / "digest_preview.html"
+        out.write_text(html_body, encoding="utf-8")
         print(f"Preview saved: {out}")
         webbrowser.open(str(out))
     else:

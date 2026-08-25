@@ -341,20 +341,6 @@ def fetch_results_for_run(run_id):
     return [dict(r) for r in rows]
 
 
-def fetch_history_for_test(test_name, limit=30):
-    conn = get_connection()
-    rows = conn.execute(
-        """SELECT tr.status, tr.response_ms, r.run_at
-           FROM test_results tr
-           JOIN runs r ON r.run_id = tr.run_id
-           WHERE tr.test_name = ?
-           ORDER BY r.run_at DESC LIMIT ?""",
-        (test_name, limit)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
 def fetch_sensor_statuses_for_run(run_id):
     """Return {group_name: {status: [sensor_id, ...]}} for a specific run."""
     conn = get_connection()

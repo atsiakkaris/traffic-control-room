@@ -1,4 +1,4 @@
-﻿"""
+"""
 report.py - Generate a static HTML report from the SQLite history DB.
 """
 
@@ -19,7 +19,7 @@ def _json_safe(obj):
 
 from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects, get_feed_measurement_timestamp
 from labels import sensor_display_name
-from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
+from stability import (GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
                        tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS,
                        to_cyprus, current_state, load_project_accountability, contract_census,
                        format_duration_since, BT_PATHS_FEED_NAME)
@@ -52,9 +52,9 @@ def _dashboard_note_banner(note, since=None):
     """Option-A stripe banner: a thin amber bar under the header, dismissible,
     with an expandable details panel. Dismissal only hides it for the current
     page view — no persistence — so it reappears on the next refresh/visit
-    until the note itself is cleared from DASHBOARD_NOTE. If `since` (from
-    DASHBOARD_NOTE_SINCE) is set, an "ongoing Xd" label is computed fresh on
-    every regeneration — no manual duration upkeep needed in the note text."""
+    until the note itself is cleared from DASHBOARD_NOTE. If `since` is set,
+    an "ongoing Xd" label is computed fresh on every regeneration — no manual
+    duration upkeep needed in the note text."""
     if not note:
         return ""
     duration = format_duration_since(since)
@@ -1277,8 +1277,6 @@ def generate_report() -> str:
                     name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
             elif "vms_controller_status" in cs:
                 w = re.search(r"Working: (\d+)", cs)
-                nw = re.search(r"Not working: (\d+)", cs)
-                ns = re.search(r"No status: (\d+)", cs)
                 if w:
                     working = int(w.group(1))
                     live_total = _live_total(group_name, working)
@@ -1578,7 +1576,6 @@ def generate_report() -> str:
     # Per-panel progress bar percentages
     latest_total = latest_run["total"] or 1
     overall_pct = round(latest_run["passed"] / latest_total * 100)
-    overall_bar_color = "#1d9e75" if overall_pct >= 90 else ("#e58e0a" if overall_pct >= 55 else "#e24b4a")
 
     health_vals = [v for r in chart_runs for gname in GROUP_META
                    for v in [health_by_run.get(r["run_id"], {}).get(gname)] if v is not None]

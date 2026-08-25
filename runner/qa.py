@@ -26,7 +26,6 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
-from difflib import SequenceMatcher
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -599,23 +598,6 @@ def _badge_health(pct):
     return f'<span class="badge red">{pct}%</span>'
 
 
-def _badge_last_seen(last_seen):
-    if not last_seen:
-        return '<span class="badge grey">Never</span>'
-    try:
-        from datetime import timezone
-        ts = datetime.fromisoformat(last_seen.replace('Z', '+00:00'))
-        age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-        label = f'{int(age_h)}h ago' if age_h >= 1 else f'{int(age_h * 60)}m ago'
-        if age_h < 1:
-            return f'<span class="badge green">{label}</span>'
-        if age_h < 24:
-            return f'<span class="badge amber">{label}</span>'
-        return f'<span class="badge red">{label}</span>'
-    except Exception:
-        return f'<span class="badge grey">{last_seen[:10]}</span>'
-
-
 def _badge_dist(dist):
     if dist is None:
         return '<span class="badge grey">No ref coords</span>'
@@ -624,14 +606,6 @@ def _badge_dist(dist):
     if dist < COORD_ALERT_M:
         return f'<span class="badge amber">{dist:.0f} m ⚠</span>'
     return f'<span class="badge red">{dist:.0f} m ✖</span>'
-
-
-def _badge_conf(score):
-    if score >= 0.90:
-        return f'<span class="badge green">{score:.0%}</span>'
-    if score >= 0.75:
-        return f'<span class="badge amber">{score:.0%} ⚠</span>'
-    return f'<span class="badge red">{score:.0%} ✖</span>'
 
 
 # Same wording as report.py's _COMMISSIONING_LABEL, so a row reads the same
