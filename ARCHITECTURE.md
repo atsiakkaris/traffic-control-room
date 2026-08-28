@@ -14,8 +14,11 @@ Every 6 hours, a GitHub Actions workflow runs `runner/run_tests.py`, which:
 1. Hits every SWARCO DATEX II API endpoint listed in `config/endpoints.yaml`.
 2. Records pass/fail + parsed sensor detail into `results/history.db` (SQLite).
 3. Calls `runner/report.py` to regenerate `reports/latest.html` from the DB.
-4. Commits both the DB and the HTML back to the repo, so GitHub Pages serves
-   the latest dashboard and the DB carries full history forward.
+
+The workflow then also runs `runner/bt_paths_map.py --publish` (geometry only
+— see §6a) and commits the DB, the dashboard HTML, and `docs/bt-paths-map.html`
+back to the repo, so GitHub Pages serves the latest dashboard and BT paths map
+and the DB carries full history forward.
 
 A second workflow runs `runner/digest.py` every Monday, reading the same DB to
 email a weekly summary.
@@ -39,7 +42,7 @@ ever reading the spreadsheet directly.
                     (SQLite, committed)         (manual, offline,
                            │                     reads QA Locations.xlsx)
                            ▼
-                 reports/latest.html
+                 reports/latest.html + docs/bt-paths-map.html
                  (committed → GitHub Pages)
 
   every Monday ──▶ digest.py  ── reads DB ──▶ emails weekly summary
@@ -124,7 +127,14 @@ ended, failures are expected and shown separately, not chased).
    feed. This retire-on-absence step only fires on a *passing* inventory
    fetch — a failed/empty fetch must never be mistaken for "all sensors
    removed."
-6. `db.insert_run()` writes the run-level summary row.
+6. The `runs` row itself is written **before** step 2 even starts —
+   `db.insert_run()` inserts it with zero totals right at the top of
+   `run_all()`, and `db.update_run_totals()` fills in the real counts once
+   every endpoint has been processed. This means `test_results`/
+   `sensor_results` rows always have a real parent `runs` row to point at:
+   if the process dies partway through (a manual interrupt, a runner kill),
+   those child rows survive as part of a genuine, if incomplete, run instead
+   of becoming orphans with no matching `runs` row.
 7. `report.generate_report()` is called to regenerate the HTML dashboard from
    whatever is now in the DB.
 8. Process exits non-zero if anything failed/errored — this fails the GitHub
@@ -367,13 +377,25 @@ Leaflet map with no other groups and no health data.
   anywhere on the map).
 
 **Sharing with colleagues:** `python runner/bt_paths_map.py --publish` (via
-`publish_bt_map.bat`) additionally writes the generated page to
-`docs/bt-paths-map.html`, which is tracked in git and served by GitHub Pages
-alongside the main dashboard (Pages source is `main` / `/ (root)`, so nothing
-under `docs/` needs a separate Pages config). `index.html` at the repo root is
-a small tabbed landing page — plain iframes, no build step — so one URL
-(`https://atsiakkaris.github.io/traffic-control-room/`) can switch between the
-live dashboard and this tool instead of needing two separate links.
+`publish_bt_map.bat`, or automatically — see below) additionally writes the
+generated page to `docs/bt-paths-map.html`, which is tracked in git and served
+by GitHub Pages alongside the main dashboard (Pages source is `main` /
+`/ (root)`, so nothing under `docs/` needs a separate Pages config).
+`index.html` at the repo root is a small tabbed landing page — plain iframes,
+no build step — so one URL (`https://atsiakkaris.github.io/traffic-control-room/`)
+can switch between the live dashboard and this tool instead of needing two
+separate links.
+
+**Auto-published every 6h (added 2026-08-28):** `daily_tests.yml` now runs
+`bt_paths_map.py --publish` after every scheduled test run and commits
+`docs/bt-paths-map.html` alongside the dashboard, so path additions/deletions
+and the duplicate/reversed-direction/overlap checks stay current without a
+manual step. `QA Locations.xlsx` is gitignored and not present on the GitHub
+Actions runner, so `load_reference_sensors()` degrades gracefully (warns,
+returns `[]`) and the auto-published map always shows 0 spreadsheet sensors —
+the spreadsheet-comparison layer still needs a manual
+`bt_paths_map.py --publish` run with the xlsx present locally whenever that
+comparison needs refreshing.
 
 ---
 
@@ -594,11 +616,13 @@ scheduler proved unreliable for this project's cadence; cron-job.org pings
 `daily_tests.yml` roughly every 6 hours and `weekly_digest.yml` every Monday
 07:30 EEST.
 
-`daily_tests.yml`: checkout → install deps → run `run_tests.py` → commit
-`results/history.db` + `reports/latest.html` back to the repo (as the
-`github-actions[bot]` identity) → push → upload the HTML as a build artifact.
-The commit step runs `if: always()`, so even a failing test run still
-publishes whatever the DB/report ended up looking like.
+`daily_tests.yml`: checkout → install deps → run `run_tests.py` → run
+`bt_paths_map.py --publish` (refreshes `docs/bt-paths-map.html`, geometry
+only — see §6a) → commit `results/history.db` + `reports/latest.html` +
+`docs/bt-paths-map.html` back to the repo (as the `github-actions[bot]`
+identity) → push → upload the HTML as a build artifact. The BT-map-refresh
+and commit steps both run `if: always()`, so even a failing test run still
+publishes whatever the DB/report/map ended up looking like.
 
 `weekly_digest.yml`: checkout → install deps → run `digest.py`. No commit
 step — it only sends an email.

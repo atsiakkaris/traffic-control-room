@@ -36,8 +36,13 @@ gitignored). ⚠️ Flags/notes are saved in your **browser's local storage** �
 they don't sync across machines or browsers and aren't backed up anywhere;
 export to CSV periodically if you want to keep them.
 
-To update the copy shared with colleagues at the link above, run
-`publish_bt_map.bat`, then commit and push `docs/bt-paths-map.html`.
+The copy shared with colleagues at the link above (`docs/bt-paths-map.html`)
+**auto-refreshes every 6 hours** alongside the dashboard, so path
+additions/deletions and the duplicate/overlap checks stay current on their
+own. The one thing that doesn't auto-refresh is the `QA Locations.xlsx`
+spreadsheet-comparison layer (the file isn't present in CI) — run
+`publish_bt_map.bat` locally, then commit and push `docs/bt-paths-map.html`,
+whenever that layer needs updating.
 
 ---
 
@@ -186,11 +191,11 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   ├── latest.html             ← Generated dashboard (auto-committed after each run)
 │   └── bt_paths_map.html       ← Local BT paths review map (gitignored — regenerate with bt_paths_map.bat)
 ├── docs/
-│   └── bt-paths-map.html       ← Published copy of the BT paths map (GitHub Pages, updated via publish_bt_map.bat)
+│   └── bt-paths-map.html       ← Published copy of the BT paths map (GitHub Pages; auto-refreshed every 6h — run publish_bt_map.bat for the spreadsheet-comparison layer)
 ├── index.html                  ← Tabbed landing page (GitHub Pages root) switching Dashboard / BT Paths Map
 ├── QA Locations.xlsx           ← Reference equipment inventory (gitignored — local/cloud only)
 ├── .github/workflows/
-│   ├── daily_tests.yml         ← GitHub Actions workflow (runs pytest, then the API tests)
+│   ├── daily_tests.yml         ← GitHub Actions workflow (runs pytest, the API tests, then refreshes the published BT paths map)
 │   └── weekly_digest.yml       ← Weekly digest email (Mondays 07:30 EEST, triggered via cron-job.org)
 ├── tests/
 │   ├── test_generate_report.py ← Dashboard generator: current state, fault age, search tokens
