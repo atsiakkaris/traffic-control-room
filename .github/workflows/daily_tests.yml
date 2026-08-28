@@ -36,6 +36,16 @@ jobs:
           DASHBOARD_NOTE: ${{ vars.DASHBOARD_NOTE }}
         run: python runner/run_tests.py
 
+      - name: Refresh published BT paths map
+        if: always()
+        env:
+          DB_PATH: results/history.db
+        # No QA Locations.xlsx on the runner (gitignored, not committed — see
+        # .gitignore) — load_reference_sensors() degrades gracefully and just
+        # skips the spreadsheet-comparison layer here. Run manually with
+        # --publish locally whenever that layer needs refreshing too.
+        run: python runner/bt_paths_map.py --publish
+
       - name: Commit results
         if: always()
         run: |
@@ -43,6 +53,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           [ -f results/history.db ] && git add results/history.db
           [ -f reports/latest.html ] && git add reports/latest.html
+          [ -f docs/bt-paths-map.html ] && git add docs/bt-paths-map.html
           git diff --cached --quiet || git commit -m "chore: test results $(date -u +%Y-%m-%dT%H:%M)Z"
           git push
 
