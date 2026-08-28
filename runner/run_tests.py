@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db import (init_db, insert_run, insert_result, insert_sensor_result,
+from db import (init_db, insert_run, update_run_totals, insert_result, insert_sensor_result,
                 upsert_sensor_coords, upsert_bt_path_coords,
                 retire_missing_sensors, retire_missing_bt_paths,
                 set_feed_measurement_timestamp)
@@ -222,6 +222,12 @@ def run_all():
     totals = {"total": 0, "passed": 0, "failed": 0, "errored": 0}
     all_results = []
 
+    # Written up front (with zero totals, updated once the run finishes) so
+    # test_results/sensor_results always have a real parent row to point at
+    # — if the process dies partway through, those rows survive as part of
+    # a genuine (if incomplete) run instead of becoming orphans.
+    insert_run(run_id, run_at, totals)
+
     for group in config.get("groups", []):
         group_name = group["name"]
         inventory_ids_by_endpoint = {}   # endpoint name -> ids seen this run (only inventory endpoints)
@@ -292,7 +298,7 @@ def run_all():
                 continue
             _reconcile_missing_sensors(run_id, run_at, sensor_group, inventory_ids, live_ids)
 
-    insert_run(run_id, run_at, totals)
+    update_run_totals(run_id, totals)
 
     log.info("=" * 60)
     log.info("SUMMARY  passed=%d  failed=%d  errored=%d  total=%d",

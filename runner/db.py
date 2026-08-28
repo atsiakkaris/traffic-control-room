@@ -191,6 +191,23 @@ def insert_run(run_id, run_at, totals):
     conn.close()
 
 
+def update_run_totals(run_id, totals):
+    """Update an existing runs row's totals in place.
+
+    Paired with an insert_run(..., zero totals) call at the start of a run
+    (see run_tests.py) so the parent row always exists before any
+    test_results/sensor_results are written — if the process dies partway
+    through, those rows still point at a real run instead of becoming
+    orphans with no matching runs row."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE runs SET total=?, passed=?, failed=?, errored=? WHERE run_id=?",
+        (totals["total"], totals["passed"], totals["failed"], totals["errored"], run_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def insert_result(run_id, group_name, test_name, endpoint, method,
                   status, status_code, expected_code, response_ms,
                   failure_reason, check_summary=None):
