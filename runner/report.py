@@ -254,7 +254,13 @@ def _chart_datasets_js(group_meta, chart_series):
             # the last good point and the next one — that interpolation was
             # actively misleading, drawing a fake gradual recovery through a
             # period where the feed was fully down the whole time.
-            "backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, spanGaps: false"
+            # cubicInterpolationMode:'monotone' instead of a plain tension curve —
+            # a plain Bezier spline can overshoot past the actual data points on a
+            # steep drop (e.g. 83.8% -> 83.3% rendering as a visible rise between
+            # them because the curve bulges to stay smooth through the sharper
+            # dip right after). Monotone interpolation stays smooth but is
+            # constrained to never draw the line above/below its real neighbours.
+            "backgroundColor: 'transparent', cubicInterpolationMode: 'monotone', tension: 0.3, pointRadius: 3, spanGaps: false"
             " }"
         )
     return ",\n      ".join(datasets)
@@ -2086,7 +2092,15 @@ function _fixLeafletTop() {
   var isFs = document.fullscreenElement || document.webkitFullscreenElement;
   var overlap = 0;
   if (!isFs && hdr && mapEl) {
-    overlap = Math.max(0, hdr.getBoundingClientRect().bottom - mapEl.getBoundingClientRect().top);
+    var hdrRect = hdr.getBoundingClientRect();
+    var raw = hdrRect.bottom - mapEl.getBoundingClientRect().top;
+    // Clamped to the header's own height: once the page is scrolled far enough
+    // that the map's top has gone well above the viewport, `raw` keeps growing
+    // unbounded (it's just measuring how far past the header we've scrolled,
+    // not how much the header actually covers) — that pushed the control stack
+    // hundreds of pixels down the inside of the map, well past the visible
+    // area, instead of leaving it pinned at the true top-right corner.
+    overlap = Math.min(Math.max(0, raw), hdrRect.height);
   }
   document.querySelectorAll('.leaflet-top').forEach(function(el) { el.style.top = overlap + 'px'; });
 }
@@ -2674,7 +2688,17 @@ function applyVisibility() {
     var on = pathsOn &&
              (_activeFilter === 'all' || ISSUE_STATUSES.indexOf(p._pathStatus) !== -1);
     p._visible = on;   // adjacency lookup must not point at a hidden path
-    p.setStyle(pathStyle(p._pathStatus, !on));
+    // The selected path keeps its yellow highlight through a redraw — every
+    // toggle/filter change and every historical-playback step calls this
+    // function, and it used to blindly restyle every path back to its plain
+    // status colour, silently un-highlighting whatever was selected (while
+    // _highlighted still pointed at it, so the app's state and what's on
+    // screen disagreed).
+    if (p === _highlighted) {
+      p.setStyle({color:'#facc15', weight:7, opacity: on ? 1 : 0});
+    } else {
+      p.setStyle(pathStyle(p._pathStatus, !on));
+    }
   });
   if (pathsOn) {
     if (!_map.hasLayer(_layerGroups.arrows)) _map.addLayer(_layerGroups.arrows);
