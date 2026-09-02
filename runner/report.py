@@ -2575,13 +2575,23 @@ var _paths = [];
 var _highlighted = null;
 _btPaths.forEach(function(p) {
   var pl = makePath(p);
+  // A path's real stroke is only 2-4px wide (pathStyle) — a fair target for a
+  // precise mouse but a near-miss for anything else, and status colours that
+  // fade to opacity 0.3 make it hard to even see where to aim. `hit` is an
+  // invisible copy of the same geometry, much wider, laid down first so it
+  // sits underneath the visible line: it never repaints anything, it just
+  // gives clicks/hovers a ~14px-wide target instead of the drawn line's own
+  // width. Every handler below is bound to both `pl` and `hit`.
+  var hit = L.polyline(pl.getLatLngs(), {color:'#000', weight: 14, opacity: 0});
+  hit.addTo(_layerGroups.paths);
   pl.addTo(_layerGroups.paths);
   pl._decorator.addTo(_layerGroups.arrows);
   pl.bindTooltip('', {sticky: true, direction: 'top', opacity: 0.95, className: 'bt-overlap-tip'});
-  pl.on('mouseover', function(e) {
+  function onOver(e) {
     pl.setTooltipContent(_overlapTooltipHtml(_overlappingPathsAt(e.latlng), pl));
-  });
-  pl.on('click', function(e) {
+    pl.openTooltip(e.latlng);
+  }
+  function onClick(e) {
     L.DomEvent.stopPropagation(e);
     // The sticky hover tooltip stays open through a click (mouse hasn't left
     // the path), so it would render on top of the info panel that's about to
@@ -2596,7 +2606,12 @@ _btPaths.forEach(function(p) {
     var idx = (_endpointCycle[key] || 0) % here.length;
     _endpointCycle[key] = idx + 1;
     _selectPath(here[idx], e.latlng, ' (' + (idx+1) + ' of ' + here.length + ' here)');
-  });
+  }
+  pl.on('mouseover', onOver);
+  pl.on('click', onClick);
+  hit.on('mouseover', onOver);
+  hit.on('click', onClick);
+  pl._hit = hit;
   _paths.push(pl);
 });
 
@@ -2698,6 +2713,13 @@ function applyVisibility() {
       p.setStyle({color:'#facc15', weight:7, opacity: on ? 1 : 0});
     } else {
       p.setStyle(pathStyle(p._pathStatus, !on));
+    }
+    // The wide invisible click target (see _btPaths.forEach) has to come off
+    // the map when its path is hidden — otherwise it keeps eating clicks in
+    // its ~14px hit zone for a path that isn't even shown.
+    if (p._hit) {
+      if (on) { _layerGroups.paths.addLayer(p._hit); }
+      else { _layerGroups.paths.removeLayer(p._hit); }
     }
   });
   if (pathsOn) {
@@ -2927,10 +2949,13 @@ function flyToSensor(el) {
 /* -- Fly to BT path (called from stability panel) ---------------- */
 function flyToBtPath(el) {
   var pid = el.dataset.pathid;
-  // ensure BT paths layer is visible
-  if (!_activeLayers['bt']) {
-    _activeLayers['bt'] = true;
-    var layerBtn = document.querySelector('[data-layer="bt"]');
+  // ensure BT paths layer is visible — 'paths' is the real key (see
+  // layer_keys_js / the data-layer="paths" button); 'bt' isn't a layer this
+  // map has, so checking/setting it was a silent no-op that never actually
+  // turned the layer on when it had been switched off.
+  if (!_activeLayers['paths']) {
+    _activeLayers['paths'] = true;
+    var layerBtn = document.querySelector('[data-layer="paths"]');
     if (layerBtn) layerBtn.classList.add('active');
     applyVisibility();
   }
@@ -2945,8 +2970,14 @@ function flyToBtPath(el) {
   var target = null;
   _paths.forEach(function(p) { if (p._pathId === pid) target = p; });
   if (target) {
+    var center = target.getBounds().getCenter();
     _map.flyToBounds(target.getBounds(), {padding:[40,40], maxZoom:14, duration:0.8});
-    setTimeout(function() { target.fire('click'); }, 900);
+    // Select directly instead of target.fire('click') — a fired Leaflet event
+    // carries no `latlng` unless one is passed in, and the click handler reads
+    // e.latlng.lat right away (for the overlapping-paths-here cycle key), so
+    // firing a bare 'click' threw immediately and silently: the pin looked
+    // like it did nothing at all, never highlighting the path it flew to.
+    setTimeout(function() { _selectPath(target, center); }, 900);
   }
 }
 
