@@ -148,7 +148,7 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
                 log.warning("  ↻  Timeout on attempt 1, retrying…")
                 continue
             result["status"] = "error"
-            result["failure_reason"] = f"Request timed out after {max_ms/1000+5:.0f}s (2 attempts)"
+            result["failure_reason"] = f"Request timed out after {max_ms/1000+10:.0f}s (2 attempts)"
         except Exception as e:
             if attempt == 0:
                 log.warning("  ↻  Error on attempt 1 (%s), retrying…", e)
