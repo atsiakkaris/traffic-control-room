@@ -17,13 +17,14 @@ def _json_safe(obj):
     can't break out of the script element. Produces valid JSON/JS either way."""
     return json.dumps(obj).replace("<", "\\u003c")
 
-from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects, get_feed_measurement_timestamp
+from db import get_connection, fetch_recent_runs, fetch_results_for_run, fetch_sensor_stability, fetch_sensor_statuses_for_run, fetch_sensor_coords, fetch_bt_path_coords, fetch_sensor_live_data_for_run, fetch_sensor_health_history, fetch_sensor_status_counts, fetch_sensor_projects, get_feed_measurement_timestamp, fetch_ok_streak
 from labels import sensor_display_name
 from stability import (GOOD_STATUSES, EXCLUDED_COMMISSIONING, STATUS_LABEL,
                        tier_for_counts, health_color, health_pct, HEALTH_WARNING_PCT, TIER_MIN_RUNS,
                        to_cyprus, current_state, load_project_accountability, contract_census,
                        format_duration_since, BT_PATHS_FEED_NAME)
 from digest import _render_note_html
+from tests import DEFAULT_STALE_HOURS
 
 
 # Local-preview convenience only, same reasoning as digest_note.local.html:
@@ -46,6 +47,104 @@ def _dashboard_note_since():
     advancing on its own, and the "ongoing Xd" label grows automatically
     until it moves again."""
     return get_feed_measurement_timestamp(BT_PATHS_FEED_NAME)
+
+
+def _feed_freeze_note(since):
+    """Fallback for when nobody has set a manual DASHBOARD_NOTE: bt_paths_map.py
+    already warns on its own page once the BT paths live feed's measurement
+    timestamp stops advancing past DEFAULT_STALE_HOURS (see its feed_since /
+    feed_stale_duration), reading the same feed_state row this dashboard
+    does. There's no reason that warning should only exist on the map —
+    surface it here too, automatically, so a frozen feed shows up the moment
+    someone opens the dashboard instead of only when someone happens to ask
+    or switch tabs to the map."""
+    if not since:
+        return None
+    try:
+        since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        if since_dt.tzinfo is None:
+            since_dt = since_dt.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - since_dt).total_seconds() / 3600
+    except (ValueError, TypeError):
+        return None
+    if age_hours <= DEFAULT_STALE_HOURS:
+        return None
+    return (f"The {BT_PATHS_FEED_NAME} live feed hasn't reported a new "
+            f"measurement timestamp in a while — data for most paths may be "
+            f"stale even though the feed connection itself is still up.")
+
+
+# Two different thresholds because the two cases carry different amounts of
+# risk of a false alarm. A *partial* stuck subset (some sensors passing,
+# always the same ones) needs time to rule out an ordinary bad-but-improving
+# run before calling it "stuck" — a single repeat proves nothing. A *total*
+# outage (zero passing) has no such ambiguity: the only thing worth ruling
+# out is one transient fully-down run, so it can be flagged much sooner.
+_STUCK_PARTIAL_RUNS = 4  # 4 runs at the usual 6h cadence = a full day unchanged
+_STUCK_TOTAL_RUNS   = 2  # a full day is overkill when literally nothing is passing
+
+
+def _stuck_badge_html(group_name, sensor_projects):
+    """Per-check badge (see the "with data"/"working" name_suffix in the
+    System Overview cards): flags a group whose live pass/fail data has
+    stopped changing, in either of two distinct ways a health percentage
+    alone can't tell apart from ordinary — if unwelcome — fluctuation:
+
+    - Partial: the same non-empty subset of sensors keeps passing, run after
+      run, and nothing else ever does — e.g. Bluetooth Paths stuck at
+      exactly 77/391 for a week. The other sensors aren't intermittently
+      failing, they've stopped being reported at all.
+    - Total: zero sensors passing, for multiple runs straight — e.g. Traffic
+      Detection at 0/100 for over two weeks. There's no subset to fingerprint
+      here, just a duration.
+
+    Attached per-check rather than as a single dashboard-wide banner because
+    both cases can (and currently do) hold for different groups at once —
+    one banner slot can't represent two independent problems.
+
+    Sensors awaiting power or decommissioned are excluded before any of this
+    is computed — same as every other health statistic on this dashboard.
+    Without that, a group that's mostly not-yet-live (most of VMS, at the
+    time of writing) always looks "stuck": those sensors are *supposed* to
+    be permanently absent from the passing set, so they'd swamp the badge
+    with a false positive on every group that has enough of them, and hide
+    whatever's actually true of the sensors that are meant to be live."""
+    excluded_ids = {sid for sid, info in (sensor_projects or {}).get(group_name, {}).items()
+                    if info.get("commissioning", "active") in EXCLUDED_COMMISSIONING}
+    # 400 runs = ~100 days at the usual 6h cadence — generous enough that a
+    # genuinely multi-week stall (Traffic Detection has been down over two
+    # weeks as of writing) doesn't get truncated at some arbitrary window
+    # edge and reported as shorter, or more recent, than it really is.
+    streak_len, since_run_at, ok_count, total = fetch_ok_streak(
+        group_name, GOOD_STATUSES, max_runs=400, excluded_ids=excluded_ids)
+    if total == 0:
+        return ""
+
+    if ok_count == 0:
+        if streak_len < _STUCK_TOTAL_RUNS:
+            return ""
+        tip = (f"All {total} {group_name} sensors have been failing for "
+               f"{streak_len} runs in a row (since {to_cyprus(since_run_at)}) "
+               f"— not a partial or fluctuating issue, the entire group has "
+               f"been down.")
+    elif ok_count < total:
+        if streak_len < _STUCK_PARTIAL_RUNS:
+            return ""
+        not_working = total - ok_count
+        tip = (f"{not_working} {group_name} sensors aren't fluctuating in "
+               f"and out. They appear to have stopped reporting entirely! "
+               f"{ok_count} of {total} {group_name} have been passing for "
+               f"{streak_len} runs in a row (since {to_cyprus(since_run_at)}).")
+    else:
+        return ""  # fully healthy — an unbroken streak of 100% isn't a problem
+
+    duration = format_duration_since(since_run_at)
+    label = f"stuck {duration}" if duration else "stuck"
+    return (f'<span title="{_html.escape(tip)}" style="display:inline-flex;'
+            f'align-items:center;gap:3px;margin-left:6px;background:#e9e3fb;'
+            f'color:#4c3a94;padding:1px 7px;border-radius:8px;font-size:10px;'
+            f'font-weight:600;cursor:help;vertical-align:middle">'
+            f'<i class="ti ti-clock" style="font-size:10px" aria-hidden="true"></i> {label}</span>')
 
 
 def _dashboard_note_banner(note, since=None):
@@ -1281,6 +1380,7 @@ def generate_report() -> str:
                     pct = working / live_total * 100 if live_total else 0
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
                     name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
+                    name_suffix += _stuck_badge_html(group_name, sensor_projects)
             elif "vms_controller_status" in cs:
                 w = re.search(r"Working: (\d+)", cs)
                 if w:
@@ -1289,11 +1389,17 @@ def generate_report() -> str:
                     pct = working / live_total * 100 if live_total else 0
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {working}/{live_total} working</span>'
                     name_suffix += _commissioning_note(group_name, awaiting_by_group, decommissioned_by_group)
+                    name_suffix += _stuck_badge_html(group_name, sensor_projects)
             elif "bt_paths_speed_and_traveltime" in cs:
                 m = re.search(r"Speed OK: (\d+)/(\d+)", cs)
                 if m:
                     pct = int(m.group(1)) / int(m.group(2)) * 100
                     name_suffix = f' <span style="font-size:11px;color:{_health_color(pct)}">— {m.group(1)}/{m.group(2)} with data</span>'
+                    # bt_paths_speed_and_traveltime always renders under the
+                    # "Bluetooth" card (group_name here), but its live data is
+                    # recorded in the DB under the separate "Bluetooth Paths"
+                    # group — same split as sensor_data_key just above.
+                    name_suffix += _stuck_badge_html(BT_PATHS_FEED_NAME, sensor_projects)
 
             check_desc = CHECK_DESCRIPTION.get(r['test_name'], '')
             check_desc_html = f'<div style="font-size:11px;color:var(--color-text-secondary);padding-left:16px;margin-top:2px;line-height:1.4">{check_desc}</div>' if check_desc else ''
@@ -1600,7 +1706,13 @@ def generate_report() -> str:
     sensor_pct = round(sensor_good / sensor_total_count * 100)
     sensor_bar_color = "#1d9e75" if sensor_pct >= 90 else ("#e58e0a" if sensor_pct >= 55 else "#e24b4a")
 
-    dashboard_note_banner = _dashboard_note_banner(_dashboard_note(), _dashboard_note_since())
+    # "Stuck" detection (partial or total) is surfaced per-check instead of
+    # here — see _stuck_badge_html — since more than one group can be stuck
+    # at once (Bluetooth Paths and Traffic Detection both are, as of writing)
+    # and this single banner slot can't represent two independent problems.
+    _note_since = _dashboard_note_since()
+    _note_text = _dashboard_note() or _feed_freeze_note(_note_since)
+    dashboard_note_banner = _dashboard_note_banner(_note_text, _note_since)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">

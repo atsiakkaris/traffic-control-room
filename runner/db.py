@@ -492,6 +492,71 @@ def fetch_sensor_ids_for_run(run_id, group_name):
     return {r["sensor_id"] for r in rows}
 
 
+def fetch_ok_streak(group_name, good_statuses, max_runs=60, excluded_ids=None):
+    """How many of the most recent runs (for `group_name`) share the exact same
+    set of passing sensor IDs as the latest run — i.e. a byte-identical set of
+    good_statuses sensors, not merely a similar pass rate.
+
+    This catches a failure mode the group's health percentage can't: a feed
+    that's stuck serving the same partial subset of sensors run after run
+    looks identical, on the dashboard, to one that's genuinely failing a
+    fluctuating ~20% each time — the percentage alone doesn't distinguish
+    "stuck" from "chronically flaky". Comparing the actual set, not just its
+    size, does.
+
+    excluded_ids: optional set of sensor_id strings to leave out entirely —
+    e.g. sensors awaiting power or decommissioned. Without this, a group with
+    a lot of intentionally-never-live sensors (most of VMS, at the time of
+    writing) always looks "stuck" — those sensors really are permanently
+    absent from the passing set, but that's expected, not a fault, and
+    swamps whatever real signal exists among the sensors that are actually
+    meant to be live.
+
+    Returns (streak_len, since_run_at, current_set_size, total_sensors) —
+    streak_len counts the latest run itself, so 1 means "nothing to compare
+    yet" or "changed since the previous run"; since_run_at is the run_at of
+    the oldest run still matching. Returns (0, None, 0, 0) if there's no
+    history for this group at all."""
+    excluded_ids = excluded_ids or set()
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT sr.run_id, r.run_at, sr.sensor_id, sr.status
+        FROM (SELECT run_id, run_at FROM runs ORDER BY run_at DESC LIMIT ?) r
+        JOIN sensor_results sr ON sr.run_id = r.run_id
+        WHERE sr.group_name = ?
+        ORDER BY r.run_at DESC
+    """, (max_runs, group_name)).fetchall()
+    conn.close()
+    if not rows:
+        return 0, None, 0, 0
+
+    runs = {}  # run_at -> {"good": set(), "total": set()}
+    order = []  # run_at, most recent first
+    for row in rows:
+        if row["sensor_id"] in excluded_ids:
+            continue
+        bucket = runs.setdefault(row["run_at"], {"good": set(), "total": set()})
+        if row["run_at"] not in order:
+            order.append(row["run_at"])
+        bucket["total"].add(row["sensor_id"])
+        if row["status"] in good_statuses:
+            bucket["good"].add(row["sensor_id"])
+    if not order:
+        return 0, None, 0, 0
+
+    latest_run_at = order[0]
+    latest_set = runs[latest_run_at]["good"]
+    streak_len = 0
+    since_run_at = latest_run_at
+    for run_at in order:
+        if runs[run_at]["good"] != latest_set:
+            break
+        streak_len += 1
+        since_run_at = run_at
+
+    return streak_len, since_run_at, len(latest_set), len(runs[latest_run_at]["total"])
+
+
 def fetch_sensor_stability():
     """Return per-sensor history: [{group_name, sensor_id, history: [{run_at, status}]}]"""
     conn = get_connection()
