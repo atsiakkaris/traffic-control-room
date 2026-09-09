@@ -16,7 +16,7 @@ A tabbed landing page ([index.html](index.html)) switches between the **Dashboar
 
 ## BT Paths Review Tool
 
-A standalone tool (`runner/bt_paths_map.py`) for manually auditing the ~500
+A standalone tool (`runner/bt_paths_map.py`) for manually auditing the
 legacy Bluetooth travel-time paths — many overlapping or duplicated after 10
 years of additions. It shows just the BT paths and their anchor sensors on a
 Leaflet map, with:
@@ -29,7 +29,7 @@ Leaflet map, with:
 - **Per-path flag/note** with local persistence, and CSV export/import so
   findings can be backed up or shared between reviewers (see caveat below)
 - **Cycle flagged only** — step through just the flagged paths instead of all
-  ~500 alphabetically
+  of them alphabetically
 
 Run it locally with `bt_paths_map.bat` (opens `reports/bt_paths_map.html`,
 gitignored). ⚠️ Flags/notes are saved in your **browser's local storage** —

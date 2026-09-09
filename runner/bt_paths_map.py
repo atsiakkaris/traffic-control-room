@@ -660,8 +660,15 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
    pill. Only widens into the labelled panel once opened. */
 .filters-ctl{{background:var(--surface);color:var(--text);border-radius:4px;
       box-shadow:0 1px 5px rgba(0,0,0,.65);font-size:12px;overflow:hidden;width:186px}}
-.filters-ctl.collapsed{{width:30px}}
-.filters-hd{{height:30px;padding:0 10px;cursor:pointer;display:flex;align-items:center;gap:6px;
+/* 34px, matching this page's actual rendered fullscreen/recentre/zoom
+   button size (verified via getBoundingClientRect, not the 26px line-height
+   set on their icons — that's just the icon's own vertical centring, not
+   the surrounding button box, which Leaflet pads out further). This
+   collapsed pill sits right below them in the same stack, so a mismatched
+   size here reads as visibly wider/narrower than the others, breaking the
+   aligned-column look the comment above is going for. */
+.filters-ctl.collapsed{{width:34px}}
+.filters-hd{{height:34px;padding:0 10px;cursor:pointer;display:flex;align-items:center;gap:6px;
       font-weight:bold;user-select:none;white-space:nowrap}}
 .filters-ctl.collapsed .filters-hd{{padding:0;justify-content:center}}
 .filters-hd i{{font-size:15px;flex:0 0 auto}}

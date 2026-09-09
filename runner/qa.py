@@ -710,6 +710,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
 
     api_map = [{'id': s['id'], 'name': s['name'], 'lat': s['lat'], 'lon': s['lon'],
                 'active': s['active'], 'health': s['health_pct'],
+                'site_code': s.get('site_code'),
                 'accountability': s.get('accountability', ACCT_SUPPORTED),
                 'project': s.get('project'),
                 'project_source': s.get('project_source'),
@@ -1156,7 +1157,8 @@ Object.values(apiGroups).forEach(group => {{
         + (s.ref_source ? ` <span style="color:#aaa">(${{s.ref_source}})</span>` : '')
         + (s.ref_dist ? ` <span style="color:#aaa">${{s.ref_dist}} m</span>` : '')
       : '';
-    return `<b>API: ${{s.name}}</b><br>ID: ${{s.id}}<br>`+
+    const siteLine = s.site_code ? `<br>Site #: ${{s.site_code}}` : '';
+    return `<b>API: ${{s.name}}</b><br>ID: ${{s.id}}` + siteLine + `<br>`+
       `Health: ${{s.health != null ? s.health+'%' : 'No data'}}<br>`+
       `Active: ${{s.active ? 'Yes' : 'No'}}` + projectLine + acct + refLine;
   }}).join('<hr style="margin:6px 0">');
