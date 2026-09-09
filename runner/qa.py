@@ -382,7 +382,7 @@ def load_api_sensors(group_name):
     """Load sensors from DB for the given group. Returns list of dicts."""
     conn = get_connection()
     coords = conn.execute(
-        "SELECT sensor_id, name, lat, lon, active, last_seen "
+        "SELECT sensor_id, name, lat, lon, active, last_seen, site_code "
         "FROM sensor_coords WHERE group_name=?",
         (group_name,)
     ).fetchall()
@@ -418,6 +418,7 @@ def load_api_sensors(group_name):
             'health_pct': pct,
             'first_seen': h.get('first_seen'),
             'last_run':   h.get('last_run'),
+            'site_code':  r['site_code'],
         })
     return sensors
 
@@ -491,6 +492,9 @@ def load_api_sensors_live(group_name):
             'health_pct': pct,
             'first_seen': None,
             'last_run':   None,
+            # VmsTablePublication has no equivalent field — VMS rows will just
+            # show "—" for this, same as any other sensor with no site code.
+            'site_code':  c.get('site_code'),
         })
     return sensors
 
@@ -748,6 +752,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<td>&#128205; {_h(ref["name"])}</td>'
                 f'<td>{_h(api["name"])}</td>'
                 f'<td class="mono">{_h(api["id"])}</td>'
+                f'<td class="mono dim">{_h(api.get("site_code") or "—")}</td>'
                 f'<td>{_badge_dist(m["distance_m"])}</td>'
                 f'<td class="mono dim">{ref_coords}</td>'
                 f'<td class="mono dim">{api_coords}</td>'
@@ -804,6 +809,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<tr>'
                 f'<td>{_fly_link(api)}</td>'
                 f'<td class="mono">{api["id"]}</td>'
+                f'<td class="mono dim">{_h(api.get("site_code") or "—")}</td>'
                 f'<td class="mono">{coords}</td>'
                 f'<td>{_badge_health(api["health_pct"])}</td>'
                 f'<td>{_badge_active(api["active"])}</td>'
@@ -820,6 +826,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 f'<tr>'
                 f'<td>{_fly_link(api)}</td>'
                 f'<td class="mono">{api["id"]}</td>'
+                f'<td class="mono dim">{_h(api.get("site_code") or "—")}</td>'
                 f'<td class="mono">{coords}</td>'
                 f'<td>{_badge_health(api["health_pct"])}</td>'
                 f'<td class="dim">Co-located with <b>{_h(sib["name"])}</b> (ID {_h(sib["id"])})</td>'
@@ -1003,7 +1010,7 @@ tr.clickable:hover td{{background:#dceeff}}
     <div class="tbl-scroll">
     <table>
       <thead><tr>
-        <th>Reference name</th><th>API description</th><th>API ID</th>
+        <th>Reference name</th><th>API description</th><th>API ID</th><th>Site #</th>
         <th>Coord distance</th><th>Ref GPS (spreadsheet)</th><th>API GPS</th>
         <th>Health</th><th>Status</th><th>Source file</th><th>Notes</th>
       </tr></thead>
@@ -1032,7 +1039,7 @@ tr.clickable:hover td{{background:#dceeff}}
     <summary>Sensors the API reports that are not in any spreadsheet — undocumented or recently added</summary>
     <div class="tbl-scroll">
     <table>
-      <thead><tr><th>API name</th><th>API ID</th><th>Coordinates</th><th>Health</th><th>Status</th></tr></thead>
+      <thead><tr><th>API name</th><th>API ID</th><th>Site #</th><th>Coordinates</th><th>Health</th><th>Status</th></tr></thead>
       <tbody>{tr_api_only()}</tbody>
     </table>
     </div>
@@ -1046,7 +1053,7 @@ tr.clickable:hover td{{background:#dceeff}}
   <summary>API sensors co-located with a matched sensor (&le; 10 m apart) — not yet in any spreadsheet</summary>
   <div class="tbl-scroll">
   <table>
-    <thead><tr><th>API name</th><th>API ID</th><th>Coordinates</th><th>Health</th><th>Note</th></tr></thead>
+    <thead><tr><th>API name</th><th>API ID</th><th>Site #</th><th>Coordinates</th><th>Health</th><th>Note</th></tr></thead>
     <tbody>''' + tr_colocated() + '''</tbody>
   </table>
   </div>
