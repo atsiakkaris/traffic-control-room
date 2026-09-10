@@ -1838,6 +1838,31 @@ def generate_report() -> str:
         if (b) b.style.display = '';
       }});
     }}
+
+    // Live relative age for the snapshot line in the header. This page is a
+    // static file — the health data was captured when the monitor last ran
+    // and doesn't update while the page sits open. Showing "N ago", ticking,
+    // makes that concrete without claiming anything about the feed itself:
+    // the page genuinely can't know if the feed is fine right now, only how
+    // long ago it was last verified.
+    function fmtAge(ms) {{
+      var min = Math.round(ms / 60000);
+      if (min < 1) return 'moments ago';
+      if (min < 60) return min + ' min ago';
+      var h = Math.floor(min / 60), m = min % 60;
+      if (h < 24) return m ? h + ' hr ' + m + ' min ago' : h + ' hr ago';
+      var d = Math.floor(h / 24);
+      return d + (d === 1 ? ' day ago' : ' days ago');
+    }}
+    function tickAge() {{
+      var el = document.getElementById('snapAge');
+      if (!el) return;
+      el.textContent = fmtAge(Date.now() - lastRun);
+    }}
+    document.addEventListener('DOMContentLoaded', function() {{
+      tickAge();
+      setInterval(tickAge, 60000);
+    }});
   }})();
 </script>
 </head>
@@ -1854,7 +1879,7 @@ def generate_report() -> str:
       </span>
       {_UI.get('page_title', 'ITS Infrastructure Health')}
     </h1>
-    <div class="meta">Last checked {run_time} Cyprus time &nbsp;·&nbsp; running since {first_run_date}</div>
+    <div class="meta">❗ Snapshot from {run_time} Cyprus time <span style="opacity:.75">(<span id="snapAge">…</span>)</span> &nbsp;·&nbsp; static page, refreshes only when the monitor re-runs &nbsp;·&nbsp; running since {first_run_date}</div>
   </div>
   <div style="display:flex;align-items:center;gap:18px">
     <div style="display:flex;gap:14px;font-size:12px;opacity:0.55">

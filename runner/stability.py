@@ -247,7 +247,11 @@ def format_duration_since(since_str):
         days, hours = divmod(int(total_hours), 24)
         if days >= 1:
             return f"{days}d {hours}h" if days < 3 else f"{days}d"
-        return f"{max(1, int(total_hours))}h"
+        if total_hours < 1:
+            # Sub-hour: show minutes so a 30-45 min stale feed doesn't get
+            # rounded up to a misleading "1h".
+            return f"{max(1, round(total_hours * 60))} min"
+        return f"{int(total_hours)}h"
     except (ValueError, TypeError):
         return None
 

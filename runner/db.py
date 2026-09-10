@@ -493,9 +493,17 @@ def fetch_sensor_ids_for_run(run_id, group_name):
 
 
 def fetch_ok_streak(group_name, good_statuses, max_runs=60, excluded_ids=None):
-    """How many of the most recent runs (for `group_name`) share the exact same
-    set of passing sensor IDs as the latest run — i.e. a byte-identical set of
-    good_statuses sensors, not merely a similar pass rate.
+    """How many of the most recent runs (for `group_name`) agree with the
+    latest run on which sensors are passing — restricted, at each run being
+    compared, to sensors that exist in *both* that run and the latest one.
+
+    Deliberately not exact set equality: a sensor added or removed from the
+    API entirely (e.g. a batch of dead BT paths deleted, or a new one
+    provisioned) shouldn't reset the streak on its own — only a status
+    *change* among sensors present in both runs should. Without this, simply
+    deleting some already-broken sensors would make a week-old stuck
+    condition look brand new, when the sensors that were actually stuck are
+    still exactly as stuck as before; it just erases the evidence.
 
     This catches a failure mode the group's health percentage can't: a feed
     that's stuck serving the same partial subset of sensors run after run
@@ -545,16 +553,28 @@ def fetch_ok_streak(group_name, good_statuses, max_runs=60, excluded_ids=None):
         return 0, None, 0, 0
 
     latest_run_at = order[0]
-    latest_set = runs[latest_run_at]["good"]
+    latest = runs[latest_run_at]
     streak_len = 0
     since_run_at = latest_run_at
     for run_at in order:
-        if runs[run_at]["good"] != latest_set:
+        r = runs[run_at]
+        shared = latest["total"] & r["total"]
+        # An older run that's missing too many of today's sensors can't
+        # extend the streak — most of the current population didn't exist
+        # yet, so "the same sensors are stuck" isn't something it can attest
+        # to. Without this, a batch of recently-added sensors (or a feed that
+        # shrank from full to a small surviving subset) lets the streak walk
+        # back to a `since` date from before those sensors were provisioned.
+        if len(shared) < 0.8 * len(latest["total"]):
+            break
+        # No sensors in common at all isn't agreement, it's nothing to compare
+        # — treat it as a break rather than a trivially-equal empty set.
+        if not shared or (latest["good"] & shared) != (r["good"] & shared):
             break
         streak_len += 1
         since_run_at = run_at
 
-    return streak_len, since_run_at, len(latest_set), len(runs[latest_run_at]["total"])
+    return streak_len, since_run_at, len(latest["good"]), len(latest["total"])
 
 
 def fetch_sensor_stability():

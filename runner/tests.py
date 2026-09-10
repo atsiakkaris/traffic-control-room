@@ -135,10 +135,11 @@ def predefined_paths_count(response_text: str) -> dict:
     }
 
 
-DEFAULT_STALE_HOURS = 1
+DEFAULT_STALE_HOURS = 0.5  # 30 min — a BT path that hasn't reported in half an
+                           # hour is already well past its normal update cadence
 
 
-def bt_paths_speed_and_traveltime(response_text: str, stale_hours: int = DEFAULT_STALE_HOURS) -> dict:
+def bt_paths_speed_and_traveltime(response_text: str, stale_hours: float = DEFAULT_STALE_HOURS) -> dict:
     root, err = _parse_xml(response_text)
     if err:
         return {"passed": False, "detail": f"Could not parse XML: {err}"}
@@ -195,9 +196,11 @@ def bt_paths_speed_and_traveltime(response_text: str, stale_hours: int = DEFAULT
             "age_hours":    round(age_hours, 1) if age_hours is not None else None,
         }
 
+    limit_txt = (f"{round(stale_hours * 60)} min" if stale_hours < 1
+                 else f"{stale_hours:g}h")
     detail = (
         f"Speed OK: {speed_ok}/{total} | Travel time OK: {ttime_ok}/{total}"
-        + (f" | Fresh: {fresh_ok}/{stale_checked} (limit: {stale_hours}h)" if stale_checked else "")
+        + (f" | Fresh: {fresh_ok}/{stale_checked} (limit: {limit_txt})" if stale_checked else "")
         + (f" | Failing paths: {', '.join(failing)}" if failing else "")
         + (f" | Stale paths: {', '.join(stale)}" if stale else "")
     )
