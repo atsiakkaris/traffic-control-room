@@ -6,7 +6,6 @@ Each public function takes the raw response text and returns:
 """
 
 import xml.etree.ElementTree as ET
-from collections import Counter
 from datetime import datetime, timezone
 from stability import CYPRUS_TZ
 
@@ -153,7 +152,7 @@ def bt_paths_speed_and_traveltime(response_text: str, stale_hours: float = DEFAU
     speed_ok, ttime_ok, fresh_ok, stale_checked, failing, stale = 0, 0, 0, 0, [], []
     sensors_map = {}
     measurements_map = {}
-    ts_seen = []
+    path_timestamps = {}   # pid -> ISO timestamp, only for paths reporting one this run
 
     for path in paths:
         pid = path.get("id", "unknown")
@@ -175,7 +174,7 @@ def bt_paths_speed_and_traveltime(response_text: str, stale_hours: float = DEFAU
                     is_stale = True
                 else:
                     fresh_ok += 1
-                ts_seen.append(ts_dt)
+                path_timestamps[pid] = ts_dt.isoformat()
             except (ValueError, TypeError):
                 pass
 
@@ -204,18 +203,19 @@ def bt_paths_speed_and_traveltime(response_text: str, stale_hours: float = DEFAU
         + (f" | Failing paths: {', '.join(failing)}" if failing else "")
         + (f" | Stale paths: {', '.join(stale)}" if stale else "")
     )
-    # Mode, not max/min: the timestamp shared by the most paths represents the
-    # feed's bulk state, resistant to a handful of outlier paths in either
-    # direction (one stray fresh path masking a broad freeze, or one
-    # permanently-broken path keeping an "ongoing" duration stuck forever).
-    common_ts = Counter(ts_seen).most_common(1)[0][0] if ts_seen else None
-
     return {
         "passed": True,
         "detail": detail,
         "sensors": sensors_map,
         "measurements": measurements_map,
-        "common_measurement_timestamp": common_ts.isoformat() if common_ts else None,
+        # Per-path, not reduced to a single mode here: a path that stops
+        # reporting a timestamp at all (as opposed to reporting a stale one)
+        # would otherwise silently drop out of any "how stale is the feed"
+        # calculation instead of counting against it. The caller (run_tests.py)
+        # merges this with each path's last known timestamp before reducing to
+        # a representative value, so a vanished field still counts as stale
+        # from whenever it was last actually seen.
+        "path_timestamps": path_timestamps,
     }
 
 

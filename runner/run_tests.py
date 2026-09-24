@@ -19,6 +19,7 @@ import time
 import yaml
 import httpx
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -28,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db import (init_db, insert_run, update_run_totals, insert_result, insert_sensor_result,
                 upsert_sensor_coords, upsert_bt_path_coords,
                 retire_missing_sensors, retire_missing_bt_paths,
-                set_feed_measurement_timestamp)
+                set_feed_measurement_timestamp,
+                upsert_bt_path_timestamps, fetch_bt_path_timestamps)
 from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
 from report import generate_report
@@ -260,8 +262,20 @@ def run_all():
                 mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
-            if r.get("common_measurement_timestamp"):
-                set_feed_measurement_timestamp(sensor_group, r["common_measurement_timestamp"])
+            path_timestamps = r.get("path_timestamps")
+            if path_timestamps is not None:
+                # A path that drops its measurement_timestamp field entirely
+                # (not just an old one) would otherwise vanish from the mode
+                # calculation instead of counting against it, making a total
+                # outage look newer than it is the moment enough paths stop
+                # reporting a timestamp at all. Carry each path's last known
+                # timestamp forward so silence counts as staleness too.
+                upsert_bt_path_timestamps(path_timestamps)
+                all_ids = set(live_ids_seen.keys()) | set(path_timestamps.keys())
+                merged_ts = fetch_bt_path_timestamps(all_ids)
+                if merged_ts:
+                    common_ts = Counter(merged_ts.values()).most_common(1)[0][0]
+                    set_feed_measurement_timestamp(sensor_group, common_ts)
 
             # Extract and store coordinates from inventory endpoints.
             # Only retire when the feed explicitly passed — an empty coord set from a

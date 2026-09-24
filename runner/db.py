@@ -81,6 +81,11 @@ _SCHEMA = """
         measurement_timestamp  TEXT NOT NULL,
         updated_at             TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS bt_path_last_ts (
+        path_id                TEXT PRIMARY KEY,
+        measurement_timestamp  TEXT NOT NULL
+    );
 """
 
 
@@ -620,3 +625,38 @@ def get_feed_measurement_timestamp(feed_name):
     ).fetchone()
     conn.close()
     return row["measurement_timestamp"] if row else None
+
+
+def upsert_bt_path_timestamps(ts_map):
+    """Record each path's own measurement_timestamp, carried forward run to
+    run. Only paths present in ts_map (i.e. ones that actually reported a
+    timestamp this run) get overwritten — a path that drops the timestamp
+    field entirely keeps whatever was last recorded here instead of losing
+    its history, which is exactly the point: see fetch_bt_path_timestamps."""
+    if not ts_map:
+        return
+    conn = get_connection()
+    conn.executemany(
+        "INSERT INTO bt_path_last_ts (path_id, measurement_timestamp) VALUES (?,?) "
+        "ON CONFLICT(path_id) DO UPDATE SET measurement_timestamp=excluded.measurement_timestamp",
+        list(ts_map.items())
+    )
+    conn.commit()
+    conn.close()
+
+
+def fetch_bt_path_timestamps(path_ids):
+    """{path_id: last-known measurement_timestamp} for the given ids — a path
+    with no timestamp in the current run's response still returns its last
+    recorded one here, so a silently-dropped field counts toward staleness
+    instead of vanishing from consideration entirely."""
+    if not path_ids:
+        return {}
+    conn = get_connection()
+    placeholders = ",".join("?" * len(path_ids))
+    rows = conn.execute(
+        f"SELECT path_id, measurement_timestamp FROM bt_path_last_ts WHERE path_id IN ({placeholders})",
+        list(path_ids)
+    ).fetchall()
+    conn.close()
+    return {r["path_id"]: r["measurement_timestamp"] for r in rows}

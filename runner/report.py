@@ -1711,8 +1711,14 @@ def generate_report() -> str:
     # at once (Bluetooth Paths and Traffic Detection both are, as of writing)
     # and this single banner slot can't represent two independent problems.
     _note_since = _dashboard_note_since()
-    _note_text = _dashboard_note() or _feed_freeze_note(_note_since)
-    dashboard_note_banner = _dashboard_note_banner(_note_text, _note_since)
+    _manual_note = _dashboard_note()
+    _note_text = _manual_note or _feed_freeze_note(_note_since)
+    # The auto-computed "ongoing Xh" duration comes from the feed's mode
+    # timestamp, which is exactly the mechanism a manual note is often written
+    # to correct for (see the always-invalid-paths investigation) — showing it
+    # anyway would flatly contradict the note's own text. A manual note states
+    # its own timeframe in prose instead.
+    dashboard_note_banner = _dashboard_note_banner(_note_text, None if _manual_note else _note_since)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
