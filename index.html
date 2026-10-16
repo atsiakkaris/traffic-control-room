@@ -29,8 +29,13 @@
 <script>
   // Forward the shell's query string (e.g. UTM tags from the digest email link)
   // onto the iframe's src, since iframes don't inherit the parent page's params.
+  // A changing `_` param keeps the browser from reusing a cached copy of the frame
+  // (Pages sends max-age=600), which a hard refresh of this shell doesn't bypass.
   function loadFrame(frame) {
-    if (!frame.src && frame.dataset.src) frame.src = frame.dataset.src + window.location.search;
+    if (!frame.src && frame.dataset.src) {
+      var q = window.location.search;
+      frame.src = frame.dataset.src + (q ? q + '&' : '?') + '_=' + Date.now();
+    }
   }
   loadFrame(document.getElementById('frame-dashboard'));
   document.querySelectorAll('#tabs button').forEach(function (btn) {
