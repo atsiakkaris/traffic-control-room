@@ -136,6 +136,10 @@ def run_single(endpoint_def: dict, base_url: str, swarco: str) -> dict:
                         result.setdefault("measurements", {}).update(check_result["measurements"])
                     if check_result.get("common_measurement_timestamp"):
                         result["common_measurement_timestamp"] = check_result["common_measurement_timestamp"]
+                    # Without this the feed_state writer below never fires (it keys
+                    # off r["path_timestamps"]), freezing the banner at its last value.
+                    if check_result.get("path_timestamps") is not None:
+                        result["path_timestamps"] = check_result["path_timestamps"]
                 except Exception as e:
                     failures.append(f"{check_name} raised exception: {e}")
 
