@@ -33,6 +33,7 @@ if _env_path.exists():
             _k, _, _v = _line.partition('=')
             os.environ.setdefault(_k.strip(), _v.strip())
 
+from bt_direction_check import orientation
 from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection, get_feed_measurement_timestamp
 from qa import load_reference, _haversine_m
 from stability import CYPRUS_TZ, to_cyprus, format_duration_since, BT_PATHS_FEED_NAME
@@ -190,6 +191,9 @@ def _find_geometric_duplicate_groups(paths, ids):
       - one path is almost entirely contained in the other (one-directional),
         which catches a shorter/rougher trace re-registered more completely
         later without failing the bidirectional check outright.
+    Pairs stored in opposite point order are skipped: a forward path and its
+    mirrored partner trace the same road by design and are not duplicates.
+
     A short path that merely starts along a long one still won't count,
     since even full containment requires clearing DUPLICATE_CONTAINED_FRACTION
     of its own points, not just a partial run alongside.
@@ -216,6 +220,11 @@ def _find_geometric_duplicate_groups(paths, ids):
             frac_a = _overlap_fraction(samples[id_a], samples[id_b], DUPLICATE_OVERLAP_M)
             frac_b = _overlap_fraction(samples[id_b], samples[id_a], DUPLICATE_OVERLAP_M)
             if min(frac_a, frac_b) >= DUPLICATE_OVERLAP_FRACTION:
+                # Mirrored point order = the two directions of one road (a proper
+                # forward/reverse pair), not the same route registered twice —
+                # that's bt_direction_check's territory, so don't collapse it.
+                if orientation(paths[id_a]['coords'], paths[id_b]['coords']) == 'opposite':
+                    continue
                 adjacency[id_a].add(id_b)
                 adjacency[id_b].add(id_a)
 
@@ -393,6 +402,47 @@ def find_reversed_direction_pairs(paths):
     return by_id, groups
 
 
+# Geometry-based direction check ------------------------------------------
+# Pairs paths purely by geometry (never by name) and classifies each pair —
+# see bt_direction_check.py, which owns the algorithm and can also be run on
+# its own. Higher number = less urgent, except 'unclear' which sorts last.
+_DIRECTION_PRIORITY = {'1-non-reversed': 0, '2-same-direction-unexplained': 1,
+                       '4-unclear': 2, '3-healthy': 3}
+
+
+def find_direction_pairs(paths):
+    """Run the geometry-only direction check over every path.
+
+    Returns (by_id, pairs):
+      by_id — {path_id: {status, pairs: [{partner, partner_name, bucket,
+               direction, r, hint}]}} where status is the path's most urgent bucket
+      pairs — [{a, b, bucket}] one row per detected pair, for the summary cards
+    A failure here must never stop the map being built, so it degrades to "no data".
+    """
+    try:
+        from bt_direction_check import analyse, load_node_positions
+        result = analyse(paths, load_node_positions())
+    except Exception as exc:
+        print(f"WARNING: geometry direction check skipped ({exc})")
+        return {}, []
+
+    by_id, pairs = {}, []
+    for pr in result['pairs']:
+        pairs.append({'a': pr['path_a'], 'b': pr['path_b'], 'bucket': pr['bucket']})
+        for me, other, other_name in ((pr['path_a'], pr['path_b'], pr['name_b']),
+                                      (pr['path_b'], pr['path_a'], pr['name_a'])):
+            entry = by_id.setdefault(me, {'status': pr['bucket'], 'pairs': []})
+            entry['pairs'].append({
+                'partner': other, 'partner_name': other_name or other,
+                'bucket': pr['bucket'], 'direction': pr['direction'],
+                'r': None if pr['r'] is None else round(pr['r'], 2),
+                'hint': pr['hint'],
+            })
+            if _DIRECTION_PRIORITY[pr['bucket']] < _DIRECTION_PRIORITY[entry['status']]:
+                entry['status'] = pr['bucket']
+    return by_id, pairs
+
+
 def fetch_latest_path_live_data():
     """Latest recorded speed_kmh/travel_time_s per BT path, from sensor_results.data —
     populated only on runs where LIVE_MODE=true. Paths with no such run (LIVE_MODE
@@ -430,8 +480,9 @@ def load_reference_sensors():
 
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                 dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
-                reversed_by_id=None, reversed_groups=None):
-    now = datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
+                reversed_by_id=None, reversed_groups=None,
+                direction_by_id=None, direction_pairs=None):
+    now =datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     # Same feed_state row the dashboard banner reads — shown here too so
     # anyone on the map (including the published copy) sees the live feed is
     # frozen, not just people looking at the main dashboard. feed_since gets
@@ -453,6 +504,8 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     dropped_ids = dropped_ids or set()
     reversed_by_id = reversed_by_id or {}
     reversed_groups = reversed_groups or {}
+    direction_by_id = direction_by_id or {}
+    direction_pairs = direction_pairs or []
     ids = sorted(paths.keys())
     # Live speed/travel-time is kept local-only — colleagues viewing the published
     # copy shouldn't see snapshot data that goes stale the moment it's published.
@@ -470,6 +523,7 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             "live": live_data.get(pid),
             "length_m": round(_path_length_m(coords)) if len(coords) > 1 else None,
             "reversed_check": reversed_by_id.get(pid),
+            "direction_check": direction_by_id.get(pid),
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
@@ -482,6 +536,28 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     rev_bug_count = sum(1 for v in reversed_groups.values() if v.get("category") == "bug")
     rev_amb_count = sum(1 for v in reversed_groups.values() if v.get("category") == "ambiguous")
     rev_ok_count = sum(1 for v in reversed_groups.values() if v.get("category") == "ok")
+    dir_counts = {b: sum(1 for p in direction_pairs if p["bucket"] == b) for b in _DIRECTION_PRIORITY}
+    direction_pairs_json = json.dumps(direction_pairs)
+    direction_cards_html = ''
+    if direction_pairs:
+        def _dcard(cls, cid, bucket, label, tip):
+            return (f'<div class="card {cls}" id="{cid}" style="cursor:pointer" '
+                    f'title="{tip} Click to jump to it on the map."><div class="num">{dir_counts[bucket]}</div>'
+                    f'<div class="lbl">{label}</div></div>')
+        direction_cards_html = (
+            '<div class="summary-group"><div class="summary-group-title">Direction check (geometry only)</div>'
+            '<div class="summary-group-cards">'
+            + _dcard('dir-bug', 'dirBugCard', '1-non-reversed', 'Non-reversed pairs',
+                     'Two paths that run along the same road with mirrored names (A->B and B->A) but are stored in the SAME point order. '
+                     'This is the SWARCO reverse-path defect. Should be 0.')
+            + _dcard('dir-unexpl', 'dirUnexplCard', '2-same-direction-unexplained', 'Same direction, unexplained',
+                     'Two paths along the same road, stored in the same point order, that the names do not explain '
+                     '(unnamed, different node ids, duplicate registration). For review, not necessarily a bug.')
+            + _dcard('dir-unclear', 'dirUnclearCard', '4-unclear', 'Unclear',
+                     'Paths that overlap, but their point order is neither clearly the same nor clearly opposite (|r| below 0.8).')
+            + _dcard('dir-ok', 'dirOkCard', '3-healthy', 'Healthy (opposite)',
+                     'Pairs stored in opposite point order, as a forward path and its reverse should be.')
+            + '</div></div>')
     active_count = len(features) - len(dropped_ids)
     suspicious_count = sum(1 for f in features if f["suspicious"])
 
@@ -559,6 +635,17 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .card.rev-amb .num{{color:#e67e22}}
 .card.rev-ok{{border-top-color:#27ae60}}
 .card.rev-ok .num{{color:#27ae60}}
+.card.dir-bug{{border-top-color:#c0392b}}
+.card.dir-bug .num{{color:#c0392b}}
+.card.dir-unexpl{{border-top-color:#e67e22}}
+.card.dir-unexpl .num{{color:#e67e22}}
+.card.dir-unclear{{border-top-color:#8e44ad}}
+.card.dir-unclear .num{{color:#8e44ad}}
+.card.dir-ok{{border-top-color:#27ae60}}
+.card.dir-ok .num{{color:#27ae60}}
+.sensor-toggle-btn.direction{{background:#0e7490}}
+.sensor-toggle-btn.direction:hover{{background:#0b5f75}}
+.sensor-toggle-btn.direction.off{{background:#9ca3af}}
 .sensor-toggle-btn.reversed{{background:#6d28d9}}
 .sensor-toggle-btn.reversed:hover{{background:#5b21b6}}
 #mapFsWrap{{flex:1 1 auto;min-height:0;margin:0 24px 24px;display:flex}}
@@ -705,19 +792,20 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
   <div class="summary-group">
     <div class="summary-group-title">Duplicate registrations</div>
     <div class="summary-group-cards">
-      {f'<div class="card dup" id="dupCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>' if confirmed_dup_count else '<div class="card dup"><div class="num">0</div><div class="lbl">Duplicate paths</div></div>'}
-      {f'<div class="card dup-warn" id="ambiguousCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
+      {f'<div class="card dup" id="dupCard" style="cursor:pointer" title="Paths whose geometry matches another path and whose pass/fail history matches too (80%+), so they are collapsed into one. Hidden by default. Click to jump to one."><div class="num">{confirmed_dup_count}</div><div class="lbl">Duplicate paths</div></div>' if confirmed_dup_count else '<div class="card dup"><div class="num">0</div><div class="lbl">Duplicate paths</div></div>'}
+      {f'<div class="card dup-warn" id="ambiguousCard" style="cursor:pointer" title="Same name or same geometry, but their pass/fail history differs, so they are not collapsed. Needs a manual look. Click to jump to one."><div class="num">{ambiguous_dup_count}</div><div class="lbl">Same name, needs manual check</div></div>' if ambiguous_dup_count else ''}
     </div>
   </div>
   <div class="summary-group">
     <div class="summary-group-title">Data quality checks</div>
     <div class="summary-group-cards">
       <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
-      {f'<div class="card rev-bug" id="revBugCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_bug_count}</div><div class="lbl">Reversed-direction bug</div></div>' if rev_bug_count else ''}
-      {f'<div class="card rev-amb" id="revAmbCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_amb_count}</div><div class="lbl">Reversed check: ambiguous</div></div>' if rev_amb_count else ''}
-      {f'<div class="card rev-ok" id="revOkCard" style="cursor:pointer" title="Click to jump to it on the map"><div class="num">{rev_ok_count}</div><div class="lbl">Reversed check: OK</div></div>' if rev_ok_count else ''}
+      {f'<div class="card rev-bug" id="revBugCard" style="cursor:pointer" title="Old name-based check: a named A->B / B->A pair whose start and end points are in the same order instead of mirrored. Click to jump to one."><div class="num">{rev_bug_count}</div><div class="lbl">Reversed-direction bug</div></div>' if rev_bug_count else ''}
+      {f'<div class="card rev-amb" id="revAmbCard" style="cursor:pointer" title="Old name-based check: a named A->B / B->A pair whose endpoints match neither order clearly. Usually a different route between the same two nodes, not a direction problem. Click to jump to one."><div class="num">{rev_amb_count}</div><div class="lbl">Reversed check: ambiguous</div></div>' if rev_amb_count else ''}
+      {f'<div class="card rev-ok" id="revOkCard" style="cursor:pointer" title="Old name-based check: a named A->B / B->A pair whose start and end points are properly mirrored. Click to jump to one."><div class="num">{rev_ok_count}</div><div class="lbl">Reversed check: OK</div></div>' if rev_ok_count else ''}
     </div>
   </div>
+  {direction_cards_html}
 </div>
 
 <div id="mapFsWrap"><div id="map"></div></div>
@@ -735,6 +823,7 @@ var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
 var SHOW_DUPLICATES = {show_dropped_default_json};
 var REVERSED_GROUPS = {reversed_groups_json};
+var DIRECTION_PAIRS = {direction_pairs_json};
 // Keyed by path id rather than name — features fall back to their id as a
 // display name when the API sends none (see FEATURES below), which would
 // otherwise never match a group keyed by the real (possibly null) name.
@@ -881,8 +970,38 @@ var REVERSED_MODE = false;
 var REVERSED_COLORS = {{bug: '#c0392b', ambiguous: '#e67e22', ok: '#27ae60'}};
 var REVERSED_DIM_COLOR = '#cfd3d8';
 
+// Geometry-only direction check layer (bt_direction_check.py): colours every path
+// that was paired by geometry by its worst pair's bucket. Mutually exclusive with
+// the name-based reversed check above so the two colour schemes never fight.
+var DIRECTION_MODE = false;
+var DIRECTION_COLORS = {{'1-non-reversed': '#c0392b', '2-same-direction-unexplained': '#e67e22',
+                        '4-unclear': '#8e44ad', '3-healthy': '#27ae60'}};
+var DIRECTION_PARTNER_COLOR = '#22d3ee';
+function _isDirectionPartnerOfSelected(id) {{
+  if (selectedId === null) return false;
+  var sel = FEATURES.filter(function(x) {{ return x.id === selectedId; }})[0];
+  if (!sel || !sel.direction_check) return false;
+  return sel.direction_check.pairs.some(function(p) {{ return p.partner === id; }});
+}}
+function _setDirectionMode(on) {{
+  DIRECTION_MODE = on;
+  var btn = document.querySelector('.sensor-toggle-btn.direction');
+  if (btn) {{ btn.innerHTML = 'Direction check: ' + (on ? 'ON' : 'OFF'); btn.classList.toggle('off', !on); }}
+  if (on && REVERSED_MODE) {{
+    REVERSED_MODE = false;
+    var rb = document.querySelector('.sensor-toggle-btn.reversed');
+    if (rb) {{ rb.innerHTML = 'Reversed check: OFF'; rb.classList.add('off'); }}
+  }}
+  applySelection();
+}}
+
 function baseStyle(f, selected) {{
   if (selected) return {{color: SELECTED_COLOR, weight: 10, opacity: 1}};
+  if (DIRECTION_MODE) {{
+    if (_isDirectionPartnerOfSelected(f.id)) return {{color: DIRECTION_PARTNER_COLOR, weight: 8, opacity: 1}};
+    if (f.direction_check) return {{color: DIRECTION_COLORS[f.direction_check.status], weight: 5, opacity: 0.9}};
+    return {{color: REVERSED_DIM_COLOR, weight: 2, opacity: 0.35}};
+  }}
   if (REVERSED_MODE) {{
     if (f.reversed_check) return {{color: REVERSED_COLORS[f.reversed_check.category], weight: 5, opacity: 0.9}};
     return {{color: REVERSED_DIM_COLOR, weight: 2, opacity: 0.35}};
@@ -1100,6 +1219,17 @@ FEATURES.forEach(function(f) {{
                  '<br>Paired with: ID ' + rc.partner_id +
                  '<br>Same-order distance: ' + Math.round(rc.same_dist) + 'm &nbsp;|&nbsp; mirrored distance: ' + Math.round(rc.mirror_dist) + 'm';
   }}
+  var dc = f.direction_check;
+  if (dc) {{
+    var dcLabel = {{'1-non-reversed': 'Non-reversed pair (same direction as its mirrored-name partner)',
+                   '2-same-direction-unexplained': 'Same direction as a partner, names do not explain it',
+                   '4-unclear': 'Direction unclear', '3-healthy': 'Opposite direction'}};
+    detailHtml += '<br><span style="font-weight:bold;color:' + DIRECTION_COLORS[dc.status] + '">Direction check (geometry): ' + dcLabel[dc.status] + '</span>';
+    dc.pairs.slice().sort(function(a, b) {{ return a.bucket.localeCompare(b.bucket); }}).forEach(function(p) {{
+      detailHtml += '<br>&bull; ID ' + p.partner + ' (' + p.partner_name + '): ' + p.direction +
+                    (p.r != null ? ', r=' + p.r : '') + (p.hint ? '<br>&nbsp;&nbsp;<i>' + p.hint + '</i>' : '');
+    }});
+  }}
   // Selection detail (id, point count, duplicate warning, flag/note controls)
   // lives in the fixed Inspector panel, not a popup here — a popup anchored
   // at the click point fights the sticky hover tooltip for the same spot on
@@ -1252,6 +1382,26 @@ function _wireReversedCard(cardId, category) {{
 _wireReversedCard('revBugCard', 'bug');
 _wireReversedCard('revAmbCard', 'ambiguous');
 _wireReversedCard('revOkCard', 'ok');
+
+/* -- Direction-check cards: step through the first path of each pair in the
+   bucket, switching the colour layer on so the pair is visible in context. */
+function _wireDirectionCard(cardId, bucket) {{
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  var starts = DIRECTION_PAIRS.filter(function(p) {{ return p.bucket === bucket; }})
+                              .map(function(p) {{ return p.a; }});
+  var i = 0;
+  card.addEventListener('click', function() {{
+    if (!starts.length) return;
+    if (!DIRECTION_MODE) _setDirectionMode(true);
+    stepSelect(starts[i % starts.length]);
+    i++;
+  }});
+}}
+_wireDirectionCard('dirBugCard', '1-non-reversed');
+_wireDirectionCard('dirUnexplCard', '2-same-direction-unexplained');
+_wireDirectionCard('dirUnclearCard', '4-unclear');
+_wireDirectionCard('dirOkCard', '3-healthy');
 
 /* -- Flagging + export (QA_MODE only — see the QA_MODE comment above) --- */
 if (QA_MODE) {{
@@ -1645,6 +1795,7 @@ if (HAS_DROPPED_DUPLICATES) {{
   (function() {{
     var btn = L.DomUtil.create('button', 'sensor-toggle-btn dup' + (SHOW_DUPLICATES ? '' : ' off'), filtersBody);
     btn.innerHTML = 'Show duplicates: ' + (SHOW_DUPLICATES ? 'ON' : 'OFF');
+    btn.title = 'Shows or hides the copies dropped as duplicate registrations (same route registered twice, same pass/fail history). Nothing to do with direction. Hidden by default.';
     btn.onclick = function(e) {{
       L.DomEvent.stopPropagation(e);
       SHOW_DUPLICATES = !SHOW_DUPLICATES;
@@ -1666,12 +1817,27 @@ if (HAS_REVERSED_CHECK) {{
   (function() {{
     var btn = L.DomUtil.create('button', 'sensor-toggle-btn reversed off', filtersBody);
     btn.innerHTML = 'Reversed check: OFF';
+    btn.title = 'Old name-based check. Colours only paths named exactly A->B / B->A, comparing start and end points: red = same order (bug), orange = ambiguous, green = properly mirrored. Grey = not covered by this check. Switches off Direction check.';
     btn.onclick = function(e) {{
       L.DomEvent.stopPropagation(e);
       REVERSED_MODE = !REVERSED_MODE;
       btn.innerHTML = 'Reversed check: ' + (REVERSED_MODE ? 'ON' : 'OFF');
       btn.classList.toggle('off', !REVERSED_MODE);
+      if (REVERSED_MODE && DIRECTION_MODE) {{ _setDirectionMode(false); return; }}
       applySelection();
+    }};
+  }})();
+}}
+
+var HAS_DIRECTION_CHECK = DIRECTION_PAIRS.length > 0;
+if (HAS_DIRECTION_CHECK) {{
+  (function() {{
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn direction off', filtersBody);
+    btn.innerHTML = 'Direction check: OFF';
+    btn.title = 'Geometry-only check (names ignored). Finds pairs of paths along the same road and compares their whole point order: red = non-reversed named pair (bug), orange = same direction but unexplained, purple = unclear, green = opposite (healthy), grey = no partner. Select a path to see its partners in cyan. Switches off Reversed check.';
+    btn.onclick = function(e) {{
+      L.DomEvent.stopPropagation(e);
+      _setDirectionMode(!DIRECTION_MODE);
     }};
   }})();
 }}
@@ -1688,6 +1854,15 @@ var LegendControl = L.Control.extend({{
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ambiguous + '"></span></span>Ambiguous — needs a look</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ok + '"></span></span>OK — direction confirmed</div>' +
       '</div>' : '';
+    var directionRows = HAS_DIRECTION_CHECK ?
+      '<div class="legend-sec">' +
+        '<div class="legend-sec-title">Direction check (geometry)<br>(when toggle is on)</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['1-non-reversed'] + '"></span></span>Non-reversed pair</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['2-same-direction-unexplained'] + '"></span></span>Same direction, unexplained</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['4-unclear'] + '"></span></span>Unclear</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['3-healthy'] + '"></span></span>Healthy (opposite)</div>' +
+        '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_PARTNER_COLOR + '"></span></span>Partner of selected path</div>' +
+      '</div>' : '';
     box.innerHTML =
       '<div class="legend-hd" id="legendHd">Legend <span class="chev">&#9660;</span></div>' +
       '<div class="legend-body">' +
@@ -1703,6 +1878,7 @@ var LegendControl = L.Control.extend({{
           '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + SELECTED_COLOR + '"></span></span>Selected path</div>' +
         '</div>' +
         reversedRows +
+        directionRows +
       '</div>';
     var hd = box.querySelector('#legendHd');
     hd.onclick = function() {{ box.classList.toggle('collapsed'); }};
@@ -1863,11 +2039,19 @@ def main():
         print(f"Reversed-direction check: {bug_n} bug, {amb_n} ambiguous, {ok_n} ok "
               f"(of {len(reversed_groups)} named reverse pairs)")
 
+    direction_by_id, direction_pairs = find_direction_pairs(paths)
+    if direction_pairs:
+        counts = {b: sum(1 for p in direction_pairs if p['bucket'] == b) for b in _DIRECTION_PRIORITY}
+        print(f"Geometry direction check: {counts['1-non-reversed']} non-reversed, "
+              f"{counts['2-same-direction-unexplained']} same-direction unexplained, "
+              f"{counts['4-unclear']} unclear, {counts['3-healthy']} healthy")
+
     sensors = fetch_sensor_coords().get("Bluetooth", {})
     ref_sensors = load_reference_sensors()
     page = build_html(paths, sensors, ref_sensors, duplicate_groups,
                        dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
-                       reversed_by_id=reversed_by_id, reversed_groups=reversed_groups)
+                       reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
+                       direction_by_id=direction_by_id, direction_pairs=direction_pairs)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1881,7 +2065,8 @@ def main():
         published_page = build_html(paths, sensors, ref_sensors, duplicate_groups,
                                      dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
                                      include_live_data=False,
-                                     reversed_by_id=reversed_by_id, reversed_groups=reversed_groups)
+                                     reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
+                       direction_by_id=direction_by_id, direction_pairs=direction_pairs)
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         published_path = DOCS_DIR / "bt-paths-map.html"
         published_path.write_text(published_page, encoding="utf-8")
