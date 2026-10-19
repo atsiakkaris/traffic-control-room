@@ -663,6 +663,9 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
 <title>Bluetooth Paths — Map</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
 <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <script data-goatcounter="https://traffic-control-room.goatcounter.com/count"
@@ -1006,27 +1009,28 @@ function _onFsChange() {{
 }}
 document.addEventListener('fullscreenchange', _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
-// Light: OpenStreetMap data served by OSM Germany (FOSSGIS) — not
-// tile.openstreetmap.org, which returns "403 Access blocked" to pages opened
-// straight from disk. Dark: Esri's dark gray canvas (CARTO's dark tiles refuse
-// pages opened from disk with an API-key error).
-var LIGHT_TILES = {{url: 'https://tile.openstreetmap.de/{{z}}/{{x}}/{{y}}.png',
-  attribution: '&copy; OpenStreetMap contributors, tiles &copy; OSM Germany (FOSSGIS)'}};
-var DARK_TILES = {{url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}',
-  attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'}};
+// Basemap: OpenFreeMap (free, no API key, current OpenStreetMap data) drawn with
+// MapLibre inside Leaflet. Liberty for light mode, Dark for dark mode. (Tried and
+// dropped: tile.openstreetmap.org and CARTO refuse pages opened from disk, Esri's
+// road network is outdated.)
+var LIGHT_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+var DARK_STYLE  = 'https://tiles.openfreemap.org/styles/dark';
+var BASEMAP_ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> ' +
+  '&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' +
+  'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
+map.setMaxZoom(19);
 
 var _dark = true;
 document.body.classList.add('dark');
-var tileLayer = L.tileLayer(DARK_TILES.url, {{attribution: DARK_TILES.attribution, maxZoom: 19}}).addTo(map);
+var tileLayer = L.maplibreGL({{style: DARK_STYLE, attribution: BASEMAP_ATTRIBUTION}}).addTo(map);
 function toggleDark() {{
   _dark = !_dark;
   document.body.classList.toggle('dark', _dark);
   document.getElementById('dmIcon').className = _dark ? 'ti ti-sun' : 'ti ti-moon';
   document.getElementById('dmLabel').textContent = _dark ? 'Light' : 'Dark';
   map.removeLayer(tileLayer);
-  var t = _dark ? DARK_TILES : LIGHT_TILES;
-  tileLayer = L.tileLayer(t.url, {{attribution: t.attribution, maxZoom: 19}}).addTo(map);
-  tileLayer.bringToBack();
+  tileLayer = L.maplibreGL({{style: _dark ? DARK_STYLE : LIGHT_STYLE, attribution: BASEMAP_ATTRIBUTION}}).addTo(map);
+  tileLayer.getContainer().style.zIndex = 0;   // keep it underneath the path/marker panes
 }}
 
 
