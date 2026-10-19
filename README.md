@@ -58,7 +58,7 @@ whenever that layer needs updating.
 | **VMS** | [VMS Inventory](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsTablePublication) | Valid XML |
 | **VMS** | [VMS Live Data](https://www.traffic4cyprus.org.cy/swarco3/api/Data/VmsPublication) | Feed freshness; working / not-working / no-status controller counts; per-controller status freshness (catches a controller stuck re-reporting an old status) |
 
-All live endpoints also check: HTTP 200 status, response time within limit, and feed freshness (data ≤ 5 min old) — that last one only confirms the API responded just now, not that the values inside are new. For BT Paths and VMS specifically, each record's own timestamp (`measurement_timestamp` / `statusUpdateTime`) is checked separately (≤3h) since the two can disagree.
+All live endpoints also check: HTTP 200 status, response time within limit, and feed freshness (data ≤ 5 min old) — that last one only confirms the API responded just now, not that the values inside are new. For BT Paths and VMS specifically, each record's own timestamp (`measurement_timestamp` / `statusUpdateTime`) is checked separately (Bluetooth paths ≤ 30 min, VMS controllers ≤ 1 h) since the two can disagree.
 
 ---
 
@@ -124,7 +124,11 @@ Set a row back to `active` and re-run `update_projects.bat` to return the sensor
 
 ## Dashboard Panels
 
+**Snapshot line** — the dashboard is a static page, so the header states when the monitor last ran and shows a live, ticking age (e.g. *Snapshot from 12:01 Cyprus time (3 min ago)*). It is a reminder that the page doesn't update itself, not a statement about the feed. Separately, a purple *Data may be outdated* banner appears when the last run is older than `staleness_threshold_hours` (9 h) — i.e. the monitor itself has stopped running.
+
 **System Overview** — one card per group showing feed status and sensor health %, with a breakdown of each check. Each check includes a short description of what it tests. Hover the group badge (Operational / Deteriorated / Feed issue) to see colour thresholds and which test is driving the status. Hover individual endpoint dots to see a per-check pass/fail breakdown.
+
+A purple **stuck** badge appears beside a check whose pass/fail picture has stopped changing, which a health percentage alone can't distinguish from ordinary fluctuation. It fires in two cases: a **total** outage (nothing passing for 2 or more runs in a row) and a **partial** one (the same subset of sensors passing for 4 or more runs while every other sensor never does — they have stopped reporting, not flickered). Hover it for the counts and when it began. Adding or removing sensors in the API does not reset the streak, and awaiting-power / decommissioned sensors are left out, as in every other statistic.
 
 **Sensor Map** — interactive Leaflet.js map with:
 - Colour-coded markers for Traffic Detection sensors, Bluetooth sites, and VMS controllers
@@ -201,6 +205,7 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   ├── test_generate_report.py ← Dashboard generator: current state, fault age, search tokens
 │   ├── test_stability.py       ← Tier boundaries and health percentages
 │   ├── test_labels.py          ← Shared sensor-name rules
+│   ├── test_digest_commissioning.py ← Digest leaves out awaiting-power / decommissioned sensors
 │   └── test_data_quality.py    ← Coordinate matching and the retire guard
 ├── run.bat                     ← Local run script (double-click, loads .env automatically)
 ├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
@@ -281,3 +286,5 @@ Key tables:
 | `sensor_coords` | Latest lat/lon for each sensor, populated from inventory feeds; `last_seen` updated on every run |
 | `bt_path_coords` | GML coordinates for all predefined BT paths, used to draw polylines on the map |
 | `sensor_projects` | Per-sensor project owner + commissioning state (`active` / `not_electrified` / `decommissioned`), written by `update_projects.py` |
+| `feed_state` | Latest representative `measurement_timestamp` per live feed, used to work out how long a feed's data has been frozen |
+| `bt_path_last_ts` | Each BT path's last reported `measurement_timestamp`, carried forward across runs so a path that stops sending a timestamp still counts as stale |

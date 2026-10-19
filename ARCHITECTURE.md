@@ -16,7 +16,7 @@ Every 6 hours, a GitHub Actions workflow runs `runner/run_tests.py`, which:
 3. Calls `runner/report.py` to regenerate `reports/latest.html` from the DB.
 
 The workflow then also runs `runner/bt_paths_map.py --publish` (geometry only
-— see §6a) and commits the DB, the dashboard HTML, and `docs/bt-paths-map.html`
+— see §6b) and commits the DB, the dashboard HTML, and `docs/bt-paths-map.html`
 back to the repo, so GitHub Pages serves the latest dashboard and BT paths map
 and the DB carries full history forward.
 
@@ -78,8 +78,8 @@ and the staleness-warning threshold. `runner/report.py` reads this into
 `GROUP_META` at import time and drives colors, icons, and column headers off
 it — nothing about a group's visual identity is hardcoded in Python.
 
-**Three unrelated things are all called "freshness"/"staleness" in this
-codebase — don't conflate them:**
+**Five unrelated checks all answer some version of "is this still
+current?" — don't conflate them:**
 1. `feed_freshness` check (`runner/tests.py`) — is the outer DATEX II
    `publicationTime` envelope recent (default 5 min)? This only proves the
    API responded just now, not that the data inside is new.
@@ -89,10 +89,19 @@ codebase — don't conflate them:**
 3. `bt_paths_speed_and_traveltime`'s per-path `stale_hours`, and
    `vms_controller_status`'s per-controller `stale_hours`
    (`DEFAULT_STALE_HOURS`/`DEFAULT_VMS_STALE_HOURS` in `runner/tests.py`,
-   both default 3h) — is *this specific record's* own timestamp recent?
+   30 min for BT paths, 1h for VMS) — is *this specific record's* own
+   timestamp recent?
    A feed can pass #1 and #2 (API is up, runs are happening on schedule) while
    every individual record inside is a frozen snapshot — which is exactly
    what happened and went unnoticed for weeks (§3).
+4. The **stuck** badge (`report._stuck_badge_html`, `db.fetch_ok_streak`;
+   §6) — has a group's pass/fail picture stopped changing from run to run?
+   Catches a feed that is up, fresh-stamped and still wrong: the same
+   sensors failing (total) or the same subset passing (partial) run after
+   run.
+5. The **snapshot age** in the dashboard header — page age only, ticked by
+   inline JS from the moment the report was generated. It makes no claim
+   about the feed.
 
 ### `config/projects.csv`
 
@@ -150,7 +159,7 @@ The two that matter most for per-sensor health:
 - `vms_controller_status` — walks `vmsControllerStatus` elements, classifies
   each as `working` / `not_working` / `no_status` based on the
   `workingStatus` field, or `stale` if `statusUpdateTime` is older than
-  `DEFAULT_VMS_STALE_HOURS` (default 3h) regardless of what `workingStatus`
+  `DEFAULT_VMS_STALE_HOURS` (default 1h) regardless of what `workingStatus`
   says — same reasoning as the BT staleness check below: a controller stuck
   re-reporting an old "working" is a false all-clear, and one stuck on an old
   "notWorking" means we no longer actually know its current state either.
@@ -162,7 +171,7 @@ The two that matter most for per-sensor health:
   (speed=-1) / `no_measurement` (missing).
 - `bt_paths_speed_and_traveltime` — walks predefined BT paths, classifies each
   as `ok` / `failing` (no `obs_speed`/`obs_t_time`) / `stale` (has data, but
-  `measurement_timestamp` is older than `DEFAULT_STALE_HOURS`, default 3h).
+  `measurement_timestamp` is older than `DEFAULT_STALE_HOURS`, default 30 min).
   The two failure reasons are kept as distinct status strings — not merged
   into one `failing` — specifically so the dashboard card and the underlying
   fault-age tracking can tell "sensor isn't reporting" apart from "the whole
@@ -226,6 +235,8 @@ sees an up-to-date schema. Migrations are additive and idempotent
 | `sensor_coords` | one row per sensor (latest) | lat/lon/name/site_code, `active` flag, `last_seen` |
 | `bt_path_coords` | one row per BT path (latest) | polyline coordinates as JSON, `active` flag |
 | `sensor_projects` | one row per sensor | `project`, `source` (`matched`/`colocated`), `commissioning` (`active`/`not_electrified`/`decommissioned`) |
+| `feed_state` | one row per live feed | the feed's representative `measurement_timestamp` (mode across its records), used to work out how long its data has been frozen |
+| `bt_path_last_ts` | one row per BT path | the path's last reported `measurement_timestamp`, carried forward across runs so a path that stops sending one still counts as stale instead of dropping out of the calculation |
 
 Key distinction: `sensor_results` is the **authoritative per-sensor, per-run
 history** — every stability calculation that needs to be *correct* (not just
@@ -325,13 +336,47 @@ implicit, untested contract with `tests.py`'s message wording.
 - **Run History** — last 30 runs, one row each, per-group % + overall API
   response status.
 
+The page header also carries a **snapshot line** ("Snapshot from … (N ago)"):
+the report is static, so an inline script ticks the age forward every minute
+from the generation time. Separate from it, `#stale-banner` appears when the
+last run is older than `staleness_threshold_hours` — the monitor itself has
+stopped running.
+
+### Stuck detection (`_stuck_badge_html`, `db.fetch_ok_streak`)
+
+A health percentage can't tell a flickering group from a frozen one, and a
+feed can pass every freshness check while the same sensors fail (or pass)
+forever. `fetch_ok_streak()` walks back from the latest run and counts how
+many consecutive runs had the *same* set of passing sensors; the System
+Overview card shows a `stuck <duration>` badge next to the three checks it is
+wired into (Traffic Detection speed status, VMS controller status, BT paths).
+
+- **Two cases, two thresholds.** *Total* — zero sensors passing — fires after
+  `_STUCK_TOTAL_RUNS` (2), since there is no subset to fingerprint, only a
+  duration. *Partial* — a non-empty subset passing, the rest never — needs
+  `_STUCK_PARTIAL_RUNS` (4), because a single repeat proves nothing. A group
+  that is 100% healthy never shows a badge.
+- **Only shared sensors are compared.** Each earlier run is compared with the
+  latest *on the sensors both contain*, not by exact set equality. Exact
+  equality reset the streak whenever a sensor was added to or removed from the
+  API — including deleting paths that were already failing — and hid a real
+  week-long outage.
+- **Overlap guard.** A run is only comparable if it shares at least 80% of the
+  latest run's sensors; otherwise the streak ends there, so a mostly different
+  population can't push the "since" date further back than the truth.
+- **Commissioning exclusions apply.** Awaiting-power / decommissioned sensors
+  are removed by ID before counting. Without that, a group that is mostly
+  not-yet-live (most of VMS) looks permanently stuck.
+- **Lookback** is 400 runs (~100 days at 6-hourly), so a multi-week stall isn't
+  truncated and reported as shorter than it is.
+
 ---
 
 ## 6a. The BT paths review tool (`runner/bt_paths_map.py`)
 
 A separate, standalone generator — not part of the daily test run — for
-manually auditing the ~500 legacy Bluetooth travel-time paths (built up over
-10 years, many overlapping or duplicated). It reads `bt_path_coords` and the
+manually auditing the hundreds of legacy Bluetooth travel-time paths (built up
+over 10 years, many overlapping or duplicated). It reads `bt_path_coords` and the
 Bluetooth `sensor_coords` straight from the DB and renders a self-contained
 Leaflet map with no other groups and no health data.
 
@@ -376,6 +421,10 @@ Leaflet map with no other groups and no health data.
   (otherwise "next" is nearly useless — the next alphabetical path can be
   anywhere on the map).
 
+---
+
+## 6b. Publishing the BT paths map (`--publish`, `index.html`)
+
 **Sharing with colleagues:** `python runner/bt_paths_map.py --publish` (via
 `publish_bt_map.bat`, or automatically — see below) additionally writes the
 generated page to `docs/bt-paths-map.html`, which is tracked in git and served
@@ -384,7 +433,10 @@ by GitHub Pages alongside the main dashboard (Pages source is `main` /
 `index.html` at the repo root is a small tabbed landing page — plain iframes,
 no build step — so one URL (`https://atsiakkaris.github.io/traffic-control-room/`)
 can switch between the live dashboard and this tool instead of needing two
-separate links.
+separate links. On load it appends a changing `_` query parameter to each
+iframe's `src`: Pages sends `Cache-Control: max-age=600`, and a hard refresh of
+the shell does not force the iframe inside it to refetch, so without that a
+browser could keep showing a stale dashboard.
 
 **Auto-published every 6h (added 2026-08-28):** `daily_tests.yml` now runs
 `bt_paths_map.py --publish` after every scheduled test run and commits
@@ -616,9 +668,10 @@ scheduler proved unreliable for this project's cadence; cron-job.org pings
 `daily_tests.yml` roughly every 6 hours and `weekly_digest.yml` every Monday
 07:30 EEST.
 
-`daily_tests.yml`: checkout → install deps → run `run_tests.py` → run
+`daily_tests.yml`: checkout → install deps → run the unit tests
+(`pytest tests/`) → run `run_tests.py` → run
 `bt_paths_map.py --publish` (refreshes `docs/bt-paths-map.html`, geometry
-only — see §6a) → commit `results/history.db` + `reports/latest.html` +
+only — see §6b) → commit `results/history.db` + `reports/latest.html` +
 `docs/bt-paths-map.html` back to the repo (as the `github-actions[bot]`
 identity) → push → upload the HTML as a build artifact. The BT-map-refresh
 and commit steps both run `if: always()`, so even a failing test run still
