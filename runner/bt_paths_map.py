@@ -34,6 +34,7 @@ if _env_path.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 
 from bt_direction_check import orientation
+import bt_data_quality as dq
 from db import fetch_bt_path_coords, fetch_sensor_coords, get_connection, get_feed_measurement_timestamp
 from qa import load_reference, _haversine_m
 from stability import CYPRUS_TZ, to_cyprus, format_duration_since, BT_PATHS_FEED_NAME
@@ -81,12 +82,6 @@ DUPLICATE_OVERLAP_FRACTION = 0.7  # both directions must be almost fully coincid
 # only partly overlaps the short one, which fails the bidirectional check
 # above outright. Caught this way, not auto-collapsed like a confirmed dup.
 DUPLICATE_CONTAINED_FRACTION = 0.85
-
-# A path traced with only a couple of points is usually a relic of an early,
-# rougher registration pass rather than a deliberately simple short hop —
-# worth a reviewer's eye first when working through a decade of accumulated
-# paths.
-SUSPICIOUS_MIN_POINTS = 5
 
 
 def _path_length_m(coords):
@@ -443,6 +438,53 @@ def find_direction_pairs(paths):
     return by_id, pairs
 
 
+# Data-quality layer ---------------------------------------------------------
+# Which paths consistently produce no or unrealistic data — see bt_data_quality.py
+# for the rules and thresholds. Speed/travel time are only stored on LIVE_MODE
+# runs, so those details are kept out of the published copy like the other
+# live figures.
+DQ_LABELS = {
+    "no_data": "No data", "implausible": "Unrealistic data", "stale": "Stale",
+    "intermittent": "Intermittent", "good": "Good", "unknown": "Not enough history",
+}
+
+
+def find_data_quality(paths):
+    """{path_id: {category, bad_pct, runs, bad_since, reason, last}} for every path.
+    Degrades to {} (layer hidden) if the history cannot be read."""
+    try:
+        conn = get_connection()
+        try:
+            histories, snapshots = dq.load_histories(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"WARNING: data quality check skipped ({exc})")
+        return {}
+    out = {}
+    for pid, p in paths.items():
+        coords = p.get("coords") or []
+        length = _path_length_m(coords) if len(coords) > 1 else None
+        r = dq.classify_path(histories.get(pid, []), snapshots.get(pid, []), length)
+        last = r["last"]
+        out[pid] = {
+            "category": r["category"],
+            "bad_pct": None if r["bad_pct"] is None else round(100 * r["bad_pct"]),
+            "runs": r["runs"],
+            "bad_since": to_cyprus(r["bad_since"]) if r["bad_since"] else None,
+            "reason": r["reason"],
+            "last": None if not last else {
+                "speed_kmh": last["speed_kmh"], "travel_time_s": last["travel_time_s"],
+                "at": to_cyprus(last["run_at"])},
+        }
+    return out
+
+
+def public_data_quality(by_id):
+    """Published copy: keep the category, drop the speed/travel-time details."""
+    return {pid: dict(v, reason="", last=None) for pid, v in by_id.items()}
+
+
 def fetch_latest_path_live_data():
     """Latest recorded speed_kmh/travel_time_s per BT path, from sensor_results.data —
     populated only on runs where LIVE_MODE=true. Paths with no such run (LIVE_MODE
@@ -481,7 +523,7 @@ def load_reference_sensors():
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                 dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
                 reversed_by_id=None, reversed_groups=None,
-                direction_by_id=None, direction_pairs=None):
+                direction_by_id=None, direction_pairs=None, data_quality_by_id=None):
     now =datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     # Same feed_state row the dashboard banner reads — shown here too so
     # anyone on the map (including the published copy) sees the live feed is
@@ -506,6 +548,7 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     reversed_groups = reversed_groups or {}
     direction_by_id = direction_by_id or {}
     direction_pairs = direction_pairs or []
+    data_quality_by_id = data_quality_by_id or {}
     ids = sorted(paths.keys())
     # Live speed/travel-time is kept local-only — colleagues viewing the published
     # copy shouldn't see snapshot data that goes stale the moment it's published.
@@ -518,12 +561,12 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             "id": pid,
             "name": p.get("name") or pid,
             "coords": coords,
-            "suspicious": len(coords) < SUSPICIOUS_MIN_POINTS,
             "dup_dropped": pid in dropped_ids,
             "live": live_data.get(pid),
             "length_m": round(_path_length_m(coords)) if len(coords) > 1 else None,
             "reversed_check": reversed_by_id.get(pid),
             "direction_check": direction_by_id.get(pid),
+            "data_quality": data_quality_by_id.get(pid),
         })
     assign_contrasting_colors(features)
     features_json = json.dumps(features)
@@ -538,6 +581,39 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     rev_ok_count = sum(1 for v in reversed_groups.values() if v.get("category") == "ok")
     dir_counts = {b: sum(1 for p in direction_pairs if p["bucket"] == b) for b in _DIRECTION_PRIORITY}
     direction_pairs_json = json.dumps(direction_pairs)
+    dq_counts = {c: sum(1 for v in data_quality_by_id.values() if v["category"] == c) for c in dq.CATEGORIES}
+    dq_counts_json = json.dumps(dq_counts)
+    dq_limits = (f"A path is flagged when it is bad in {round(dq.BAD_RATIO * 100)}% or more of its last "
+                 f"{dq.WINDOW_RUNS} runs.")
+    data_quality_cards_html = ''
+    if data_quality_by_id:
+        def _qcard(cls, cid, cat, label, tip):
+            return (f'<div class="card {cls}" id="{cid}" style="cursor:pointer" '
+                    f'title="{tip} {dq_limits} Click to jump to one on the map."><div class="num">{dq_counts[cat]}</div>'
+                    f'<div class="lbl">{label}</div></div>')
+        data_quality_cards_html = (
+            f'<div class="summary-group"><div class="summary-group-title">Data quality (last {dq.WINDOW_RUNS} runs)</div>'
+            '<div class="summary-group-cards">'
+            + _qcard('dq-nodata', 'dqNoDataCard', 'no_data', 'No data',
+                     'Speed or travel time is -1, 0 or missing.')
+            + _qcard('dq-implaus', 'dqImplausCard', 'implausible', 'Unrealistic data',
+                     f'Positive but impossible values: speed under {dq.MIN_SPEED_KMH} or over {dq.MAX_SPEED_KMH} km/h, '
+                     'or a travel time that implies such a speed over the path length. Judged on the values stored by manual LIVE_MODE runs.')
+            + _qcard('dq-stale', 'dqStaleCard', 'stale', 'Stale',
+                     'The measurement timestamp is too old.')
+            + _qcard('dq-inter', 'dqInterCard', 'intermittent', 'Intermittent',
+                     'Often bad, but not consistently enough to flag.')
+            + _qcard('dq-good', 'dqGoodCard', 'good', 'Good', 'Reporting normally.')
+            + '</div></div>')
+    # Findings export/import are the reviewer's own tools (local copy only — see QA_MODE).
+    findings_buttons_html = ''
+    if include_live_data:
+        findings_buttons_html = (
+            '<button class="dm-btn export" id="exportBtn" title="Download your flagged paths and notes as a CSV">'
+            '<i class="ti ti-download" aria-hidden="true"></i><span>Export findings</span></button>'
+            '<button class="dm-btn import" id="importBtn" title="Load flagged paths and notes from a CSV exported earlier">'
+            '<i class="ti ti-upload" aria-hidden="true"></i><span>Import findings</span></button>'
+            '<input type="file" id="importFile" accept=".csv" style="display:none">')
     direction_cards_html = ''
     if direction_pairs:
         def _dcard(cls, cid, bucket, label, tip):
@@ -559,7 +635,6 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                      'Pairs stored in opposite point order, as a forward path and its reverse should be.')
             + '</div></div>')
     active_count = len(features) - len(dropped_ids)
-    suspicious_count = sum(1 for f in features if f["suspicious"])
 
     sensor_list = [
         {"id": sid, "name": s.get("name") or sid, "lat": s["lat"], "lon": s["lon"],
@@ -627,8 +702,6 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .card.dup .num{{color:#c0392b}}
 .card.dup-warn{{border-top-color:#e67e22}}
 .card.dup-warn .num{{color:#e67e22}}
-.card.susp{{border-top-color:#b7791f}}
-.card.susp .num{{color:#b7791f}}
 .card.rev-bug{{border-top-color:#c0392b}}
 .card.rev-bug .num{{color:#c0392b}}
 .card.rev-amb{{border-top-color:#e67e22}}
@@ -643,6 +716,22 @@ header p{{font-size:12px;opacity:.8;margin-top:4px}}
 .card.dir-unclear .num{{color:#8e44ad}}
 .card.dir-ok{{border-top-color:#27ae60}}
 .card.dir-ok .num{{color:#27ae60}}
+.card.dq-nodata{{border-top-color:#c0392b}}
+.card.dq-nodata .num{{color:#c0392b}}
+.card.dq-implaus{{border-top-color:#e67e22}}
+.card.dq-implaus .num{{color:#e67e22}}
+.card.dq-stale{{border-top-color:#b7791f}}
+.card.dq-stale .num{{color:#b7791f}}
+.card.dq-inter{{border-top-color:#8e44ad}}
+.card.dq-inter .num{{color:#8e44ad}}
+.card.dq-good{{border-top-color:#27ae60}}
+.card.dq-good .num{{color:#27ae60}}
+.sensor-toggle-btn.dataq{{background:#be185d}}
+.sensor-toggle-btn.dataq:hover{{background:#9d174d}}
+.sensor-toggle-btn.dataq.off{{background:#9ca3af}}
+.legend-toggle{{float:right;cursor:pointer;font-size:10px;font-weight:bold;padding:1px 7px;border-radius:9px;
+      background:#9ca3af;color:#fff;letter-spacing:0;text-transform:none}}
+.legend-toggle.on{{background:#27ae60}}
 .sensor-toggle-btn.direction{{background:#0e7490}}
 .sensor-toggle-btn.direction:hover{{background:#0b5f75}}
 .sensor-toggle-btn.direction.off{{background:#9ca3af}}
@@ -682,18 +771,15 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
 .search-result:hover{{background:var(--hover)}}
 .search-result .type{{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.03em}}
 .search-empty{{padding:8px 12px;font-size:12px;color:var(--muted)}}
-.sensor-toggle-btn.susp{{background:#0f766e}}
-.sensor-toggle-btn.susp:hover{{background:#0b5c56}}
-.sensor-toggle-btn.susp.active{{background:#b7791f}}
-.sensor-toggle-btn.susp.active:hover{{background:#92600f}}
 .sensor-toggle-btn.dup{{background:#c0392b}}
 .sensor-toggle-btn.dup:hover{{background:#992d22}}
 .sensor-toggle-btn.dup.off{{background:#9ca3af}}
 .sensor-toggle-btn.dup.off:hover{{background:#7d8590}}
-.sensor-toggle-btn.export{{background:#27ae60}}
-.sensor-toggle-btn.export:hover{{background:#1e8449}}
-.sensor-toggle-btn.import{{background:#3949ab;margin-top:6px}}
-.sensor-toggle-btn.import:hover{{background:#2c3a82}}
+.hdr-actions{{display:flex;flex-direction:column;align-items:stretch;gap:6px}}
+.dm-btn.export{{background:#27ae60}}
+.dm-btn.export:hover{{background:#1e8449}}
+.dm-btn.import{{background:#3949ab}}
+.dm-btn.import:hover{{background:#2c3a82}}
 .inspector{{position:absolute;left:12px;bottom:12px;z-index:1000;width:300px;max-height:60%;
       display:flex;flex-direction:column;background:var(--surface);border-radius:8px;
       box-shadow:0 2px 10px rgba(0,0,0,.35);font-size:12px;overflow:hidden;color:var(--text)}}
@@ -714,9 +800,6 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
 .flag-list-row{{padding:7px 4px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border-soft)}}
 .flag-list-row:hover{{background:var(--hover)}}
 .flag-list-id{{color:var(--muted);font-size:11px}}
-.badge{{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:bold;
-      margin:6px 4px 0 0}}
-.badge.suspicious{{background:#fde68a;color:#92400e}}
 .flag-row{{display:flex;gap:6px;margin-top:9px}}
 .flag-row button{{flex:1;border:1px solid var(--border);background:var(--surface2);border-radius:4px;padding:5px 4px;
       font-size:11px;cursor:pointer;color:var(--text)}}
@@ -775,9 +858,12 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
        {len(sensor_list)} API sensors&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors</p>
     {f'<p style="opacity:1;color:#ffc978;font-weight:bold;margin-top:6px"><i class="ti ti-alert-triangle" style="font-size:12px" aria-hidden="true"></i>&nbsp; Live feed frozen since {to_cyprus(feed_since)} (ongoing {feed_stale_duration})</p>' if feed_stale_duration else ''}
   </div>
-  <button class="dm-btn" onclick="toggleDark()" id="dmBtn" aria-label="Toggle dark mode">
-    <i class="ti ti-sun" id="dmIcon" aria-hidden="true"></i><span id="dmLabel">Light</span>
-  </button>
+  <div class="hdr-actions">
+    <button class="dm-btn" onclick="toggleDark()" id="dmBtn" aria-label="Toggle dark mode">
+      <i class="ti ti-sun" id="dmIcon" aria-hidden="true"></i><span id="dmLabel">Light</span>
+    </button>
+    {findings_buttons_html}
+  </div>
 </header>
 
 <div class="summary">
@@ -799,13 +885,13 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
   <div class="summary-group">
     <div class="summary-group-title">Data quality checks</div>
     <div class="summary-group-cards">
-      <div class="card susp"><div class="num">{suspicious_count}</div><div class="lbl">Suspicious (&lt;{SUSPICIOUS_MIN_POINTS} points)</div></div>
       {f'<div class="card rev-bug" id="revBugCard" style="cursor:pointer" title="Old name-based check: a named A->B / B->A pair whose start and end points are in the same order instead of mirrored. Click to jump to one."><div class="num">{rev_bug_count}</div><div class="lbl">Reversed-direction bug</div></div>' if rev_bug_count else ''}
       {f'<div class="card rev-amb" id="revAmbCard" style="cursor:pointer" title="Old name-based check: a named A->B / B->A pair whose endpoints match neither order clearly. Usually a different route between the same two nodes, not a direction problem. Click to jump to one."><div class="num">{rev_amb_count}</div><div class="lbl">Reversed check: ambiguous</div></div>' if rev_amb_count else ''}
       {f'<div class="card rev-ok" id="revOkCard" style="cursor:pointer" title="Old name-based check: a named A->B / B->A pair whose start and end points are properly mirrored. Click to jump to one."><div class="num">{rev_ok_count}</div><div class="lbl">Reversed check: OK</div></div>' if rev_ok_count else ''}
     </div>
   </div>
   {direction_cards_html}
+  {data_quality_cards_html}
 </div>
 
 <div id="mapFsWrap"><div id="map"></div></div>
@@ -824,6 +910,7 @@ var DUPLICATE_GROUPS = {duplicate_groups_json};
 var SHOW_DUPLICATES = {show_dropped_default_json};
 var REVERSED_GROUPS = {reversed_groups_json};
 var DIRECTION_PAIRS = {direction_pairs_json};
+var DQ_LIMITS_TEXT = {json.dumps(dq_limits)};
 // Keyed by path id rather than name — features fall back to their id as a
 // display name when the API sends none (see FEATURES below), which would
 // otherwise never match a group keyed by the real (possibly null) name.
@@ -919,16 +1006,18 @@ function _onFsChange() {{
 }}
 document.addEventListener('fullscreenchange', _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
-var LIGHT_TILES = {{url: 'https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-  attribution: '© OpenStreetMap contributors'}};
+// Light: OpenStreetMap data served by OSM Germany (FOSSGIS) — not
+// tile.openstreetmap.org, which returns "403 Access blocked" to pages opened
+// straight from disk. Dark: Esri's dark gray canvas (CARTO's dark tiles refuse
+// pages opened from disk with an API-key error).
+var LIGHT_TILES = {{url: 'https://tile.openstreetmap.de/{{z}}/{{x}}/{{y}}.png',
+  attribution: '&copy; OpenStreetMap contributors, tiles &copy; OSM Germany (FOSSGIS)'}};
 var DARK_TILES = {{url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}',
   attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'}};
-var tileLayer = L.tileLayer(LIGHT_TILES.url, {{attribution: LIGHT_TILES.attribution, maxZoom: 19}}).addTo(map);
 
 var _dark = true;
 document.body.classList.add('dark');
-map.removeLayer(tileLayer);
-tileLayer = L.tileLayer(DARK_TILES.url, {{attribution: DARK_TILES.attribution, maxZoom: 19}}).addTo(map);
+var tileLayer = L.tileLayer(DARK_TILES.url, {{attribution: DARK_TILES.attribution, maxZoom: 19}}).addTo(map);
 function toggleDark() {{
   _dark = !_dark;
   document.body.classList.toggle('dark', _dark);
@@ -940,8 +1029,6 @@ function toggleDark() {{
   tileLayer.bringToBack();
 }}
 
-var SUSPICIOUS_MIN_POINTS = {SUSPICIOUS_MIN_POINTS};
-var SUSPICIOUS_ONLY = false;
 
 // Reviewer's findings, keyed by path id, persisted locally so a multi-session
 // review of ~500 legacy paths doesn't lose progress on reload: {{id: {{status: 'flag'|'ok', note: string}}}}
@@ -983,20 +1070,40 @@ function _isDirectionPartnerOfSelected(id) {{
   if (!sel || !sel.direction_check) return false;
   return sel.direction_check.pairs.some(function(p) {{ return p.partner === id; }});
 }}
-function _setDirectionMode(on) {{
-  DIRECTION_MODE = on;
-  var btn = document.querySelector('.sensor-toggle-btn.direction');
-  if (btn) {{ btn.innerHTML = 'Direction check: ' + (on ? 'ON' : 'OFF'); btn.classList.toggle('off', !on); }}
-  if (on && REVERSED_MODE) {{
-    REVERSED_MODE = false;
-    var rb = document.querySelector('.sensor-toggle-btn.reversed');
-    if (rb) {{ rb.innerHTML = 'Reversed check: OFF'; rb.classList.add('off'); }}
-  }}
+// Data-quality layer (bt_data_quality.py): colours each path by whether it
+// consistently produces no or unrealistic data. Same exclusive-layer rule.
+var DATAQ_MODE = false;
+var DATAQ_COLORS = {{no_data: '#c0392b', implausible: '#e67e22', stale: '#b7791f',
+                    intermittent: '#8e44ad', good: '#27ae60'}};
+var DATAQ_LABELS = {{no_data: 'No data', implausible: 'Unrealistic data', stale: 'Stale',
+                    intermittent: 'Intermittent', good: 'Good', unknown: 'Not enough history'}};
+
+// Only one colour layer at a time: name is 'reversed', 'direction', 'dataq' or null.
+function _syncModeControls() {{
+  [['reversed', 'Reversed check', REVERSED_MODE], ['direction', 'Direction check', DIRECTION_MODE],
+   ['dataq', 'Data quality', DATAQ_MODE]].forEach(function(m) {{
+    var b = document.querySelector('.sensor-toggle-btn.' + m[0]);
+    if (b) {{ b.innerHTML = m[1] + ': ' + (m[2] ? 'ON' : 'OFF'); b.classList.toggle('off', !m[2]); }}
+    var t = document.querySelector('.legend-toggle[data-mode="' + m[0] + '"]');
+    if (t) {{ t.textContent = m[2] ? 'ON' : 'OFF'; t.classList.toggle('on', m[2]); }}
+  }});
+}}
+function _setMode(name) {{
+  REVERSED_MODE = name === 'reversed';
+  DIRECTION_MODE = name === 'direction';
+  DATAQ_MODE = name === 'dataq';
+  _syncModeControls();
   applySelection();
 }}
+function _setDirectionMode(on) {{ _setMode(on ? 'direction' : null); }}
 
 function baseStyle(f, selected) {{
   if (selected) return {{color: SELECTED_COLOR, weight: 10, opacity: 1}};
+  if (DATAQ_MODE) {{
+    var q = f.data_quality;
+    if (q && DATAQ_COLORS[q.category]) return {{color: DATAQ_COLORS[q.category], weight: 5, opacity: 0.9}};
+    return {{color: REVERSED_DIM_COLOR, weight: 2, opacity: 0.35}};
+  }}
   if (DIRECTION_MODE) {{
     if (_isDirectionPartnerOfSelected(f.id)) return {{color: DIRECTION_PARTNER_COLOR, weight: 8, opacity: 1}};
     if (f.direction_check) return {{color: DIRECTION_COLORS[f.direction_check.status], weight: 5, opacity: 0.9}};
@@ -1230,6 +1337,23 @@ FEATURES.forEach(function(f) {{
                     (p.r != null ? ', r=' + p.r : '') + (p.hint ? '<br>&nbsp;&nbsp;<i>' + p.hint + '</i>' : '');
     }});
   }}
+  var dqc = f.data_quality;
+  if (dqc && dqc.category !== 'unknown') {{
+    detailHtml += '<br><span style="font-weight:bold;color:' + (DATAQ_COLORS[dqc.category] || '#888') + '">Data quality: ' +
+                  DATAQ_LABELS[dqc.category] + '</span>';
+    if (dqc.reason) detailHtml += '<br>' + dqc.reason;
+    if (dqc.bad_since && dqc.category !== 'good' && dqc.category !== 'intermittent') {{
+      detailHtml += '<br>Bad since: ' + dqc.bad_since;
+    }}
+    if (dqc.last) {{
+      detailHtml += '<br><span style="color:#888;font-size:11px">Last stored values: ' +
+                    (dqc.last.speed_kmh != null ? dqc.last.speed_kmh + ' km/h' : '&#8212;') + ', ' +
+                    (dqc.last.travel_time_s != null ? dqc.last.travel_time_s + ' s' : '&#8212;') +
+                    ' (' + dqc.last.at + ')</span>';
+    }}
+  }} else if (dqc) {{
+    detailHtml += '<br><span style="color:#888;font-size:11px">Data quality: not enough history (' + dqc.runs + ' runs)</span>';
+  }}
   // Selection detail (id, point count, duplicate warning, flag/note controls)
   // lives in the fixed Inspector panel, not a popup here — a popup anchored
   // at the click point fights the sticky hover tooltip for the same spot on
@@ -1267,14 +1391,6 @@ FEATURES.forEach(function(f) {{
   pathObjs.push({{feature: f, polyline: pl, decorator: decorator, detailHtml: detailHtml}});
 }});
 map.on('click', function() {{ selectPath(null); }});
-
-/* -- Suspicious-path styling ----------------------------------------- */
-// Baseline dashed outline for low-point paths so they stand out even before
-// you click anything — the whole point of a systematic review is spotting
-// these without having to hover every single one.
-pathObjs.forEach(function(o) {{
-  if (o.feature.suspicious) o.polyline.setStyle({{dashArray: '2,7'}});
-}});
 
 /* -- Duplicate-registration visibility --------------------------------- */
 // The "dropped" side of a confirmed duplicate is still drawn (so it can be
@@ -1316,7 +1432,7 @@ function stepList() {{
   var useFlaggedOnly = CYCLE_FLAGGED_ONLY || showingFlagList;
   var base = useFlaggedOnly
     ? pathObjs.filter(function(o) {{ return FLAGS[o.feature.id] && FLAGS[o.feature.id].status; }})
-    : pathObjs.filter(function(o) {{ return !SUSPICIOUS_ONLY || o.feature.suspicious; }});
+    : pathObjs;
   var list = base.map(function(o) {{ return o.feature; }});
   list.sort(function(a, b) {{ return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; }});
   return list;
@@ -1370,11 +1486,7 @@ function _wireReversedCard(cardId, category) {{
   var i = 0;
   card.addEventListener('click', function() {{
     if (!groups.length) return;
-    if (!REVERSED_MODE) {{
-      REVERSED_MODE = true;
-      var btn = document.querySelector('.sensor-toggle-btn.reversed');
-      if (btn) {{ btn.innerHTML = 'Reversed check: ON'; btn.classList.remove('off'); }}
-    }}
+    if (!REVERSED_MODE) _setMode('reversed');
     stepSelect(groups[i % groups.length]);
     i++;
   }});
@@ -1402,6 +1514,26 @@ _wireDirectionCard('dirBugCard', '1-non-reversed');
 _wireDirectionCard('dirUnexplCard', '2-same-direction-unexplained');
 _wireDirectionCard('dirUnclearCard', '4-unclear');
 _wireDirectionCard('dirOkCard', '3-healthy');
+
+/* -- Data-quality cards: step through the paths in a category. */
+function _wireDataQualityCard(cardId, category) {{
+  var card = document.getElementById(cardId);
+  if (!card) return;
+  var ids = FEATURES.filter(function(f) {{ return f.data_quality && f.data_quality.category === category; }})
+                    .map(function(f) {{ return f.id; }});
+  var i = 0;
+  card.addEventListener('click', function() {{
+    if (!ids.length) return;
+    if (!DATAQ_MODE) _setMode('dataq');
+    stepSelect(ids[i % ids.length]);
+    i++;
+  }});
+}}
+_wireDataQualityCard('dqNoDataCard', 'no_data');
+_wireDataQualityCard('dqImplausCard', 'implausible');
+_wireDataQualityCard('dqStaleCard', 'stale');
+_wireDataQualityCard('dqInterCard', 'intermittent');
+_wireDataQualityCard('dqGoodCard', 'good');
 
 /* -- Flagging + export (QA_MODE only — see the QA_MODE comment above) --- */
 if (QA_MODE) {{
@@ -1470,15 +1602,14 @@ function setNote(id, note) {{
 Object.keys(FLAGS).forEach(updateFlagMarker);
 
 function exportFindings() {{
-  var rows = [['Path ID', 'Name', 'Status', 'Note', 'Suspicious', 'Duplicate']];
+  var rows = [['Path ID', 'Name', 'Status', 'Note', 'Duplicate']];
   Object.keys(FLAGS).forEach(function(id) {{
     var flag = FLAGS[id];
     if (!flag || flag.status !== 'flag') return;
     var obj = pathObjs.filter(function(p) {{ return p.feature.id === id; }})[0];
     var name = obj ? obj.feature.name : id;
-    var susp = obj && obj.feature.suspicious ? 'yes' : 'no';
     var dup = DUPLICATE_GROUPS[name] ? 'yes' : 'no';
-    rows.push([id, name, flag.status || '', (flag.note || '').replace(/\\n/g, ' '), susp, dup]);
+    rows.push([id, name, flag.status || '', (flag.note || '').replace(/\\n/g, ' '), dup]);
   }});
   if (rows.length === 1) {{ alert('No flagged paths yet — use Flag in the panel at bottom-left first.'); return; }}
   var csv = rows.map(function(r) {{
@@ -1561,7 +1692,7 @@ function importFindings(file) {{
 }}
 }} // end if (QA_MODE) — flagging + export
 
-/* -- Inspector panel: selection detail, suspicious badge, flag/note ---- */
+/* -- Inspector panel: selection detail, flag/note ---- */
 var insBody, insCounter;
 (function() {{
   var wrap = L.DomUtil.create('div', 'inspector', map.getContainer());
@@ -1674,7 +1805,7 @@ function renderInspector() {{
 
   if (selectedId === null) {{
     insBody.innerHTML = flagSummary + '<div class="empty">Click a path, or use &#9664; &#9654; to step through ' +
-      (SUSPICIOUS_ONLY ? 'the ' + list.length + ' suspicious paths' : 'all ' + list.length + ' paths') + '.</div>';
+      'all ' + list.length + ' paths' + '.</div>';
     insCounter.textContent = list.length ? '0 / ' + list.length : '';
     _wireFlagSummaryToggle();
     return;
@@ -1685,10 +1816,7 @@ function renderInspector() {{
   var idx = list.findIndex(function(x) {{ return x.id === selectedId; }});
   insCounter.textContent = idx === -1 ? '—' : (idx + 1) + ' / ' + list.length;
 
-  var susp = f.suspicious
-    ? '<span class="badge suspicious" title="Fewer than ' + SUSPICIOUS_MIN_POINTS + ' points">Suspicious</span>'
-    : '';
-  insBody.innerHTML = flagSummary + obj.detailHtml + susp +
+  insBody.innerHTML = flagSummary + obj.detailHtml +
     (QA_MODE ? '<div class="flag-row"><button id="flagBtn">&#128681; Flag</button><button id="okBtn">&#9989; OK</button></div>' +
     '<textarea id="insNote" placeholder="Notes for this path…"></textarea>' : '');
 
@@ -1773,24 +1901,6 @@ function makeToggleBtn(label, layer, extraClass) {{
 var apiToggleCtl = makeToggleBtn('API sensors', sensorLayer);
 var refToggleCtl = makeToggleBtn('Spreadsheet sensors', refLayer, 'ref');
 
-(function() {{
-  var btn = L.DomUtil.create('button', 'sensor-toggle-btn susp', filtersBody);
-  btn.innerHTML = 'Suspicious only: OFF';
-  btn.onclick = function(e) {{
-    L.DomEvent.stopPropagation(e);
-    SUSPICIOUS_ONLY = !SUSPICIOUS_ONLY;
-    btn.innerHTML = 'Suspicious only: ' + (SUSPICIOUS_ONLY ? 'ON' : 'OFF');
-    btn.classList.toggle('active', SUSPICIOUS_ONLY);
-    pathObjs.forEach(function(o) {{
-      var show = !SUSPICIOUS_ONLY || o.feature.suspicious;
-      var has = map.hasLayer(o.polyline);
-      if (show && !has) {{ o.polyline.addTo(map); o.decorator.addTo(map); }}
-      if (!show && has) {{ map.removeLayer(o.polyline); map.removeLayer(o.decorator); }}
-    }});
-    renderInspector();
-  }};
-}})();
-
 if (HAS_DROPPED_DUPLICATES) {{
   (function() {{
     var btn = L.DomUtil.create('button', 'sensor-toggle-btn dup' + (SHOW_DUPLICATES ? '' : ' off'), filtersBody);
@@ -1820,11 +1930,7 @@ if (HAS_REVERSED_CHECK) {{
     btn.title = 'Old name-based check. Colours only paths named exactly A->B / B->A, comparing start and end points: red = same order (bug), orange = ambiguous, green = properly mirrored. Grey = not covered by this check. Switches off Direction check.';
     btn.onclick = function(e) {{
       L.DomEvent.stopPropagation(e);
-      REVERSED_MODE = !REVERSED_MODE;
-      btn.innerHTML = 'Reversed check: ' + (REVERSED_MODE ? 'ON' : 'OFF');
-      btn.classList.toggle('off', !REVERSED_MODE);
-      if (REVERSED_MODE && DIRECTION_MODE) {{ _setDirectionMode(false); return; }}
-      applySelection();
+      _setMode(REVERSED_MODE ? null : 'reversed');
     }};
   }})();
 }}
@@ -1842,6 +1948,19 @@ if (HAS_DIRECTION_CHECK) {{
   }})();
 }}
 
+var HAS_DATA_QUALITY = pathObjs.some(function(o) {{ return !!o.feature.data_quality; }});
+if (HAS_DATA_QUALITY) {{
+  (function() {{
+    var btn = L.DomUtil.create('button', 'sensor-toggle-btn dataq off', filtersBody);
+    btn.innerHTML = 'Data quality: OFF';
+    btn.title = 'Colours each path by whether it consistently produces no or unrealistic data: red = no data (-1, 0 or missing), orange = unrealistic values, brown = stale, purple = intermittent, green = good. ' + DQ_LIMITS_TEXT + ' Switches off the other colour layers.';
+    btn.onclick = function(e) {{
+      L.DomEvent.stopPropagation(e);
+      _setMode(DATAQ_MODE ? null : 'dataq');
+    }};
+  }})();
+}}
+
 var LegendControl = L.Control.extend({{
   options: {{position: 'bottomright'}},
   onAdd: function() {{
@@ -1849,19 +1968,31 @@ var LegendControl = L.Control.extend({{
     L.DomEvent.disableClickPropagation(box);
     var reversedRows = HAS_REVERSED_CHECK ?
       '<div class="legend-sec">' +
-        '<div class="legend-sec-title">Reversed-direction check<br>(when toggle is on)</div>' +
+        '<div class="legend-sec-title">Reversed-direction check <span class="legend-toggle" data-mode="reversed" title="Turn this layer on or off">OFF</span><br>(when toggle is on)</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.bug + '"></span></span>Bug — direction reversed</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ambiguous + '"></span></span>Ambiguous — needs a look</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ok + '"></span></span>OK — direction confirmed</div>' +
       '</div>' : '';
     var directionRows = HAS_DIRECTION_CHECK ?
       '<div class="legend-sec">' +
-        '<div class="legend-sec-title">Direction check (geometry)<br>(when toggle is on)</div>' +
+        '<div class="legend-sec-title">Direction check (geometry) <span class="legend-toggle" data-mode="direction" title="Turn this layer on or off">OFF</span><br>(when toggle is on)</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['1-non-reversed'] + '"></span></span>Non-reversed pair</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['2-same-direction-unexplained'] + '"></span></span>Same direction, unexplained</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['4-unclear'] + '"></span></span>Unclear</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['3-healthy'] + '"></span></span>Healthy (opposite)</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_PARTNER_COLOR + '"></span></span>Partner of selected path</div>' +
+      '</div>' : '';
+    function _dqRow(cat, text, tip) {{
+      return '<div class="legend-row" title="' + tip + '"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DATAQ_COLORS[cat] + '"></span></span>' + text + '</div>';
+    }}
+    var dataqRows = HAS_DATA_QUALITY ?
+      '<div class="legend-sec">' +
+        '<div class="legend-sec-title">Data quality <span class="legend-toggle" data-mode="dataq" title="Turn this layer on or off">OFF</span><br>(when toggle is on)</div>' +
+        _dqRow('no_data', 'No data', 'Speed or travel time is -1, 0 or missing. ' + DQ_LIMITS_TEXT) +
+        _dqRow('implausible', 'Unrealistic data', 'Speed under 5 or over 140 km/h, or a travel time implying that over the path length. ' + DQ_LIMITS_TEXT) +
+        _dqRow('stale', 'Stale', 'Measurement timestamp too old. ' + DQ_LIMITS_TEXT) +
+        _dqRow('intermittent', 'Intermittent', 'Often bad, not consistently.') +
+        _dqRow('good', 'Good', 'Reporting normally.') +
       '</div>' : '';
     box.innerHTML =
       '<div class="legend-hd" id="legendHd">Legend <span class="chev">&#9660;</span></div>' +
@@ -1874,12 +2005,19 @@ var LegendControl = L.Control.extend({{
         '<div class="legend-sec">' +
           '<div class="legend-sec-title">Paths</div>' +
           '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:#3b82c4"></span></span>Each path has its own color</div>' +
-          '<div class="legend-row"><span class="legend-swatch"><span class="legend-line dashed" style="border-color:#3b82c4"></span></span>Suspicious (&lt;' + SUSPICIOUS_MIN_POINTS + ' points)</div>' +
           '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + SELECTED_COLOR + '"></span></span>Selected path</div>' +
         '</div>' +
         reversedRows +
         directionRows +
+        dataqRows +
       '</div>';
+    box.addEventListener('click', function(e) {{
+      var t = e.target.closest ? e.target.closest('.legend-toggle') : null;
+      if (!t) return;
+      var m = t.getAttribute('data-mode');
+      var on = m === 'reversed' ? REVERSED_MODE : (m === 'direction' ? DIRECTION_MODE : DATAQ_MODE);
+      _setMode(on ? null : m);
+    }});
     var hd = box.querySelector('#legendHd');
     hd.onclick = function() {{ box.classList.toggle('collapsed'); }};
     return box;
@@ -1888,18 +2026,9 @@ var LegendControl = L.Control.extend({{
 map.addControl(new LegendControl());
 
 if (QA_MODE) {{
-  var exportBtn = L.DomUtil.create('button', 'sensor-toggle-btn export', filtersBody);
-  exportBtn.innerHTML = 'Export findings &#8659;';
-  exportBtn.onclick = exportFindings;
-
-  var importWrap = L.DomUtil.create('div', '', filtersBody);
-  var importBtn = L.DomUtil.create('button', 'sensor-toggle-btn import', importWrap);
-  importBtn.innerHTML = 'Import findings &#8657;';
-  var fileInput = L.DomUtil.create('input', '', importWrap);
-  fileInput.type = 'file';
-  fileInput.accept = '.csv';
-  fileInput.style.display = 'none';
-  importBtn.onclick = function() {{ fileInput.click(); }};
+  document.getElementById('exportBtn').onclick = exportFindings;
+  var fileInput = document.getElementById('importFile');
+  document.getElementById('importBtn').onclick = function() {{ fileInput.click(); }};
   fileInput.onchange = function() {{
     importFindings(fileInput.files[0]);
     fileInput.value = '';   // allow re-importing the same file
@@ -2046,12 +2175,19 @@ def main():
               f"{counts['2-same-direction-unexplained']} same-direction unexplained, "
               f"{counts['4-unclear']} unclear, {counts['3-healthy']} healthy")
 
+    data_quality_by_id = find_data_quality(paths)
+    if data_quality_by_id:
+        dq_counts = {c: sum(1 for v in data_quality_by_id.values() if v["category"] == c) for c in dq.CATEGORIES}
+        print("Data quality (last %d runs): " % dq.WINDOW_RUNS +
+              ", ".join(f"{dq_counts[c]} {DQ_LABELS[c].lower()}" for c in dq.CATEGORIES))
+
     sensors = fetch_sensor_coords().get("Bluetooth", {})
     ref_sensors = load_reference_sensors()
     page = build_html(paths, sensors, ref_sensors, duplicate_groups,
                        dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
                        reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
-                       direction_by_id=direction_by_id, direction_pairs=direction_pairs)
+                       direction_by_id=direction_by_id, direction_pairs=direction_pairs,
+                       data_quality_by_id=data_quality_by_id)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2066,7 +2202,8 @@ def main():
                                      dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
                                      include_live_data=False,
                                      reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
-                       direction_by_id=direction_by_id, direction_pairs=direction_pairs)
+                       direction_by_id=direction_by_id, direction_pairs=direction_pairs,
+                       data_quality_by_id=public_data_quality(data_quality_by_id))
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         published_path = DOCS_DIR / "bt-paths-map.html"
         published_path.write_text(published_page, encoding="utf-8")
