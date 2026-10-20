@@ -449,13 +449,15 @@ DQ_LABELS = {
 }
 
 
-def find_data_quality(paths):
+def find_data_quality(paths, use_snapshots=True):
     """{path_id: {category, bad_pct, runs, bad_since, reason, last}} for every path.
     Degrades to {} (layer hidden) if the history cannot be read."""
     try:
         conn = get_connection()
         try:
             histories, snapshots = dq.load_histories(conn)
+            if not use_snapshots:
+                snapshots = {}  # status-only: the stored speed values are local-only
         finally:
             conn.close()
     except Exception as exc:
@@ -596,9 +598,10 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             '<div class="summary-group-cards">'
             + _qcard('dq-nodata', 'dqNoDataCard', 'no_data', 'No data',
                      'Speed or travel time is -1, 0 or missing.')
-            + _qcard('dq-implaus', 'dqImplausCard', 'implausible', 'Unrealistic data',
-                     f'Positive but impossible values: speed under {dq.MIN_SPEED_KMH} or over {dq.MAX_SPEED_KMH} km/h, '
-                     'or a travel time that implies such a speed over the path length. Judged on the values stored by manual LIVE_MODE runs.')
+            + (_qcard('dq-implaus', 'dqImplausCard', 'implausible', 'Unrealistic data',
+                      f'Positive but impossible values: speed under {dq.MIN_SPEED_KMH} or over {dq.MAX_SPEED_KMH} km/h, '
+                      'or a travel time that implies such a speed over the path length. Judged on the values stored by manual LIVE_MODE runs.')
+               if include_live_data else '')
             + _qcard('dq-stale', 'dqStaleCard', 'stale', 'Stale',
                      'The measurement timestamp is too old.')
             + _qcard('dq-inter', 'dqInterCard', 'intermittent', 'Intermittent',
@@ -643,6 +646,10 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     ]
     sensors_json = json.dumps(sensor_list)
 
+    # The spreadsheet comparison is a local-only tool, kept off the published
+    # copy like the live figures (include_live_data=False means published).
+    if not include_live_data:
+        ref_sensors = []
     ref_list = [
         {"name": s["name"], "lat": s["lat"], "lon": s["lon"],
          "commissioning": s.get("commissioning", "active"),
@@ -650,6 +657,29 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
         for s in ref_sensors
     ]
     ref_json = json.dumps(ref_list)
+    def _chip(n, text, tone=''):
+        return f'<span class="sb-chip {tone}"><b>{n}</b>{text}</span>'
+    chips = [_chip(active_count, ' paths'), _chip(len(sensor_list), ' API sensors')]
+    if include_live_data and ref_list:
+        chips.append(_chip(len(ref_list), ' spreadsheet sensors'))
+    if confirmed_dup_count:
+        chips.append(_chip(confirmed_dup_count, ' duplicates', 'bad'))
+    if ambiguous_dup_count:
+        chips.append(_chip(ambiguous_dup_count, ' same-name to check', 'warn'))
+    if direction_pairs:
+        review_n = (dir_counts['1-non-reversed'] + dir_counts['2-same-direction-unexplained']
+                    + dir_counts['4-unclear'])
+        chips.append(_chip(review_n, ' direction to review', 'warn' if review_n else 'ok'))
+    if reversed_groups and (rev_bug_count or rev_amb_count):
+        chips.append(_chip(rev_bug_count + rev_amb_count, ' reversed check: needs a look', 'warn'))
+    if data_quality_by_id:
+        for cat, text, tone in (('no_data', ' no data', 'bad'), ('stale', ' stale', 'warn'),
+                                ('intermittent', ' intermittent', 'purple')):
+            if dq_counts.get(cat):
+                chips.append(_chip(dq_counts[cat], text, tone))
+        if include_live_data and dq_counts.get('implausible'):
+            chips.append(_chip(dq_counts['implausible'], ' unrealistic', 'warn'))
+    summary_chips_html = ''.join(chips)
 
     # Same fixed default view as the dashboard map — not a centroid of the
     # paths, which can land in the middle of nowhere depending on their spread.
@@ -851,6 +881,62 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
 .filters-body{{display:flex;flex-direction:column;gap:6px;padding:0 10px 10px}}
 .filters-ctl.collapsed .filters-body{{display:none}}
 .filters-body .sensor-toggle-btn{{box-shadow:none;margin-top:0 !important;width:100%}}
+/* ---- Compact summary bar, collapsible panels, small-screen layout ---- */
+.summary-wrap{{flex:0 0 auto}}
+.summary-bar{{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+      padding:7px 24px;background:var(--surface);border:none;border-bottom:1px solid var(--border);
+      color:var(--text);font:inherit;cursor:pointer;text-align:left}}
+.summary-bar:hover{{background:var(--hover)}}
+.sb-chips{{display:flex;flex-wrap:wrap;gap:3px 16px;align-items:center;font-size:12px}}
+.sb-chip b{{font-size:13px;margin-right:3px}}
+.sb-chip.bad b{{color:#c0392b}}
+.sb-chip.warn b{{color:#e67e22}}
+.sb-chip.ok b{{color:#27ae60}}
+.sb-chip.purple b{{color:#8e44ad}}
+.sb-toggle{{flex:0 0 auto;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px;white-space:nowrap}}
+.sb-toggle .chev{{font-size:9px;transition:transform .15s}}
+.sb-toggle .t-open{{display:none}}
+.summary-wrap:not(.collapsed) .sb-toggle .t-open{{display:inline}}
+.summary-wrap:not(.collapsed) .sb-toggle .t-closed{{display:none}}
+.summary-wrap:not(.collapsed) .sb-toggle .chev{{transform:rotate(180deg)}}
+.summary-wrap.collapsed .summary{{display:none}}
+.inspector-hd{{white-space:nowrap}}
+.inspector-hd .nav span{{min-width:40px}}
+.inspector-hd .nav .ins-toggle{{padding:3px 7px}}
+.inspector-hd .nav .ins-toggle .chev{{display:inline-block;font-size:9px;transition:transform .15s}}
+.inspector.collapsed .inspector-body{{display:none}}
+.inspector.collapsed .ins-toggle .chev{{transform:rotate(-90deg)}}
+.legend-ctl{{overflow-x:hidden;overflow-y:auto}}
+.legend-hd{{position:sticky;top:0;background:var(--surface);z-index:1}}
+.legend-sec.layer .legend-rows{{display:none}}
+.legend-sec.layer.active .legend-rows{{display:block}}
+.legend-sec.layer .legend-sec-title{{margin-bottom:0}}
+.legend-sec.layer.active .legend-sec-title{{margin-bottom:4px}}
+@media (max-height:1000px), (max-width:1100px){{
+  header{{padding:13px 20px}}
+  header h1{{font-size:19px}}
+  header p{{font-size:12px;margin-top:3px}}
+  .hdr-actions{{flex-direction:row;flex-wrap:wrap}}
+  .dm-btn{{padding:7px 12px}}
+  .summary-bar{{padding:6px 16px}}
+  .summary{{padding:10px 16px;gap:14px}}
+  .summary-wrap:not(.collapsed) .summary{{max-height:40vh;overflow-y:auto}}
+  .summary-group + .summary-group{{padding-left:14px}}
+  .summary-group-cards{{gap:8px}}
+  .card{{padding:8px 12px;min-width:92px}}
+  .card .num{{font-size:20px}}
+  #mapFsWrap{{margin:0 16px 12px}}
+  .inspector{{width:260px;max-height:45%}}
+  .legend-ctl{{width:170px}}
+  .sensor-toggle-btn{{padding:6px 10px}}
+}}
+@media (max-width:700px){{
+  header{{flex-wrap:wrap}}
+  .search-ctl{{width:min(320px,55%)}}
+}}
+@media (max-width:520px){{
+  .inspector{{width:calc(100% - 68px);bottom:64px}}
+}}
 </style>
 </head>
 <body>
@@ -858,7 +944,7 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
   <div>
     <h1>Bluetooth Paths — Map</h1>
     <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
-       {len(sensor_list)} API sensors&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors</p>
+       {len(sensor_list)} API sensors{f'&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors' if include_live_data else ''}</p>
     {f'<p style="opacity:1;color:#ffc978;font-weight:bold;margin-top:6px"><i class="ti ti-alert-triangle" style="font-size:12px" aria-hidden="true"></i>&nbsp; Live feed frozen since {to_cyprus(feed_since)} (ongoing {feed_stale_duration})</p>' if feed_stale_duration else ''}
   </div>
   <div class="hdr-actions">
@@ -869,13 +955,18 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
   </div>
 </header>
 
-<div class="summary">
+<div class="summary-wrap" id="summaryWrap">
+<button class="summary-bar" id="summaryBar" type="button" aria-expanded="true" title="Show or hide the summary cards">
+  <span class="sb-chips">{summary_chips_html}</span>
+  <span class="sb-toggle"><span class="t-closed">Details</span><span class="t-open">Hide</span> <span class="chev">&#9660;</span></span>
+</button>
+<div class="summary" id="summary">
   <div class="summary-group">
     <div class="summary-group-title">Inventory</div>
     <div class="summary-group-cards">
       <div class="card"><div class="num">{active_count}</div><div class="lbl">Bluetooth paths</div></div>
       <div class="card"><div class="num">{len(sensor_list)}</div><div class="lbl">API sensors</div></div>
-      <div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>
+      {f'<div class="card"><div class="num">{len(ref_list)}</div><div class="lbl">Spreadsheet sensors</div></div>' if include_live_data else ''}
     </div>
   </div>
   <div class="summary-group">
@@ -896,6 +987,7 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
   {direction_cards_html}
   {data_quality_cards_html}
 </div>
+</div>
 
 <div id="mapFsWrap"><div id="map"></div></div>
 
@@ -906,6 +998,8 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
 // viewers. Reuse the include_live_data signal: it already means "this is the
 // published copy", not the local review session.
 var QA_MODE = {json.dumps(bool(include_live_data))};
+// Short or narrow windows start with the summary cards, legend and review panel collapsed.
+var SMALL_Q = '(max-height: 1000px), (max-width: 1100px)';
 var FEATURES = {features_json};
 var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
@@ -983,7 +1077,14 @@ var FiltersPanel = L.Control.extend({{
     hd.innerHTML = '<i class="ti ti-adjustments-horizontal" aria-hidden="true"></i><span class="lbl">Filters</span><span class="chev">&#9660;</span>';
     hd.title = 'Filters';
     var body = L.DomUtil.create('div', 'filters-body', box);
-    hd.onclick = function() {{ box.classList.toggle('collapsed'); }};
+    hd.onclick = function() {{
+      box.classList.toggle('collapsed');
+      if (!box.classList.contains('collapsed') && map.getSize().y < 600) {{
+        var lg = document.querySelector('.legend-ctl');
+        if (lg) lg.classList.add('collapsed');
+      }}
+      if (window._fitLegend) _fitLegend();
+    }};
     this._body = body;
     return box;
   }}
@@ -1023,6 +1124,27 @@ map.setMaxZoom(19);
 var _dark = true;
 document.body.classList.add('dark');
 var tileLayer = L.maplibreGL({{style: DARK_STYLE, attribution: BASEMAP_ATTRIBUTION}}).addTo(map);
+// Summary strip: a one-line digest that expands to the full cards. Short windows
+// start collapsed; the reviewer's own choice is remembered per browser.
+(function() {{
+  var wrap = document.getElementById('summaryWrap'), bar = document.getElementById('summaryBar');
+  if (!wrap || !bar) return;
+  var stored = null;
+  try {{ stored = localStorage.getItem('btSummaryOpen'); }} catch (e) {{}}
+  var open = stored === null ? !window.matchMedia(SMALL_Q).matches : stored === '1';
+  function apply() {{
+    wrap.classList.toggle('collapsed', !open);
+    bar.setAttribute('aria-expanded', open ? 'true' : 'false');
+    setTimeout(function() {{ map.invalidateSize(); }}, 60);
+  }}
+  bar.onclick = function() {{
+    open = !open;
+    try {{ localStorage.setItem('btSummaryOpen', open ? '1' : '0'); }} catch (e) {{}}
+    apply();
+  }};
+  apply();
+}})();
+
 function toggleDark() {{
   _dark = !_dark;
   document.body.classList.toggle('dark', _dark);
@@ -1090,6 +1212,8 @@ function _syncModeControls() {{
     if (b) {{ b.innerHTML = m[1] + ': ' + (m[2] ? 'ON' : 'OFF'); b.classList.toggle('off', !m[2]); }}
     var t = document.querySelector('.legend-toggle[data-mode="' + m[0] + '"]');
     if (t) {{ t.textContent = m[2] ? 'ON' : 'OFF'; t.classList.toggle('on', m[2]); }}
+    var sec = document.querySelector('.legend-sec[data-mode="' + m[0] + '"]');
+    if (sec) sec.classList.toggle('active', m[2]);
   }});
 }}
 function _setMode(name) {{
@@ -1307,7 +1431,7 @@ FEATURES.forEach(function(f) {{
     detailHtml += '<br>Speed: ' + (spd === -1 ? '<span style="color:#c0392b">malfunctioning</span>' : (spd != null ? spd + ' km/h' : '&#8212;'));
     detailHtml += '<br>Travel time: ' + (tt != null ? tt + ' s' : '&#8212;');
     detailHtml += '<br><span style="color:#888;font-size:11px">as of ' + f.live.last_seen + '</span>';
-  }} else {{
+  }} else if (QA_MODE) {{
     detailHtml += '<br><span style="color:#888;font-size:11px">No live speed/travel-time data recorded</span>';
   }}
   var dup = DUPLICATE_BY_ID[f.id];
@@ -1697,9 +1821,10 @@ function importFindings(file) {{
 }} // end if (QA_MODE) — flagging + export
 
 /* -- Inspector panel: selection detail, flag/note ---- */
-var insBody, insCounter;
+var insBody, insCounter, insWrap, _insLastSel = null;
 (function() {{
   var wrap = L.DomUtil.create('div', 'inspector', map.getContainer());
+  insWrap = wrap;
   L.DomEvent.disableClickPropagation(wrap);
   L.DomEvent.disableScrollPropagation(wrap);
   var hd = L.DomUtil.create('div', 'inspector-hd', wrap);
@@ -1712,6 +1837,11 @@ var insBody, insCounter;
   nextBtn.innerHTML = '&#9654;'; nextBtn.title = 'Next path';
   prevBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); stepTo(-1); }};
   nextBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); stepTo(1); }};
+  var colBtn = L.DomUtil.create('button', 'ins-toggle', nav);
+  colBtn.innerHTML = '<span class="chev">&#9660;</span>';
+  colBtn.title = 'Collapse or expand this panel';
+  colBtn.onclick = function(e) {{ L.DomEvent.stopPropagation(e); wrap.classList.toggle('collapsed'); }};
+  if (window.matchMedia(SMALL_Q).matches) wrap.classList.add('collapsed');
 
   // Drag the panel by its header — it starts pinned bottom-left, but a
   // reviewer working a dense overlap cluster often needs it out of the way
@@ -1808,6 +1938,7 @@ function renderInspector() {{
   }}
 
   if (selectedId === null) {{
+    _insLastSel = null;
     insBody.innerHTML = flagSummary + '<div class="empty">Click a path, or use &#9664; &#9654; to step through ' +
       'all ' + list.length + ' paths' + '.</div>';
     insCounter.textContent = list.length ? '0 / ' + list.length : '';
@@ -1817,6 +1948,7 @@ function renderInspector() {{
   var obj = pathObjs.filter(function(p) {{ return p.feature.id === selectedId; }})[0];
   if (!obj) return;
   var f = obj.feature;
+  if (selectedId !== _insLastSel) {{ insWrap.classList.remove('collapsed'); _insLastSel = selectedId; }}
   var idx = list.findIndex(function(x) {{ return x.id === selectedId; }});
   insCounter.textContent = idx === -1 ? '—' : (idx + 1) + ' / ' + list.length;
 
@@ -1903,7 +2035,7 @@ function makeToggleBtn(label, layer, extraClass) {{
   return btn;
 }}
 var apiToggleCtl = makeToggleBtn('API sensors', sensorLayer);
-var refToggleCtl = makeToggleBtn('Spreadsheet sensors', refLayer, 'ref');
+var refToggleCtl = QA_MODE ? makeToggleBtn('Spreadsheet sensors', refLayer, 'ref') : null;
 
 if (HAS_DROPPED_DUPLICATES) {{
   (function() {{
@@ -1957,7 +2089,7 @@ if (HAS_DATA_QUALITY) {{
   (function() {{
     var btn = L.DomUtil.create('button', 'sensor-toggle-btn dataq off', filtersBody);
     btn.innerHTML = 'Data quality: OFF';
-    btn.title = 'Colours each path by whether it consistently produces no or unrealistic data: red = no data (-1, 0 or missing), orange = unrealistic values, brown = stale, purple = intermittent, green = good. ' + DQ_LIMITS_TEXT + ' Switches off the other colour layers.';
+    btn.title = 'Colours each path by whether it consistently produces no ' + (QA_MODE ? 'or unrealistic ' : '') + 'data: red = no data (-1, 0 or missing), ' + (QA_MODE ? 'orange = unrealistic values, ' : '') + 'brown = stale, purple = intermittent, green = good. ' + DQ_LIMITS_TEXT + ' Switches off the other colour layers.';
     btn.onclick = function(e) {{
       L.DomEvent.stopPropagation(e);
       _setMode(DATAQ_MODE ? null : 'dataq');
@@ -1971,40 +2103,43 @@ var LegendControl = L.Control.extend({{
     var box = L.DomUtil.create('div', 'legend-ctl');
     L.DomEvent.disableClickPropagation(box);
     var reversedRows = HAS_REVERSED_CHECK ?
-      '<div class="legend-sec">' +
-        '<div class="legend-sec-title">Reversed-direction check <span class="legend-toggle" data-mode="reversed" title="Turn this layer on or off">OFF</span><br>(when toggle is on)</div>' +
+      '<div class="legend-sec layer" data-mode="reversed">' +
+        '<div class="legend-sec-title">Reversed-direction check <span class="legend-toggle" data-mode="reversed" title="Turn this layer on or off">OFF</span></div>' +
+        '<div class="legend-rows">' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.bug + '"></span></span>Bug — direction reversed</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ambiguous + '"></span></span>Ambiguous — needs a look</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + REVERSED_COLORS.ok + '"></span></span>OK — direction confirmed</div>' +
-      '</div>' : '';
+      '</div></div>' : '';
     var directionRows = HAS_DIRECTION_CHECK ?
-      '<div class="legend-sec">' +
-        '<div class="legend-sec-title">Direction check (geometry) <span class="legend-toggle" data-mode="direction" title="Turn this layer on or off">OFF</span><br>(when toggle is on)</div>' +
+      '<div class="legend-sec layer" data-mode="direction">' +
+        '<div class="legend-sec-title">Direction check (geometry) <span class="legend-toggle" data-mode="direction" title="Turn this layer on or off">OFF</span></div>' +
+        '<div class="legend-rows">' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['1-non-reversed'] + '"></span></span>Non-reversed pair</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['2-same-direction-unexplained'] + '"></span></span>Same direction, unexplained</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['4-unclear'] + '"></span></span>Unclear</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_COLORS['3-healthy'] + '"></span></span>Healthy (opposite)</div>' +
         '<div class="legend-row"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DIRECTION_PARTNER_COLOR + '"></span></span>Partner of selected path</div>' +
-      '</div>' : '';
+      '</div></div>' : '';
     function _dqRow(cat, text, tip) {{
       return '<div class="legend-row" title="' + tip + '"><span class="legend-swatch"><span class="legend-line" style="border-color:' + DATAQ_COLORS[cat] + '"></span></span>' + text + '</div>';
     }}
     var dataqRows = HAS_DATA_QUALITY ?
-      '<div class="legend-sec">' +
-        '<div class="legend-sec-title">Data quality <span class="legend-toggle" data-mode="dataq" title="Turn this layer on or off">OFF</span><br>(when toggle is on)</div>' +
+      '<div class="legend-sec layer" data-mode="dataq">' +
+        '<div class="legend-sec-title">Data quality <span class="legend-toggle" data-mode="dataq" title="Turn this layer on or off">OFF</span></div>' +
+        '<div class="legend-rows">' +
         _dqRow('no_data', 'No data', 'Speed or travel time is -1, 0 or missing. ' + DQ_LIMITS_TEXT) +
-        _dqRow('implausible', 'Unrealistic data', 'Speed under 5 or over 140 km/h, or a travel time implying that over the path length. ' + DQ_LIMITS_TEXT) +
+        (QA_MODE ? _dqRow('implausible', 'Unrealistic data', 'Speed under 5 or over 140 km/h, or a travel time implying that over the path length. ' + DQ_LIMITS_TEXT) : '') +
         _dqRow('stale', 'Stale', 'Measurement timestamp too old. ' + DQ_LIMITS_TEXT) +
         _dqRow('intermittent', 'Intermittent', 'Often bad, not consistently.') +
         _dqRow('good', 'Good', 'Reporting normally.') +
-      '</div>' : '';
+      '</div></div>' : '';
     box.innerHTML =
       '<div class="legend-hd" id="legendHd">Legend <span class="chev">&#9660;</span></div>' +
       '<div class="legend-body">' +
         '<div class="legend-sec">' +
           '<div class="legend-sec-title">Sensors</div>' +
           '<div class="legend-row"><span class="legend-swatch"><span class="legend-dot" style="background:#1f4e79"></span></span>API sensor</div>' +
-          '<div class="legend-row"><span class="legend-swatch"><span class="legend-diamond" style="background:#8e44ad"></span></span>Spreadsheet sensor</div>' +
+          (QA_MODE ? '<div class="legend-row"><span class="legend-swatch"><span class="legend-diamond" style="background:#8e44ad"></span></span>Spreadsheet sensor</div>' : '') +
         '</div>' +
         '<div class="legend-sec">' +
           '<div class="legend-sec-title">Paths</div>' +
@@ -2023,11 +2158,33 @@ var LegendControl = L.Control.extend({{
       _setMode(on ? null : m);
     }});
     var hd = box.querySelector('#legendHd');
-    hd.onclick = function() {{ box.classList.toggle('collapsed'); }};
+    hd.onclick = function() {{
+      box.classList.toggle('collapsed');
+      if (!box.classList.contains('collapsed') && map.getSize().y < 600) {{
+        var fl = document.querySelector('.filters-ctl');
+        if (fl) fl.classList.add('collapsed');
+      }}
+      if (window._fitLegend) _fitLegend();
+    }};
     return box;
   }}
 }});
 map.addControl(new LegendControl());
+(function() {{
+  var box = document.querySelector('.legend-ctl');
+  // Cap the legend to the space under the top-right controls (zoom, filters), so a tall
+  // legend scrolls instead of overlapping them or being clipped at the map's top edge.
+  window._fitLegend = function() {{
+    var mapTop = map.getContainer().getBoundingClientRect().top, stackBottom = 0;
+    document.querySelectorAll('.leaflet-top.leaflet-right .leaflet-control').forEach(function(c) {{
+      stackBottom = Math.max(stackBottom, c.getBoundingClientRect().bottom - mapTop);
+    }});
+    box.style.maxHeight = Math.max(120, map.getSize().y - stackBottom - 52) + 'px';
+  }};
+  _fitLegend();
+  map.on('resize', _fitLegend);
+  if (window.matchMedia(SMALL_Q).matches) box.classList.add('collapsed');
+}})();
 
 if (QA_MODE) {{
   document.getElementById('exportBtn').onclick = exportFindings;
@@ -2207,7 +2364,7 @@ def main():
                                      include_live_data=False,
                                      reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
                        direction_by_id=direction_by_id, direction_pairs=direction_pairs,
-                       data_quality_by_id=public_data_quality(data_quality_by_id))
+                       data_quality_by_id=public_data_quality(find_data_quality(paths, use_snapshots=False)))
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         published_path = DOCS_DIR / "bt-paths-map.html"
         published_path.write_text(published_page, encoding="utf-8")

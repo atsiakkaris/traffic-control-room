@@ -413,7 +413,7 @@ Leaflet map with no other groups and no health data.
   never sent anywhere. This means findings are per-browser/per-machine and
   are lost on a fresh profile — the **CSV export/import** buttons exist
   specifically so a reviewer can back up their findings or hand them to
-  someone else, merging by path ID without wiping local-only entries. Flags
+  someone else, merging by path ID without wiping entries that aren't in the file. Flags
   for paths no longer present in the API (retired/removed) are silently
   pruned on load rather than lingering as orphaned entries.
 - **Cycling scope** — Prev/Next normally step through all paths alphabetically;
@@ -442,12 +442,9 @@ browser could keep showing a stale dashboard.
 `bt_paths_map.py --publish` after every scheduled test run and commits
 `docs/bt-paths-map.html` alongside the dashboard, so path additions/deletions
 and the duplicate/reversed-direction/overlap checks stay current without a
-manual step. `QA Locations.xlsx` is gitignored and not present on the GitHub
-Actions runner, so `load_reference_sensors()` degrades gracefully (warns,
-returns `[]`) and the auto-published map always shows 0 spreadsheet sensors —
-the spreadsheet-comparison layer still needs a manual
-`bt_paths_map.py --publish` run with the xlsx present locally whenever that
-comparison needs refreshing.
+manual step.
+
+The published copy is a read-only subset.
 
 ---
 

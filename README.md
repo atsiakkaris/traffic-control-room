@@ -36,13 +36,8 @@ gitignored). ⚠️ Flags/notes are saved in your **browser's local storage** �
 they don't sync across machines or browsers and aren't backed up anywhere;
 export to CSV periodically if you want to keep them.
 
-The copy shared with colleagues at the link above (`docs/bt-paths-map.html`)
-**auto-refreshes every 6 hours** alongside the dashboard, so path
-additions/deletions and the duplicate/overlap checks stay current on their
-own. The one thing that doesn't auto-refresh is the `QA Locations.xlsx`
-spreadsheet-comparison layer (the file isn't present in CI) — run
-`publish_bt_map.bat` locally, then commit and push `docs/bt-paths-map.html`,
-whenever that layer needs updating.
+The copy at the link above (`docs/bt-paths-map.html`) **auto-refreshes every 6 hours** alongside the dashboard, so path
+additions/deletions and the duplicate/overlap checks stay current on their own.
 
 ---
 
@@ -193,9 +188,9 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   └── history.db              ← SQLite DB (auto-committed after each run)
 ├── reports/
 │   ├── latest.html             ← Generated dashboard (auto-committed after each run)
-│   └── bt_paths_map.html       ← Local BT paths review map (gitignored — regenerate with bt_paths_map.bat)
+│   └── bt_paths_map.html       ← BT paths review map (gitignored — regenerate with bt_paths_map.bat)
 ├── docs/
-│   └── bt-paths-map.html       ← Published copy of the BT paths map (GitHub Pages; auto-refreshed every 6h — run publish_bt_map.bat for the spreadsheet-comparison layer)
+│   └── bt-paths-map.html       ← BT paths map served by GitHub Pages (auto-refreshed every 6h)
 ├── index.html                  ← Tabbed landing page (GitHub Pages root) switching Dashboard / BT Paths Map
 ├── QA Locations.xlsx           ← Reference equipment inventory (gitignored — local/cloud only)
 ├── .github/workflows/
@@ -211,8 +206,8 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 ├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
 ├── update_projects.bat         ← Refresh ownership/commissioning in the DB from QA Locations.xlsx
 ├── qa_tdu.bat / qa_bt.bat / qa_vms.bat  ← Open the per-group QA matching report (needs QA Locations.xlsx)
-├── bt_paths_map.bat             ← Open the local BT paths review map
-├── publish_bt_map.bat            ← Regenerate + write the shared copy to docs/bt-paths-map.html
+├── bt_paths_map.bat             ← Open the BT paths review map
+├── publish_bt_map.bat            ← Regenerate and write docs/bt-paths-map.html
 └── requirements.txt
 ```
 

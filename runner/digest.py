@@ -482,7 +482,7 @@ def _note_section(note):
     return f"""
     <div class="dg-note" style="background:#fff8e6;border:1px solid #fac775;border-radius:8px;padding:14px 18px;margin-bottom:24px">
       <div class="dg-note-title" style="font-size:14px;font-weight:700;color:#633806;margin-bottom:2px">Editor's Note</div>
-      <div class="dg-note-title" style="font-size:12px;font-weight:600;color:#633806;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">📌 This week</div>
+      <div class="dg-note-title" style="font-size:12px;font-weight:600;color:#633806;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">📌 Last week</div>
       <div style="font-size:13px;color:#374151;line-height:1.5">{_render_note_html(note)}</div>
     </div>"""
 
