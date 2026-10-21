@@ -293,8 +293,8 @@ implicit, untested contract with `tests.py`'s message wording.
 
 ### Base map
 
-Every map in the project (the dashboard, the BT paths map, the QA reports and the
-invalid-paths map) uses the same base map: **OpenFreeMap** vector tiles drawn with
+Every map in the project (the dashboard, the BT paths map, and the QA reports)
+uses the same base map: **OpenFreeMap** vector tiles drawn with
 MapLibre inside Leaflet (`L.maplibreGL`), always in the light `liberty` style
 whatever the page theme (the Dark/Light buttons change the page, not the map).
 It needs no API key and, unlike `tile.openstreetmap.org` and CARTO, also
@@ -433,12 +433,38 @@ Leaflet map with no other groups and no health data.
   (otherwise "next" is nearly useless — the next alphabetical path can be
   anywhere on the map).
 
+**Control Room app (`tools/control_room.py`, `control_room.bat`).** A stdlib
+`http.server` bound to `127.0.0.1` that serves this same page, built per request with
+`build_html(..., server_mode=True)` (inputs from `analyse_paths()`). Server mode only
+swaps in three JS fragments: flags load from / save to `GET|PUT /api/review`
+(`results/path_review.json`) instead of localStorage, and a *Review & delete…* dialog
+calls `POST /api/delete`. Delete is a two-step flow: a dry run returns the deletable ids
+(flagged **and** present in the DB) plus a single-use token bound to that exact list; a
+live call needs the token and the literal `YES`, then posts to the SWARCO delete
+address (`CONTROL_ROOM_DELETE_URL` in the git-ignored `.env`, never in the code) per id (stops at the first failure) and appends every result to
+`results/delete_log.csv`. Cross-origin writes are refused. Delete is opt-in per PC: `allow_delete_setting()` is true
+only with `CONTROL_ROOM_ALLOW_DELETE=1` in the environment or the git-ignored `.env`;
+otherwise the page omits the button (`build_html(..., allow_delete=False)`), the shell shows
+a *Read-only* badge and `/api/delete` answers 403 for dry runs and live calls alike. Every server-mode fragment
+is empty by default, so the standalone and published pages are byte-for-byte
+unchanged (`tests/test_control_room.py` checks the markers are absent).
+The app also serves `/sensors/<group>` (groups and match radii read from
+`update_projects.GROUPS`): `qa.load_api_sensors` + `load_reference` + `match_sensors` →
+`qa.generate_html`, with a view switcher injected. Read-only — it deliberately skips the
+`upsert_sensor_projects` write that `qa.py`'s CLI does.
+Built pages are cached in the server keyed by `results/history.db` mtime (warmed in a
+thread at start-up; `?refresh=1` forces a rebuild). `/` is a small shell page (tab bar + one iframe per view, all kept loaded); the map itself is
+served at `/map`. The shell exposes `crShow(tab, {path|lat,lon})`, which the pages inside
+the frames call to switch tab; it focuses a path through `crFocusPath` / `crFocusLoc` on the
+map frame, so the map is never reloaded. The tab bar's Refresh fetches the tab's URL with
+`?refresh=1` and reloads that frame.
+
 ---
 
 ## 6b. Publishing the BT paths map (`--publish`, `index.html`)
 
-**Sharing with colleagues:** `python runner/bt_paths_map.py --publish` (via
-`publish_bt_map.bat`, or automatically — see below) additionally writes the
+**Sharing with colleagues:** `python runner/bt_paths_map.py --publish` (run by hand,
+or automatically — see below) additionally writes the
 generated page to `docs/bt-paths-map.html`, which is tracked in git and served
 by GitHub Pages alongside the main dashboard (Pages source is `main` /
 `/ (root)`, so nothing under `docs/` needs a separate Pages config).
@@ -479,9 +505,8 @@ exists in an external spreadsheet.
    nearest-match, so ambiguous cases resolve to the overall best pairing.
    Names are never compared; matching is purely geographic.
 
-   The radius is set per group in `update_projects.GROUPS`, and the
-   `qa_*.bat` launchers must pass the same value or the QA report will
-   disagree with what the DB holds:
+   The radius is set per group in `update_projects.GROUPS`; the Control Room sensor tabs
+   read it from there, so the QA view always agrees with what the DB holds:
 
    | Group | `max_dist` | Why |
    |---|---|---|

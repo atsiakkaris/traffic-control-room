@@ -244,21 +244,9 @@ def test_vms_matches_at_500m_not_300m():
     assert radii["Bluetooth"] == 300
 
 
-def test_qa_vms_launcher_uses_the_same_radius_as_update_projects():
-    """A launcher that disagrees with GROUPS makes the QA report contradict the DB."""
-    import re
-    from pathlib import Path
-    import update_projects
-    radii = {g: d for g, _s, d in update_projects.GROUPS}
-    bat = (Path(__file__).parent.parent / "qa_vms.bat").read_text()
-    m = re.search(r"--max-dist\s+(\d+)", bat)
-    assert m, "qa_vms.bat must pass --max-dist explicitly"
-    assert int(m.group(1)) == radii["VMS"]
-
-
 # ── QA map ruler ───────────────────────────────────────────────────────────────
 #
-# generate_html() is shared by all three qa_*.bat reports (Traffic Detection,
+# generate_html() is shared by all three sensor-location reports (Traffic Detection,
 # Bluetooth, VMS), so one check here covers all three.
 
 def test_qa_report_includes_a_ruler_alongside_get_coordinates(tmp_path):
@@ -315,7 +303,7 @@ def test_badge_active_quotes_the_class_attribute():
 
 
 def test_qa_report_status_columns_present_in_both_panels(tmp_path):
-    """generate_html() is shared by all three qa_*.bat reports, so one check
+    """generate_html() is shared by all three sensor-location reports, so one check
     here covers Traffic Detection, Bluetooth, and VMS."""
     import qa
     ref = [{"name": "Test Site", "lat": 35.0, "lon": 33.0, "source": "x.xlsx",
