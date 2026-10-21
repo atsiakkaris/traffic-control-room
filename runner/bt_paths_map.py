@@ -11,6 +11,7 @@ everything else on the main dashboard.
 Usage:
     python runner/bt_paths_map.py
     python runner/bt_paths_map.py --out reports/bt_paths_map.html
+    python runner/bt_paths_map.py --live-geometry   # preview the API's current geometry
 """
 
 import argparse
@@ -525,7 +526,8 @@ def load_reference_sensors():
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                 dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
                 reversed_by_id=None, reversed_groups=None,
-                direction_by_id=None, direction_pairs=None, data_quality_by_id=None):
+                direction_by_id=None, direction_pairs=None, data_quality_by_id=None,
+                live_geometry_at=None):
     now =datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     # Same feed_state row the dashboard banner reads — shown here too so
     # anyone on the map (including the published copy) sees the live feed is
@@ -945,6 +947,7 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
     <h1>Bluetooth Paths — Map</h1>
     <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
        {len(sensor_list)} API sensors{f'&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors' if include_live_data else ''}</p>
+    {f'<p style="opacity:1;color:#7dd3fc;font-weight:bold;margin-top:6px"><i class="ti ti-cloud-download" style="font-size:12px" aria-hidden="true"></i>&nbsp; Preview: path geometry fetched live from the API at {live_geometry_at} — not saved to the database</p>' if live_geometry_at else ''}
     {f'<p style="opacity:1;color:#ffc978;font-weight:bold;margin-top:6px"><i class="ti ti-alert-triangle" style="font-size:12px" aria-hidden="true"></i>&nbsp; Live feed frozen since {to_cyprus(feed_since)} (ongoing {feed_stale_duration})</p>' if feed_stale_duration else ''}
   </div>
   <div class="hdr-actions">
@@ -2288,7 +2291,15 @@ function goToSearchResult(item) {{
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out", default=str(REPORT_DIR / "bt_paths_map.html"))
+    ap.add_argument("--out", default=None,
+                     help="Output file (default reports/bt_paths_map.html, or "
+                          "reports/bt_paths_map_live.html with --live-geometry).")
+    ap.add_argument("--live-geometry", action="store_true",
+                     help="Preview mode: take path geometry straight from the live API instead of "
+                          "the database, e.g. to see paths you are creating or editing in SWARCO. "
+                          "Read-only — nothing is written to the database, and --publish is refused. "
+                          "Run history, live speeds and data quality still come from the database, "
+                          "so new path IDs show no history.")
     ap.add_argument("--show-duplicates", action="store_true",
                      help="Start with dropped duplicate registrations visible on load, instead "
                           "of hidden behind the 'Show duplicates' toggle — useful for eyeballing "
@@ -2297,8 +2308,19 @@ def main():
                      help="Also write a copy to docs/bt-paths-map.html, the file served by "
                           "GitHub Pages for sharing this tool with colleagues.")
     args = ap.parse_args()
+    if args.live_geometry and args.publish:
+        ap.error("--live-geometry is a local preview and cannot be combined with --publish")
+    if args.out is None:
+        args.out = str(REPORT_DIR / ("bt_paths_map_live.html" if args.live_geometry else "bt_paths_map.html"))
 
-    paths = fetch_bt_path_coords()
+    live_geometry_at = None
+    if args.live_geometry:
+        from bt_direction_check import load_live
+        paths = load_live()
+        live_geometry_at = datetime.now(CYPRUS_TZ).strftime("%H:%M")
+        print(f"Live geometry: {len(paths)} paths from the API (database not modified)")
+    else:
+        paths = fetch_bt_path_coords()
 
     keep_ids, collapsed, ambiguous = find_duplicate_groups(paths)
     dropped_ids = {pid for _, _, dropped, _ in collapsed for pid in dropped}
@@ -2345,7 +2367,8 @@ def main():
                        dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
                        reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
                        direction_by_id=direction_by_id, direction_pairs=direction_pairs,
-                       data_quality_by_id=data_quality_by_id)
+                       data_quality_by_id=data_quality_by_id,
+                       live_geometry_at=live_geometry_at)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

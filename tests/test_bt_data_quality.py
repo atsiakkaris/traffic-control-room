@@ -1,6 +1,8 @@
 """Tests for bt_data_quality.py - persistent no-data / unrealistic-data detection."""
 
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "runner"))
@@ -74,3 +76,12 @@ def test_only_recent_window_counts():
     # long-ago outage, healthy for the last 20 runs
     r = dq.classify_path(hist(*["failing"] * 30 + ["ok"] * 20), [])
     assert r["category"] == "good"
+
+
+def test_live_geometry_refuses_publish(monkeypatch):
+    """--live-geometry is a local preview: it must never be combined with --publish."""
+    import bt_paths_map as bpm
+    monkeypatch.setattr(sys, "argv", ["bt_paths_map.py", "--live-geometry", "--publish"])
+    with pytest.raises(SystemExit) as exc:
+        bpm.main()
+    assert exc.value.code == 2

@@ -11,6 +11,7 @@ digest_note.local.html
 dashboard_note.local.html
 reports/qa_*.html
 reports/bt_paths_map.html
+reports/bt_paths_map_live.html
 reports/bt_paths_invalid_map.html
 run.bat
 digest.bat
