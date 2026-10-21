@@ -178,6 +178,122 @@ def build_page(allow_delete=True):
     return m.build_html(paths, sensors, ref_sensors, server_mode=True, allow_delete=allow_delete, **kwargs), paths
 
 
+# ── triangulation panel (Bluetooth sensors tab) ──────────────────────────────
+
+TRIANGULATION_JS = """<style>
+#triBtn{position:fixed;left:10px;bottom:10px;z-index:99998;background:#7b241c;color:#fff;border:0;border-radius:999px;
+  padding:8px 14px;font:13px Arial,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.45)}
+#triPanel{position:fixed;left:10px;bottom:52px;width:400px;max-width:calc(100vw - 20px);max-height:64vh;overflow:auto;z-index:99998;
+  display:none;background:#fff;color:#222;border-radius:10px;box-shadow:0 4px 22px rgba(0,0,0,.4);font:13px Arial,sans-serif}
+#triPanel h4{margin:0;padding:12px 14px;border-bottom:1px solid #ddd;font-size:14px}
+#triPanel .tb{padding:10px 14px}
+#triPanel .sm{color:#555;font-size:12px;line-height:1.4}
+#triPanel label{display:block;margin:4px 0}
+#triPanel .row{padding:7px 8px;border-radius:6px;cursor:pointer;border-left:5px solid #ccc;margin:4px 0;background:#f6f7f9}
+#triPanel .row:hover{background:#e8eef5}
+#triPanel .row small{display:block;color:#555}
+#triPanel button.ex{margin:8px 14px 12px;padding:6px 12px;border:0;border-radius:6px;background:#2c3e50;color:#fff;cursor:pointer}
+.triPop{max-width:300px;font:13px Arial,sans-serif}.triPop ul{margin:6px 0 0;padding-left:18px}
+.triPop a{color:#2e86c1;cursor:pointer}
+</style>
+<button id="triBtn"></button>
+<div id="triPanel">
+  <h4>Which sensors look faulty? (triangulation)</h4>
+  <div class="tb sm" id="triSum"></div>
+  <div class="tb" id="triOpts"></div>
+  <div class="tb" id="triList"></div>
+  <button class="ex" id="triEx">Export CSV</button>
+</div>
+<script>
+(function() {
+  var D = __DATA__;
+  var COLORS = {faulty_high: '#c0392b', faulty_likely: '#e67e22', path_problem: '#8e44ad'};
+  var shell = (window.parent !== window && window.parent.crShow) ? window.parent : null;
+  var layer = L.layerGroup().addTo(map), markers = {};
+  var on = {faulty_high: true, faulty_likely: true, path_problem: false};   // path problems start hidden
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function popup(s) {
+    var h = '<div class="triPop"><b>' + esc(s.name) + '</b> (site ' + esc(s.site_code) + ')<br><i>' + esc(D.labels[s.verdict]) + '</i><br>' + esc(s.reason) + '<ul>';
+    s.paths.forEach(function(p) {
+      h += '<li>' + esc(p.name) + ' - ' + esc(p.state) + (shell ? ' <a data-showpath="' + esc(p.id) + '">show path</a>' : '') + '</li>';
+    });
+    return h + '</ul></div>';
+  }
+  D.sensors.forEach(function(s) {
+    if (s.lat == null) return;
+    markers[s.id] = L.circleMarker([s.lat, s.lon], {radius: 16, color: COLORS[s.verdict], weight: 4, fill: false}).bindPopup(popup(s));
+  });
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest && e.target.closest('[data-showpath]');
+    if (a && shell) { e.preventDefault(); shell.crShow('paths', {path: a.getAttribute('data-showpath')}); }
+  });
+  var btn = document.getElementById('triBtn'), panel = document.getElementById('triPanel');
+  var nSusp = D.sensors.filter(function(s) { return s.verdict !== 'path_problem'; }).length;
+  btn.textContent = 'Triangulation: ' + nSusp + ' suspect' + (nSusp === 1 ? '' : 's');
+  btn.onclick = function() { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; };
+  document.getElementById('triSum').innerHTML = D.summary;
+  var opts = document.getElementById('triOpts');
+  ['faulty_high', 'faulty_likely', 'path_problem'].forEach(function(v) {
+    var n = D.sensors.filter(function(s) { return s.verdict === v; }).length;
+    var lab = document.createElement('label');
+    lab.innerHTML = '<input type="checkbox"' + (on[v] ? ' checked' : '') + '> <span style="color:' + COLORS[v] + '">&#9679;</span> ' + esc(D.labels[v]) + ' (' + n + ')';
+    lab.firstChild.onchange = function() { on[v] = this.checked; refresh(); };
+    opts.appendChild(lab);
+  });
+  function refresh() {
+    layer.clearLayers();
+    var list = document.getElementById('triList');
+    list.innerHTML = '';
+    D.sensors.forEach(function(s) {
+      if (!on[s.verdict]) return;
+      if (markers[s.id]) layer.addLayer(markers[s.id]);
+      var r = document.createElement('div');
+      r.className = 'row'; r.style.borderLeftColor = COLORS[s.verdict];
+      r.innerHTML = '<b>' + esc(s.name) + '</b> <small>' + esc(D.labels[s.verdict]) + ' - ' + esc(s.reason) + '</small>';
+      r.onclick = function() {
+        if (s.lat == null) return;
+        map.flyTo([s.lat, s.lon], 16, {duration: 1.0});
+        if (markers[s.id]) setTimeout(function() { markers[s.id].openPopup(); }, 1100);
+      };
+      list.appendChild(r);
+    });
+    if (!list.children.length) list.innerHTML = '<div class="sm">Nothing to show for the ticked options.</div>';
+  }
+  refresh();
+  document.getElementById('triEx').onclick = function() {
+    var csv = D.csv.map(function(r) { return r.map(function(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }).join(','); }).join('\\n');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
+    a.download = 'bt_sensor_suspects.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+})();
+</script>"""
+
+
+def triangulation_html(result):
+    """The panel + map rings for the Bluetooth sensors page, from bt_sensor_suspects.analyse()."""
+    import bt_sensor_suspects as bs
+    sensors = []
+    order = {v: i for i, v in enumerate(bs.SUSPECT_VERDICTS)}
+    for sid, v in sorted(result["sensors"].items(), key=lambda kv: (order.get(kv[1]["verdict"], 9), kv[1]["name"])):
+        if v["verdict"] in bs.SUSPECT_VERDICTS:
+            sensors.append({"id": sid, "name": v["name"], "site_code": v["site_code"], "lat": v["lat"],
+                            "lon": v["lon"], "verdict": v["verdict"], "reason": v["reason"],
+                            "paths": [{"id": p["id"], "name": p["name"], "state": p["state"]} for p in v["paths"]]})
+    m = result["meta"]
+    if not m["enough_history"]:
+        summary = "Not enough healthy monitor runs yet (%d) to judge sensors." % m["runs_used"]
+    else:
+        summary = ("Based on the last %d runs in which the feed worked (%d outage runs ignored). "
+                   "%d path(s) could not be tied to two sensors and are left out. "
+                   "A path that works proves both of its sensors are alive; a sensor whose every path fails while "
+                   "the sensors at the other ends work elsewhere is the suspect." %
+                   (m["runs_used"], m["runs_ignored_as_outage"], m["unusable_paths"]))
+    data = {"sensors": sensors, "summary": summary, "labels": bs.VERDICTS, "csv": bs.csv_rows(result)}
+    return TRIANGULATION_JS.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
+
+
 # ── sensor-location pages ────────────────────────────────────────────────────
 
 def sensor_views():
@@ -199,8 +315,11 @@ NAV_JS = """<script>
     nav.appendChild(a);
     return a;
   }
-  if (pathId && shell) pill('&larr; Back to path ' + pathId, 'Select this path on the Paths tab',
-                            function() { shell.crShow('paths', {path: pathId}); });
+  if (pathId && shell) {
+    pill('&larr; Back to path ' + pathId, 'Select this path on the Paths tab',
+         function() { shell.crShow('paths', {path: pathId}); });
+    nav.classList.add('on');
+  }
   var here = pill('Paths here', 'Centre the Paths tab on the spot shown here', function() {
     if (last && shell) shell.crShow('paths', {lat: last[0], lon: last[1]});
   });
@@ -209,7 +328,7 @@ NAV_JS = """<script>
   window.addEventListener('load', function() {
     if (typeof flyTo === 'function') {
       var orig = flyTo;
-      window.flyTo = function(a, b) { last = [a, b]; if (shell) here.style.display = ''; return orig.apply(this, arguments); };
+      window.flyTo = function(a, b) { last = [a, b]; if (shell) { here.style.display = ''; nav.classList.add('on'); } return orig.apply(this, arguments); };
       if (lat && lon) setTimeout(function() { flyTo(+lat, +lon, pathId ? 'Near path ' + pathId : 'Location'); }, 300);
     }
   });
@@ -220,9 +339,9 @@ NAV_JS = """<script>
 def add_nav(page, current, views):
     """Float the jump pills (Back to path / Paths here) over a generated sensor page."""
     nav = ('<style>.crnav{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);z-index:99999;'
-           'display:flex;gap:4px;background:#1b2631;padding:5px;border-radius:999px;'
+           'display:none;gap:4px;background:#1b2631;padding:5px;border-radius:999px;'
            'box-shadow:0 2px 10px rgba(0,0,0,.45);font:13px Arial,sans-serif}'
-           '.crnav:empty{display:none}'
+           '.crnav.on{display:flex}'
            '.crnav a{color:#cfd8dc;text-decoration:none;padding:6px 14px;border-radius:999px}'
            '.crnav a:hover{background:#34495e}</style>'
            '<div class="crnav"></div>') + NAV_JS
@@ -323,6 +442,10 @@ def build_sensor_page(slug, views=None):
         out = qa.generate_html(group, api_sensors, ref_sensors, matches, Path(tmp) / "qa.html",
                                not_electrified=not_electrified, max_dist=max_dist)
         page = Path(out).read_text(encoding="utf-8")
+    if group == "Bluetooth":
+        import bt_sensor_suspects
+        tri = triangulation_html(bt_sensor_suspects.analyse())
+        page = page.replace("</body>", tri + "</body>", 1) if "</body>" in page else page + tri
     return add_nav(page, slug, views)
 
 
