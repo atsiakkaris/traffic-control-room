@@ -291,6 +291,18 @@ VMS fluctuated near the excluded count, the denominator kept collapsing to equal
 a regex over that string to compute a number would be a regression — it is an
 implicit, untested contract with `tests.py`'s message wording.
 
+### Base map
+
+Every map in the project (the dashboard, the BT paths map, the QA reports and the
+invalid-paths map) uses the same base map: **OpenFreeMap** vector tiles drawn with
+MapLibre inside Leaflet (`L.maplibreGL`), always in the light `liberty` style
+whatever the page theme (the Dark/Light buttons change the page, not the map).
+It needs no API key and, unlike `tile.openstreetmap.org` and CARTO, also
+works from a page opened from disk. Two details are easy to trip over: the plugin
+throws unless the map's max zoom is set first (`map.setMaxZoom(19)`), and it needs
+the map to have a view before the layer is added. The dashboard keeps one extra
+option, a Satellite base layer (Esri World Imagery, plain raster tiles).
+
 ### Panels, top to bottom
 
 - **System Overview** — one card per group. `group_status_card()` computes

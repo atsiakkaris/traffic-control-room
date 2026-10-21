@@ -1830,6 +1830,9 @@ def generate_report() -> str:
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -2288,14 +2291,27 @@ function _onFsChange() {
 }
 document.addEventListener('fullscreenchange', _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
-var _streetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors', maxZoom: 19
-});
+// Same base map provider as the BT paths map: OpenFreeMap (vector tiles via MapLibre).
+// Always the light style, whatever the page theme. Satellite stays as the alternative.
+var MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+var BASEMAP_ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> ' +
+  '&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' +
+  'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
+function _makeStreets() {
+  return L.maplibreGL({style: MAP_STYLE, attribution: BASEMAP_ATTRIBUTION});
+}
+function _showStreets() {
+  _streetsLayer = _makeStreets();
+  _streetsLayer.addTo(_map);
+  _streetsLayer.getContainer().style.zIndex = 0;   // keep it underneath the path/marker panes
+}
+var _streetsLayer = null;
 var _satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   attribution: 'Imagery © Esri', maxZoom: 19
 });
-_streetsLayer.addTo(_map);   // streets is the default base map
 var _satOn = false;
+_map.setMaxZoom(19);   // the MapLibre layer refuses to load without a max zoom
+_showStreets();   // streets is the default base map
 
 var _clusterOpts = {showCoverageOnHover:false, maxClusterRadius:50, disableClusteringAtZoom:13, chunkedLoading:true};
 var _clustered = true;
@@ -2927,7 +2943,7 @@ function toggleNotLive(btn) {
 function toggleBasemap(btn) {
   _satOn = !_satOn;
   if (_satOn) { _map.removeLayer(_streetsLayer); _satLayer.addTo(_map); }
-  else        { _map.removeLayer(_satLayer); _streetsLayer.addTo(_map); }
+  else        { _map.removeLayer(_satLayer); _showStreets(); }
   btn.classList.toggle('active', _satOn);
   btn.textContent = _satOn ? 'Streets' : 'Satellite';
 }

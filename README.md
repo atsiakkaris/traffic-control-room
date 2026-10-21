@@ -132,7 +132,7 @@ A purple **stuck** badge appears beside a check whose pass/fail picture has stop
 - Toggle layers on/off; filter to issues only; collapsible legend
 - **Filter by contract** — a dropdown isolates one contract's sensors on the map (or *No maintenance plan*); paths, which belong to no contract, hide while a contract is selected
 - **Hide not-live** — a toggle drops the grey awaiting-power / decommissioned markers so only equipment expected to work is shown
-- **Streets / Satellite** base-map toggle (satellite is Esri World Imagery)
+- **Streets / Satellite** base-map toggle. Streets is [OpenFreeMap](https://openfreemap.org) (always the light style) — the same base map as the BT paths map and the QA reports; satellite is Esri World Imagery
 - **Full screen** button — expands the map *and its controls* to fill the display, so filtering, clustering and playback all stay usable
 - **View on map** button on each group card isolates that group and flies to its bounds
 - **Historical playback** bar — scrub or step through the last 30 runs to see how sensor statuses changed over time

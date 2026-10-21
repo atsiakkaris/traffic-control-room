@@ -1111,11 +1111,10 @@ function _onFsChange() {{
 document.addEventListener('fullscreenchange', _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
 // Basemap: OpenFreeMap (free, no API key, current OpenStreetMap data) drawn with
-// MapLibre inside Leaflet. Liberty for light mode, Dark for dark mode. (Tried and
-// dropped: tile.openstreetmap.org and CARTO refuse pages opened from disk, Esri's
-// road network is outdated.)
-var LIGHT_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
-var DARK_STYLE  = 'https://tiles.openfreemap.org/styles/dark';
+// MapLibre inside Leaflet, always the light Liberty style whatever the page theme.
+// (Tried and dropped: tile.openstreetmap.org and CARTO refuse pages opened from disk,
+// Esri's road network is outdated.)
+var MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 var BASEMAP_ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> ' +
   '&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' +
   'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
@@ -1123,7 +1122,8 @@ map.setMaxZoom(19);
 
 var _dark = true;
 document.body.classList.add('dark');
-var tileLayer = L.maplibreGL({{style: DARK_STYLE, attribution: BASEMAP_ATTRIBUTION}}).addTo(map);
+var tileLayer = L.maplibreGL({{style: MAP_STYLE, attribution: BASEMAP_ATTRIBUTION}}).addTo(map);
+tileLayer.getContainer().style.zIndex = 0;   // keep it underneath the path/marker panes
 // Summary strip: a one-line digest that expands to the full cards. Short windows
 // start collapsed; the reviewer's own choice is remembered per browser.
 (function() {{
@@ -1150,9 +1150,6 @@ function toggleDark() {{
   document.body.classList.toggle('dark', _dark);
   document.getElementById('dmIcon').className = _dark ? 'ti ti-sun' : 'ti ti-moon';
   document.getElementById('dmLabel').textContent = _dark ? 'Light' : 'Dark';
-  map.removeLayer(tileLayer);
-  tileLayer = L.maplibreGL({{style: _dark ? DARK_STYLE : LIGHT_STYLE, attribution: BASEMAP_ATTRIBUTION}}).addTo(map);
-  tileLayer.getContainer().style.zIndex = 0;   // keep it underneath the path/marker panes
 }}
 
 

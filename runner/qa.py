@@ -845,6 +845,9 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
 <title>QA Report — {group}</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:Arial,sans-serif;font-size:13px;background:#f4f6f9;color:#222}}
@@ -1068,8 +1071,16 @@ const linkLines  = {json.dumps(link_map)};
 const WARN_M = {COORD_WARN_M}, ALERT_M = {COORD_ALERT_M};
 
 const map = L.map('map');
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-  {{attribution:'© OpenStreetMap contributors', maxZoom:19}}).addTo(map);
+// Same base map as the other maps: OpenFreeMap (vector tiles via MapLibre). Added once the
+// map has a view, which the plugin requires.
+map.whenReady(function() {{
+  map.setMaxZoom(19);
+  var _tiles = L.maplibreGL({{style: 'https://tiles.openfreemap.org/styles/liberty', attribution:
+    '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> ' +
+    '&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' +
+    'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'}}).addTo(map);
+  _tiles.getContainer().style.zIndex = 0;
+}});
 
 function dot(color, size=14, hollow=false, confirmed=false) {{
   // hollow = out-of-support: transparent fill + thick coloured ring, so these

@@ -134,6 +134,9 @@ def build_html(invalid_paths, all_paths, sensors, ref_sensors):
 <title>Bluetooth Paths — Always Invalid (-1)</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
@@ -291,9 +294,13 @@ function _onFsChange() {{
 }}
 document.addEventListener('fullscreenchange', _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-  attribution: '© OpenStreetMap contributors', maxZoom: 19
-}}).addTo(map);
+// Same base map as the other maps: OpenFreeMap (vector tiles via MapLibre).
+map.setMaxZoom(19);
+L.maplibreGL({{style: 'https://tiles.openfreemap.org/styles/liberty', attribution:
+  '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> ' +
+  '&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' +
+  'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'}}).addTo(map)
+  .getContainer().style.zIndex = 0;
 
 /* -- Paths -------------------------------------------------------------- */
 // A single colour is enough — every path on this map is, by definition,
