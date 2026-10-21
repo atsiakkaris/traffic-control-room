@@ -322,7 +322,7 @@ def find_duplicate_groups(paths):
 
 
 # Reversed-direction check -----------------------------------------------
-# Confirmed via manual API reverse-engineering (SWARCO Mistic PathsManager):
+# Confirmed via manual API reverse-engineering (SWARCO Mistic path manager):
 # BuildPathArcs saves the geometry in one fixed direction regardless of which
 # end a reverse-registered path names first. A path named "A->B" whose
 # saved coordinates don't actually start near A and end near B relative to
@@ -528,11 +528,143 @@ def load_reference_sensors():
     return [s for s in ref_sensors if s.get('lat') is not None and s.get('lon') is not None]
 
 
+SERVER_INSPECTOR_JS = """
+  if (window.SERVER_MODE) {
+    var jb = document.createElement('div');
+    jb.className = 'flag-row';
+    jb.innerHTML = '<button id="jmpStart">&#128205; Sensors at start</button><button id="jmpEnd">&#128205; Sensors at end</button>';
+    insBody.appendChild(jb);
+    var _jump = function(ll) {
+      if (window.parent !== window && window.parent.crShow) window.parent.crShow('bluetooth', {lat: ll[0], lon: ll[1], path: f.id});
+      else window.open('/sensors/bluetooth?lat=' + ll[0] + '&lon=' + ll[1] + '&path=' + encodeURIComponent(f.id));
+    };
+    document.getElementById('jmpStart').onclick = function(e) { L.DomEvent.stopPropagation(e); _jump(obj.polyline._startLL); };
+    document.getElementById('jmpEnd').onclick = function(e) { L.DomEvent.stopPropagation(e); _jump(obj.polyline._endLL); };
+  }
+"""
+
+# --- Control Room (server mode) JavaScript, injected only by build_html(server_mode=True) ---
+SERVER_LOAD_JS = """
+  window.SERVER_MODE = true;
+  try {
+    var _rx = new XMLHttpRequest();
+    _rx.open('GET', '/api/review', false);
+    _rx.send();
+    if (_rx.status === 200) FLAGS = JSON.parse(_rx.responseText);
+  } catch (e) {}
+"""
+
+SERVER_BLOCK_JS = """
+/* -- Control Room: shared review file + confirmed delete (server mode only) -- */
+var _pushTimer = null;
+function _pushFlags(now) {
+  clearTimeout(_pushTimer);
+  var send = function() {
+    return fetch('/api/review', {method: 'PUT', headers: {'Content-Type': 'application/json'},
+                                 body: JSON.stringify(FLAGS)});
+  };
+  if (now) return send();
+  _pushTimer = setTimeout(send, 300);
+}
+(function() {
+  var st = document.createElement('style');
+  st.textContent =
+    '.cr-back{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:5000;display:flex;align-items:center;justify-content:center}' +
+    '.cr-box{background:#fff;color:#222;border-radius:10px;width:min(720px,94vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(0,0,0,.4);font:14px Arial,sans-serif}' +
+    '.cr-box h3{margin:0;padding:14px 18px;border-bottom:1px solid #ddd;font-size:16px}' +
+    '.cr-body{padding:12px 18px;overflow:auto}' +
+    '.cr-body table{border-collapse:collapse;width:100%;font-size:13px}' +
+    '.cr-body td,.cr-body th{border-bottom:1px solid #eee;padding:4px 6px;text-align:left}' +
+    '.cr-foot{padding:12px 18px;border-top:1px solid #ddd;display:flex;gap:8px;align-items:center;flex-wrap:wrap}' +
+    '.cr-foot button{border:0;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:13px}' +
+    '.cr-b-main{background:#2c3e50;color:#fff}.cr-b-del{background:#c0392b;color:#fff}.cr-b-del:disabled{opacity:.4;cursor:not-allowed}' +
+    '.cr-b-x{background:#e5e7eb}.cr-msg{font-size:13px;margin-top:10px;white-space:pre-wrap}.cr-msg.err{color:#c0392b}';
+  document.head.appendChild(st);
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function nameOf(id) {
+    var o = pathObjs.filter(function(p) { return p.feature.id === id; })[0];
+    return o ? o.feature.name : '(not on map)';
+  }
+
+  function openReview() {
+    var ids = Object.keys(FLAGS).filter(function(i) { return (FLAGS[i] || {}).status === 'flag'; });
+    var back = document.createElement('div');
+    back.className = 'cr-back';
+    var rows = ids.map(function(i) {
+      return '<tr><td>' + esc(i) + '</td><td>' + esc(nameOf(i)) + '</td><td>' + esc((FLAGS[i] || {}).note || '') + '</td></tr>';
+    }).join('');
+    back.innerHTML =
+      '<div class="cr-box"><h3>Review &amp; delete flagged paths</h3><div class="cr-body">' +
+      (ids.length
+        ? '<p>' + ids.length + ' path(s) flagged. Nothing is deleted until you run a dry run and then type YES.</p>' +
+          '<table><tr><th>ID</th><th>Name</th><th>Note</th></tr>' + rows + '</table>'
+        : '<p>No paths are flagged. Flag paths from the panel at the bottom-left first.</p>') +
+      '<div class="cr-msg" id="crMsg"></div></div>' +
+      '<div class="cr-foot"><button class="cr-b-main" id="crDry"' + (ids.length ? '' : ' disabled') + '>1. Dry run</button>' +
+      '<span id="crConfirm" style="display:none"><input id="crYes" placeholder="type YES" size="8" autocomplete="off"> ' +
+      '<button class="cr-b-del" id="crDel" disabled>2. Delete from API</button></span>' +
+      '<span style="flex:1"></span><button class="cr-b-x" id="crClose">Close</button></div></div>';
+    document.body.appendChild(back);
+    var msg = back.querySelector('#crMsg'), token = null, deleted = false;
+    function say(t, err) { msg.textContent = t; msg.className = 'cr-msg' + (err ? ' err' : ''); }
+    back.querySelector('#crClose').onclick = function() {
+      document.body.removeChild(back);
+      if (deleted) location.reload();
+    };
+    function post(body) {
+      return fetch('/api/delete', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                   body: JSON.stringify(body)}).then(function(r) { return r.json(); });
+    }
+    back.querySelector('#crDry').onclick = function() {
+      say('Saving flags and checking…');
+      _pushFlags(true).then(function() { return post({ids: ids, dry_run: true}); }).then(function(r) {
+        if (r.error) { say(r.error, true); return; }
+        token = r.token;
+        var t = 'DRY RUN - nothing sent.\\nWould delete ' + r.would_delete.length + ' path(s): ' + r.would_delete.join(', ');
+        if (r.refused.length) t += '\\nRefused (not flagged or not in the database): ' + r.refused.join(', ');
+        say(t, false);
+        if (r.would_delete.length) {
+          ids = r.would_delete;
+          back.querySelector('#crConfirm').style.display = '';
+        }
+      }).catch(function(e) { say('Request failed: ' + e, true); });
+    };
+    var yes = back.querySelector('#crYes'), del = back.querySelector('#crDel');
+    yes.oninput = function() { del.disabled = (yes.value !== 'YES'); };
+    del.onclick = function() {
+      del.disabled = true;
+      say('Deleting…');
+      post({ids: ids, dry_run: false, confirm: yes.value, token: token}).then(function(r) {
+        if (r.error && !r.results) { say(r.error, true); return; }
+        var ok = r.results.filter(function(x) { return x.ok; }).map(function(x) { return x.id; });
+        ok.forEach(function(i) { delete FLAGS[i]; });
+        saveFlags();
+        deleted = ok.length > 0;
+        say('Deleted ' + ok.length + ' of ' + r.results.length + ' path(s).' +
+            (r.error ? '\\nStopped: ' + r.error : '') + '\\nClose this window to reload the map.', !!r.error);
+      }).catch(function(e) { say('Request failed: ' + e, true); });
+    };
+  }
+  var _rb = document.getElementById('reviewDelBtn');
+  if (_rb) _rb.onclick = openReview;
+})();
+
+/* -- Jumps from the sensor tabs: the app shell calls these (no reload) -- */
+window.crFocusPath = function(id) { if (FEATURE_BY_ID[id]) stepSelect(id); };
+window.crFocusLoc = function(lat, lon) { map.setView([lat, lon], 17); };
+(function() {
+  var p = new URLSearchParams(location.search).get('path');
+  if (p) window.crFocusPath(p);
+})();
+"""
+
+
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                 dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
                 reversed_by_id=None, reversed_groups=None,
                 direction_by_id=None, direction_pairs=None, data_quality_by_id=None,
-                live_geometry_at=None):
+                live_geometry_at=None, server_mode=False, allow_delete=True):
     now =datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
     # Same feed_state row the dashboard banner reads — shown here too so
     # anyone on the map (including the published copy) sees the live feed is
@@ -623,6 +755,23 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             '<button class="dm-btn import" id="importBtn" title="Load flagged paths and notes from a CSV exported earlier">'
             '<i class="ti ti-upload" aria-hidden="true"></i><span>Import findings</span></button>'
             '<input type="file" id="importFile" accept=".csv" style="display:none">')
+    # Control Room app (tools/control_room.py) only: shared review file + delete dialog.
+    # Every fragment is '' otherwise, so the standalone and published pages are unchanged.
+    server_load_js = server_save_js = server_block_js = server_ins_js = ''
+    if server_mode:
+        findings_buttons_html += (
+            '<style>.hdr-actions{display:grid;grid-template-columns:repeat(2,auto);gap:6px}'
+            '.hdr-actions .dm-btn{white-space:nowrap}</style>'
+            '<button class="dm-btn export" id="reviewDelBtn" style="background:#c0392b" '
+            'title="List the flagged paths and delete them from the API (asks to confirm)">'
+            '<i class="ti ti-trash" aria-hidden="true"></i><span>Review &amp; delete…</span></button>')
+        if not allow_delete:   # read-only app: no delete button
+            findings_buttons_html = re.sub(r'<button class="dm-btn export" id="reviewDelBtn".*?</button>',
+                                           '', findings_buttons_html, flags=re.S)
+        server_load_js = SERVER_LOAD_JS
+        server_save_js = ' if (window.SERVER_MODE) _pushFlags();'
+        server_block_js = SERVER_BLOCK_JS
+        server_ins_js = SERVER_INSPECTOR_JS
     direction_cards_html = ''
     if direction_pairs:
         def _dcard(cls, cid, bucket, label, tip):
@@ -1166,7 +1315,7 @@ function toggleDark() {{
 var FLAGS = {{}};
 if (QA_MODE) {{
   try {{ FLAGS = JSON.parse(localStorage.getItem('btPathFlags') || '{{}}'); }} catch (e) {{ FLAGS = {{}}; }}
-}}
+{server_load_js}}}
 
 /* -- Paths: click to highlight ------------------------------------ */
 var pathObjs = [];
@@ -1682,7 +1831,7 @@ _wireDataQualityCard('dqGoodCard', 'good');
 if (QA_MODE) {{
 var flagLayer = L.layerGroup().addTo(map);
 var flagMarkers = {{}};
-function saveFlags() {{ localStorage.setItem('btPathFlags', JSON.stringify(FLAGS)); }}
+function saveFlags() {{ localStorage.setItem('btPathFlags', JSON.stringify(FLAGS));{server_save_js} }}
 
 // A bare emoji has no background of its own, so a red flag glyph disappears
 // against a red (issue-coloured) path underneath it. A solid-fill teardrop
@@ -1986,7 +2135,7 @@ function renderInspector() {{
     noteEl.value = (FLAGS[f.id] || {{}}).note || '';
     noteEl.onchange = function() {{ setNote(f.id, noteEl.value); }};
   }}
-  _wireFlagSummaryToggle();
+{server_ins_js}  _wireFlagSummaryToggle();
 }}
 renderInspector();
 
@@ -2297,11 +2446,32 @@ function goToSearchResult(item) {{
       render(matches, q);
     }});
 }})();
-
+{server_block_js}
 </script>
 </body>
 </html>"""
     return page
+
+
+def analyse_paths(paths):
+    """Everything main() derives from the path geometry, without the console output.
+
+    Returns the keyword arguments build_html() needs, so tools/control_room.py can
+    rebuild the full local page on every load.
+    """
+    keep_ids, collapsed, ambiguous = find_duplicate_groups(paths)
+    duplicate_groups = {}
+    for name, kept, dropped, pct in collapsed:
+        duplicate_groups[name] = {"ids": [kept] + dropped, "match_pct": pct, "confirmed": True}
+    for name, ids, pct in ambiguous:
+        duplicate_groups[name] = {"ids": ids, "match_pct": pct, "confirmed": False}
+    reversed_by_id, reversed_groups = find_reversed_direction_pairs(paths)
+    direction_by_id, direction_pairs = find_direction_pairs(paths)
+    return dict(duplicate_groups=duplicate_groups,
+                dropped_ids={pid for _, _, dropped, _ in collapsed for pid in dropped},
+                reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
+                direction_by_id=direction_by_id, direction_pairs=direction_pairs,
+                data_quality_by_id=find_data_quality(paths))
 
 
 def main():

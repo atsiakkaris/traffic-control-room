@@ -36,6 +36,35 @@ gitignored). ⚠️ Flags/notes are saved in your **browser's local storage** �
 they don't sync across machines or browsers and aren't backed up anywhere;
 export to CSV periodically if you want to keep them.
 
+**Control Room (recommended for review work).** `control_room.bat` starts a small
+app on your own machine (`127.0.0.1:8765`, nothing is exposed) and opens the same map
+in your browser. Flags and notes are saved to `results/path_review.json` instead of
+browser storage, and a **Review & delete…** button lists the flagged paths, runs a
+dry run, and only after you type `YES` deletes them from the SWARCO API
+(results are logged to `results/delete_log.csv`).
+
+The same app also has a **Sensor locations** view (tabs for Traffic Detection / Bluetooth / VMS) that compares every API sensor with its
+`QA Locations.xlsx` row and shows the distance between them. These pages only read
+the database — they never change ownership data the way `update_projects.bat` does.
+
+The app has a tab bar at the top: **Paths** and the three sensor views. All tabs stay loaded,
+so switching never reloads the map. Select a path and use *Sensors at start / at end* to
+jump to the sensor view at that spot; there, *Back to path* selects it again on the Paths
+tab and *Paths here* centres the map on what you were looking at. Pages are remembered
+until the database changes, so opening is instant; the **Refresh** button in the tab bar
+rebuilds the open tab from the latest data.
+`control_room.bat` opens it in **its own window** (needs `pip install pywebview` once; without
+it the page opens in your browser instead, with a console that must stay open). Close the
+window or press **Quit** in the tab bar to stop it; errors, if any, go to
+`results/control_room.log`.
+
+**Who can delete.** The app is **read-only by default**: anyone can view the maps, compare
+sensors and flag paths, but the *Review & delete…* button is absent (a *Read-only* badge
+shows in the tab bar) and the server refuses delete requests. Deleting is switched on per PC
+by adding `CONTROL_ROOM_ALLOW_DELETE=1` and `CONTROL_ROOM_DELETE_URL=<SWARCO delete address>` to
+that PC's own `.env` (git-ignored, so a fresh clone never has either; the address is
+deliberately not in the public code). Even then every delete needs the dry run and a typed `YES`.
+
 The copy at the link above (`docs/bt-paths-map.html`) **auto-refreshes every 6 hours** alongside the dashboard, so path
 additions/deletions and the duplicate/overlap checks stay current on their own.
 
@@ -205,9 +234,10 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 ├── run.bat                     ← Local run script (double-click, loads .env automatically)
 ├── report.bat                  ← Regenerate dashboard HTML from existing DB without hitting the API
 ├── update_projects.bat         ← Refresh ownership/commissioning in the DB from QA Locations.xlsx
-├── qa_tdu.bat / qa_bt.bat / qa_vms.bat  ← Open the per-group QA matching report (needs QA Locations.xlsx)
+├── tools/                      ← control_room.py (the app), db_peek.py (read-only DB browser),
+│                                 bt_direction_check.bat, bt_paths_map_live.bat
 ├── bt_paths_map.bat             ← Open the BT paths review map
-├── publish_bt_map.bat            ← Regenerate and write docs/bt-paths-map.html
+├── control_room.bat             ← Local review app: map + saved flags + confirmed delete
 └── requirements.txt
 ```
 
