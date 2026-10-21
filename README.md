@@ -58,6 +58,13 @@ it the page opens in your browser instead, with a console that must stay open). 
 window or press **Quit** in the tab bar to stop it; errors, if any, go to
 `results/control_room.log`.
 
+**Which Bluetooth sensor is faulty? (Bluetooth tab → *Triangulation*).** A path only reports data when both
+of its sensors work, so a path that works proves both ends are alive. A sensor with no working path, whose failing
+paths lead to sensors that work elsewhere, is the likely culprit; a sensor with both working and failing paths is
+only a *path problem*. The panel (bottom-left of the Bluetooth tab) lists the suspects, rings them on the map, and
+each popup links to its paths on the Paths tab; it can export a CSV. Runs during whole-feed outages are ignored,
+and paths whose name doesn't match where they really end are left out rather than guessed.
+
 **Who can delete.** The app is **read-only by default**: anyone can view the maps, compare
 sensors and flag paths, but the *Review & delete…* button is absent (a *Read-only* badge
 shows in the tab bar) and the server refuses delete requests. Deleting is switched on per PC

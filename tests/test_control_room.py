@@ -354,3 +354,10 @@ def test_live_delete_refuses_when_no_address_is_configured(tmp_path):
         assert code == 400 and "CONTROL_ROOM_DELETE_URL" in out["error"] and sent == []
     finally:
         srv.shutdown()
+
+
+def test_jump_bar_is_hidden_until_a_button_shows(tmp_path):
+    out = cr.add_nav("<body></body>", "bluetooth", cr.sensor_views())
+    assert ".crnav{" in out and "display:none" in out.split(".crnav.on")[0]   # hidden by default
+    assert ".crnav.on{display:flex}" in out
+    assert out.count("nav.classList.add('on')") == 2                           # back pill and "Paths here"

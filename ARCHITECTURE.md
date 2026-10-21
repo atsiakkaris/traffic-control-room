@@ -452,6 +452,13 @@ The app also serves `/sensors/<group>` (groups and match radii read from
 `update_projects.GROUPS`): `qa.load_api_sensors` + `load_reference` + `match_sensors` →
 `qa.generate_html`, with a view switcher injected. Read-only — it deliberately skips the
 `upsert_sensor_projects` write that `qa.py`'s CLI does.
+The Bluetooth sensor page also carries a *triangulation* panel (`runner/bt_sensor_suspects.py`, injected by
+`build_sensor_page`): path end → sensor (name's site code must be within 250 m of the end, else `mismatch`;
+no usable name → nearest clear sensor within 100 m); path state from the newest 20 *healthy* runs (a run with
+< 50% ok paths is a feed outage and ignored) via `bt_data_quality.classify_path`; a working or unrealistic-speed
+path proves both end sensors alive; verdicts `faulty_high` (no working path, ≥ 2 failing paths to proven-alive
+sensors), `faulty_likely`, `path_problem` (has working and failing paths), `explained` (its failing paths end at a
+faulty_high sensor), `working`, `no_evidence`. Pure functions, constants at the top of the module.
 Built pages are cached in the server keyed by `results/history.db` mtime (warmed in a
 thread at start-up; `?refresh=1` forces a rebuild). `/` is a small shell page (tab bar + one iframe per view, all kept loaded); the map itself is
 served at `/map`. The shell exposes `crShow(tab, {path|lat,lon})`, which the pages inside
