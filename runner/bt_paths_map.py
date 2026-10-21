@@ -441,9 +441,9 @@ def find_direction_pairs(paths):
 
 # Data-quality layer ---------------------------------------------------------
 # Which paths consistently produce no or unrealistic data — see bt_data_quality.py
-# for the rules and thresholds. Speed/travel time are only stored on LIVE_MODE
-# runs, so those details are kept out of the published copy like the other
-# live figures.
+# for the rules and thresholds. The categories (including Unrealistic data, which
+# CI records as a value-free marker) show on the published copy too; the stored
+# speed/travel-time values, which only LIVE_MODE runs keep, stay local.
 DQ_LABELS = {
     "no_data": "No data", "implausible": "Unrealistic data", "stale": "Stale",
     "intermittent": "Intermittent", "good": "Good", "unknown": "Not enough history",
@@ -458,7 +458,9 @@ def find_data_quality(paths, use_snapshots=True):
         try:
             histories, snapshots = dq.load_histories(conn)
             if not use_snapshots:
-                snapshots = {}  # status-only: the stored speed values are local-only
+                # Published copy: the stored speeds stay local. The unrealistic-speed
+                # markers hold no values, so the "Unrealistic data" category is shown.
+                snapshots = {}
         finally:
             conn.close()
     except Exception as exc:
@@ -466,15 +468,16 @@ def find_data_quality(paths, use_snapshots=True):
         return {}
     out = {}
     for pid, p in paths.items():
-        coords = p.get("coords") or []
-        length = _path_length_m(coords) if len(coords) > 1 else None
-        r = dq.classify_path(histories.get(pid, []), snapshots.get(pid, []), length)
+        r = dq.classify_path(histories.get(pid, []), snapshots.get(pid, []))
         last = r["last"]
         out[pid] = {
             "category": r["category"],
             "bad_pct": None if r["bad_pct"] is None else round(100 * r["bad_pct"]),
             "runs": r["runs"],
             "bad_since": to_cyprus(r["bad_since"]) if r["bad_since"] else None,
+            "recovering": r["recovering"],
+            "good_since": to_cyprus(r["good_since"]) if r["good_since"] else None,
+            "recovering_runs": dq.RECOVERING_RUNS,
             "reason": r["reason"],
             "last": None if not last else {
                 "speed_kmh": last["speed_kmh"], "travel_time_s": last["travel_time_s"],
@@ -484,8 +487,8 @@ def find_data_quality(paths, use_snapshots=True):
 
 
 def public_data_quality(by_id):
-    """Published copy: keep the category, drop the speed/travel-time details."""
-    return {pid: dict(v, reason="", last=None) for pid, v in by_id.items()}
+    """Published copy: keep the category and reason, drop the stored speed/travel-time values."""
+    return {pid: dict(v, last=None) for pid, v in by_id.items()}
 
 
 def fetch_latest_path_live_data():
@@ -505,6 +508,8 @@ def fetch_latest_path_live_data():
         try:
             d = json.loads(r["data"])
         except (json.JSONDecodeError, TypeError):
+            continue
+        if "speed_kmh" not in d:   # marker-only row (unrealistic speed) — no live values
             continue
         latest[r["sensor_id"]] = {
             "speed_kmh": d.get("speed_kmh"),
@@ -600,10 +605,9 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
             '<div class="summary-group-cards">'
             + _qcard('dq-nodata', 'dqNoDataCard', 'no_data', 'No data',
                      'Speed or travel time is -1, 0 or missing.')
-            + (_qcard('dq-implaus', 'dqImplausCard', 'implausible', 'Unrealistic data',
-                      f'Positive but impossible values: speed under {dq.MIN_SPEED_KMH} or over {dq.MAX_SPEED_KMH} km/h, '
-                      'or a travel time that implies such a speed over the path length. Judged on the values stored by manual LIVE_MODE runs.')
-               if include_live_data else '')
+            + _qcard('dq-implaus', 'dqImplausCard', 'implausible', 'Unrealistic data',
+                     f'Positive but impossible speed: under {dq.MIN_SPEED_KMH} or over {dq.MAX_SPEED_KMH} km/h. '
+                     'Every monitor run records a small marker when it sees one.')
             + _qcard('dq-stale', 'dqStaleCard', 'stale', 'Stale',
                      'The measurement timestamp is too old.')
             + _qcard('dq-inter', 'dqInterCard', 'intermittent', 'Intermittent',
@@ -675,12 +679,10 @@ def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
     if reversed_groups and (rev_bug_count or rev_amb_count):
         chips.append(_chip(rev_bug_count + rev_amb_count, ' reversed check: needs a look', 'warn'))
     if data_quality_by_id:
-        for cat, text, tone in (('no_data', ' no data', 'bad'), ('stale', ' stale', 'warn'),
-                                ('intermittent', ' intermittent', 'purple')):
+        for cat, text, tone in (('no_data', ' no data', 'bad'), ('implausible', ' unrealistic', 'warn'),
+                                ('stale', ' stale', 'warn'), ('intermittent', ' intermittent', 'purple')):
             if dq_counts.get(cat):
                 chips.append(_chip(dq_counts[cat], text, tone))
-        if include_live_data and dq_counts.get('implausible'):
-            chips.append(_chip(dq_counts['implausible'], ' unrealistic', 'warn'))
     summary_chips_html = ''.join(chips)
 
     # Same fixed default view as the dashboard map — not a centroid of the
@@ -1413,6 +1415,9 @@ function selectPath(id) {{
   _applySelectionAndEndpoints(selectedId === id ? null : id);
 }}
 
+var FEATURE_BY_ID = {{}};
+FEATURES.forEach(function(f) {{ FEATURE_BY_ID[f.id] = f; }});
+
 FEATURES.forEach(function(f) {{
   if (!f.coords.length) return;
   var latlngs = f.coords.map(function(c) {{ return [c[0], c[1]]; }});
@@ -1461,8 +1466,14 @@ FEATURES.forEach(function(f) {{
                    '4-unclear': 'Direction unclear', '3-healthy': 'Opposite direction'}};
     detailHtml += '<br><span style="font-weight:bold;color:' + DIRECTION_COLORS[dc.status] + '">Direction check (geometry): ' + dcLabel[dc.status] + '</span>';
     dc.pairs.slice().sort(function(a, b) {{ return a.bucket.localeCompare(b.bucket); }}).forEach(function(p) {{
+      var pf = FEATURE_BY_ID[p.partner], pq = pf && pf.data_quality, pdata = '';
+      if (pq && pq.category !== 'unknown') {{
+        var plabel = pq.recovering ? 'Recovering' : DATAQ_LABELS[pq.category];
+        var pcolor = pq.recovering ? '#14b8a6' : (DATAQ_COLORS[pq.category] || '#888');
+        pdata = '<br>&nbsp;&nbsp;partner data: <span style="color:' + pcolor + '">' + plabel + '</span>';
+      }}
       detailHtml += '<br>&bull; ID ' + p.partner + ' (' + p.partner_name + '): ' + p.direction +
-                    (p.r != null ? ', r=' + p.r : '') + (p.hint ? '<br>&nbsp;&nbsp;<i>' + p.hint + '</i>' : '');
+                    (p.r != null ? ', r=' + p.r : '') + pdata + (p.hint ? '<br>&nbsp;&nbsp;<i>' + p.hint + '</i>' : '');
     }});
   }}
   var dqc = f.data_quality;
@@ -1470,6 +1481,10 @@ FEATURES.forEach(function(f) {{
     detailHtml += '<br><span style="font-weight:bold;color:' + (DATAQ_COLORS[dqc.category] || '#888') + '">Data quality: ' +
                   DATAQ_LABELS[dqc.category] + '</span>';
     if (dqc.reason) detailHtml += '<br>' + dqc.reason;
+    if (dqc.recovering) {{
+      detailHtml += '<br><span style="color:#14b8a6;font-weight:bold">Recovering: reporting again, last ' + dqc.recovering_runs +
+                    ' runs OK' + (dqc.good_since ? ' (since ' + dqc.good_since + ')' : '') + '</span>';
+    }}
     if (dqc.bad_since && dqc.category !== 'good' && dqc.category !== 'intermittent') {{
       detailHtml += '<br>Bad since: ' + dqc.bad_since;
     }}
@@ -2089,7 +2104,7 @@ if (HAS_DATA_QUALITY) {{
   (function() {{
     var btn = L.DomUtil.create('button', 'sensor-toggle-btn dataq off', filtersBody);
     btn.innerHTML = 'Data quality: OFF';
-    btn.title = 'Colours each path by whether it consistently produces no ' + (QA_MODE ? 'or unrealistic ' : '') + 'data: red = no data (-1, 0 or missing), ' + (QA_MODE ? 'orange = unrealistic values, ' : '') + 'brown = stale, purple = intermittent, green = good. ' + DQ_LIMITS_TEXT + ' Switches off the other colour layers.';
+    btn.title = 'Colours each path by whether it consistently produces no or unrealistic data: red = no data (-1, 0 or missing), orange = unrealistic speed, brown = stale, purple = intermittent, green = good. ' + DQ_LIMITS_TEXT + ' Switches off the other colour layers.';
     btn.onclick = function(e) {{
       L.DomEvent.stopPropagation(e);
       _setMode(DATAQ_MODE ? null : 'dataq');
@@ -2128,7 +2143,7 @@ var LegendControl = L.Control.extend({{
         '<div class="legend-sec-title">Data quality <span class="legend-toggle" data-mode="dataq" title="Turn this layer on or off">OFF</span></div>' +
         '<div class="legend-rows">' +
         _dqRow('no_data', 'No data', 'Speed or travel time is -1, 0 or missing. ' + DQ_LIMITS_TEXT) +
-        (QA_MODE ? _dqRow('implausible', 'Unrealistic data', 'Speed under 5 or over 140 km/h, or a travel time implying that over the path length. ' + DQ_LIMITS_TEXT) : '') +
+        _dqRow('implausible', 'Unrealistic data', 'Speed under 5 or over 140 km/h. ' + DQ_LIMITS_TEXT) +
         _dqRow('stale', 'Stale', 'Measurement timestamp too old. ' + DQ_LIMITS_TEXT) +
         _dqRow('intermittent', 'Intermittent', 'Often bad, not consistently.') +
         _dqRow('good', 'Good', 'Reporting normally.') +

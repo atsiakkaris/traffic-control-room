@@ -8,6 +8,7 @@ Each public function takes the raw response text and returns:
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from stability import CYPRUS_TZ
+from bt_data_quality import unrealistic_marker
 
 
 def _parse_xml(text):
@@ -193,6 +194,9 @@ def bt_paths_speed_and_traveltime(response_text: str, stale_hours: float = DEFAU
             "speed_kmh":    round(spd,   1) if spd   is not None else None,
             "travel_time_s": round(ttime, 0) if ttime is not None else None,
             "age_hours":    round(age_hours, 1) if age_hours is not None else None,
+            # Positive but impossible speed: run_tests.py stores just this marker
+            # (the path's status stays "ok") — see bt_data_quality.py.
+            **(unrealistic_marker(spd) or {}),
         }
 
     limit_txt = (f"{round(stale_hours * 60)} min" if stale_hours < 1

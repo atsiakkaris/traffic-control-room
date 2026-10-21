@@ -33,6 +33,7 @@ from db import (init_db, insert_run, update_run_totals, insert_result, insert_se
                 upsert_bt_path_timestamps, fetch_bt_path_timestamps)
 from tests import REGISTRY
 from geo import extract_measurement_site_coords, extract_vms_coords, extract_bt_path_coords
+from bt_data_quality import data_to_store
 from report import generate_report
 
 class _CyprusFormatter(logging.Formatter):
@@ -263,7 +264,9 @@ def run_all():
             sensor_group = ep.get("sensor_group", group_name)
             live_ids_seen = r.get("sensors", {})
             for sensor_id, s_status in live_ids_seen.items():
-                mdata = r.get("measurements", {}).get(sensor_id) if live_mode else None
+                # Bulky per-sensor values stay LIVE_MODE-only; every run keeps just a tiny
+                # marker for an unrealistic BT path speed (see bt_data_quality.py).
+                mdata = data_to_store(r.get("measurements", {}).get(sensor_id), live_mode)
                 insert_sensor_result(run_id, run_at, sensor_group, sensor_id, s_status, mdata)
 
             path_timestamps = r.get("path_timestamps")

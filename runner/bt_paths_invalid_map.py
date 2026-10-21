@@ -62,6 +62,8 @@ def find_always_invalid_paths():
             d = json.loads(r["data"])
         except (json.JSONDecodeError, TypeError):
             continue
+        if "speed_kmh" not in d:   # marker-only row (unrealistic speed) — no live values
+            continue
         by_path.setdefault(r["sensor_id"], []).append(
             (r["run_at"], d.get("speed_kmh"), d.get("travel_time_s"))
         )
