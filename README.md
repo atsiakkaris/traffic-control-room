@@ -52,7 +52,8 @@ so switching never reloads the map. Select a path and use *Sensors at start / at
 jump to the sensor view at that spot; there, *Back to path* selects it again on the Paths
 tab and *Paths here* centres the map on what you were looking at. Pages are remembered
 until the database changes, so opening is instant; the **Refresh** button in the tab bar
-rebuilds the open tab from the latest data.
+rebuilds the open tab from the latest data. Clicking an API sensor on the Paths map shows the same details
+as the Bluetooth tab (health, project, spreadsheet match, triangulation verdict) and lists its paths; *select* opens one.
 `control_room.bat` opens it in **its own window** (needs `pip install pywebview` once; without
 it the page opens in your browser instead, with a console that must stay open). Close the
 window or press **Quit** in the tab bar to stop it; errors, if any, go to

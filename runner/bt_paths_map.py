@@ -555,6 +555,47 @@ SERVER_LOAD_JS = """
 """
 
 SERVER_BLOCK_JS = """
+/* -- Control Room: sensor popups show the details of the Bluetooth sensors tab -- */
+(function() {
+  var VCOL = {faulty_high: '#c0392b', faulty_likely: '#e67e22', path_problem: '#8e44ad', explained: '#7f8c8d', working: '#27ae60'};
+  var STATE = {good: 'works', odd: 'works (unrealistic speed)', bad: 'fails', mixed: 'intermittent'};
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function detail(d) {
+    var h = '';
+    if (d.health !== undefined) h += '<br>Health: ' + (d.health != null ? esc(d.health) + '%' : 'No data') + ' &middot; ' + (d.active ? 'Active' : 'Not active');
+    if (d.project) h += '<br>Project: <b>' + esc(d.project) + '</b>';
+    if (d.accountability === 'out_of_support') h += '<br><span style="opacity:.7">Out of support</span>';
+    if (d.ref_name) h += '<br><span style="color:#b8860b">&#10003; Spreadsheet match: <b>' + esc(d.ref_name) + '</b>' + (d.ref_dist ? ' (' + esc(d.ref_dist) + ' m)' : '') + '</span>';
+    if (d.verdict) {
+      h += '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #888"><span style="display:block;padding:4px 7px;border-radius:5px;color:#fff;margin-bottom:4px;background:'
+        + (VCOL[d.verdict] || '#7f8c8d') + '">' + esc(d.label) + '</span>' + (d.reason ? esc(d.reason) + '.' : '');
+      if (d.paths && d.paths.length) {
+        h += '<br><b>Paths (' + d.paths.length + '):</b><ul style="margin:4px 0 0;padding-left:18px;max-height:140px;overflow:auto">';
+        d.paths.forEach(function(p) {
+          h += '<li>' + esc(p.name) + ' - ' + esc(STATE[p.state] || p.state) + ' <a href="#" data-crpath="' + esc(p.id) + '">select</a></li>';
+        });
+        h += '</ul>';
+      }
+      h += '</div>';
+    }
+    return h;
+  }
+  Object.keys(sensorMarkersById).forEach(function(id) {
+    var m = sensorMarkersById[id], base = m.getPopup().getContent();
+    m.on('popupopen', function() {
+      fetch('/api/sensor?id=' + encodeURIComponent(id)).then(function(r) { return r.json(); }).then(function(d) {
+        if (d && !d.error && m.isPopupOpen()) m.getPopup().setContent(base + detail(d));
+      }).catch(function() {});
+    });
+  });
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest && e.target.closest('[data-crpath]');
+    if (!a) return;
+    e.preventDefault();
+    var id = a.getAttribute('data-crpath');
+    if (window.crFocusPath) window.crFocusPath(id);
+  });
+})();
 /* -- Control Room: shared review file + confirmed delete (server mode only) -- */
 var _pushTimer = null;
 function _pushFlags(now) {

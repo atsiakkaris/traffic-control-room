@@ -131,9 +131,10 @@ def resolve_paths(paths, sensors):
 
 def healthy_runs(run_statuses):
     """Newest WINDOW_RUNS runs in which the feed worked. run_statuses: {run_id: [status, ...]}
-    with run ids ordered oldest first by value. Returns (kept run ids, skipped outage count)."""
+    in newest-first order (run ids are random UUIDs, so the dict order is the only clock;
+    plain ints in tests sort the same way). Returns (kept run ids oldest first, skipped outage count)."""
     kept, skipped = [], 0
-    for run_id in sorted(run_statuses, reverse=True):
+    for run_id in run_statuses:
         statuses = run_statuses[run_id]
         ok = sum(1 for s in statuses if s in dq.GOOD_STATUSES)
         if statuses and ok / len(statuses) >= OUTAGE_OK_SHARE:
@@ -141,7 +142,7 @@ def healthy_runs(run_statuses):
                 kept.append(run_id)
         else:
             skipped += 1
-    return sorted(kept), skipped
+    return kept[::-1], skipped
 
 
 def path_state(history):
@@ -235,9 +236,9 @@ def judge_sensors(sensors, resolved, states):
 def load_run_statuses(conn, group=GROUP):
     """({run_id: [status]}, {path_id: {run_id: {run_at, status, unrealistic}}}) for the newest runs."""
     run_ids = [r[0] for r in conn.execute(
-        "SELECT DISTINCT run_id FROM sensor_results WHERE group_name=? ORDER BY run_id DESC LIMIT ?",
+        "SELECT run_id FROM sensor_results WHERE group_name=? GROUP BY run_id ORDER BY MIN(run_at) DESC LIMIT ?",
         (group, LOOKBACK_RUNS))]
-    per_run = defaultdict(list)
+    per_run = {r: [] for r in run_ids}      # newest first: run ids are random UUIDs, not a clock
     per_path = defaultdict(dict)
     if not run_ids:
         return per_run, per_path
@@ -274,10 +275,10 @@ def analyse(conn=None, paths=None, sensors=None):
         if own:
             conn.close()
     kept, skipped = healthy_runs(per_run)
-    kept_set = set(kept)
     states = {}
     for pid in paths:
-        hist = [per_path.get(str(pid), {})[r] for r in sorted(per_path.get(str(pid), {})) if r in kept_set]
+        mine = per_path.get(str(pid), {})
+        hist = sorted((mine[r] for r in kept if r in mine), key=lambda h: h["run_at"])
         states[pid] = path_state(hist)
     resolved = resolve_paths(paths, sensors)
     verdicts = judge_sensors(sensors, resolved, states)

@@ -116,8 +116,8 @@ def test_two_sensors_close_together_are_ambiguous_without_a_name():
 # ── outage runs and path state ───────────────────────────────────────────────
 
 def test_outage_runs_are_ignored_and_newest_healthy_runs_kept():
-    runs = {i: ["ok"] * 9 + ["failing"] for i in range(1, 31)}       # healthy
-    runs.update({i: ["stale"] * 10 for i in range(31, 41)})           # outage, newest
+    runs = {i: ["stale"] * 10 for i in range(40, 30, -1)}             # outage, newest first
+    runs.update({i: ["ok"] * 9 + ["failing"] for i in range(30, 0, -1)})   # healthy
     kept, skipped = bs.healthy_runs(runs)
     assert skipped == 10
     assert kept == list(range(11, 31)) and len(kept) == bs.WINDOW_RUNS

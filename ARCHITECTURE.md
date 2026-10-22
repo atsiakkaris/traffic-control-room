@@ -459,6 +459,8 @@ no usable name → nearest clear sensor within 100 m); path state from the newes
 path proves both end sensors alive; verdicts `faulty_high` (no working path, ≥ 2 failing paths to proven-alive
 sensors), `faulty_likely`, `path_problem` (has working and failing paths), `explained` (its failing paths end at a
 faulty_high sensor), `working`, `no_evidence`. Pure functions, constants at the top of the module.
+The Paths map's sensor popups fetch `GET /api/sensor?id=` (`Server.sensor_details`, read from the cached Bluetooth page's
+`apiMarkers` and triangulation data) in server mode only. Run ids are random UUIDs, so runs are ordered by `run_at`.
 Built pages are cached in the server keyed by `results/history.db` mtime (warmed in a
 thread at start-up; `?refresh=1` forces a rebuild). `/` is a small shell page (tab bar + one iframe per view, all kept loaded); the map itself is
 served at `/map`. The shell exposes `crShow(tab, {path|lat,lon})`, which the pages inside
