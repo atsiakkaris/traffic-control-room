@@ -33,6 +33,7 @@ import csv
 import io
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -196,7 +197,10 @@ TRIANGULATION_JS = """<style>
 #triPanel .row small{display:block;color:#555}
 #triPanel button.ex{margin:8px 14px 12px;padding:6px 12px;border:0;border-radius:6px;background:#2c3e50;color:#fff;cursor:pointer}
 .triPop{max-width:300px;font:13px Arial,sans-serif}.triPop ul{margin:6px 0 0;padding-left:18px}
-.triPop a{color:#2e86c1;cursor:pointer}
+.triPop a,.triInfo a{color:#2e86c1;cursor:pointer}
+.triInfo{margin-top:6px;padding-top:6px;border-top:1px dashed #ccc;max-width:320px}
+.triInfo .v{display:block;padding:5px 7px;border-radius:5px;color:#fff;margin:2px 0 4px}
+.triInfo ul{margin:4px 0 0;padding-left:18px;max-height:140px;overflow:auto}
 </style>
 <button id="triBtn"></button>
 <div id="triPanel">
@@ -225,6 +229,34 @@ TRIANGULATION_JS = """<style>
   D.sensors.forEach(function(s) {
     if (s.lat == null) return;
     markers[s.id] = L.circleMarker([s.lat, s.lon], {radius: 16, color: COLORS[s.verdict], weight: 4, fill: false}).bindPopup(popup(s));
+  });
+  var STATE = {good: 'works', odd: 'works (unrealistic speed)', bad: 'fails', mixed: 'intermittent'};
+  var VCOL = {faulty_high: '#c0392b', faulty_likely: '#e67e22', path_problem: '#8e44ad', explained: '#7f8c8d', working: '#27ae60'};
+  function info(id) {
+    var s = D.info[String(id)];
+    if (!s) return '';
+    var h = '<div class="triInfo"><span class="v" style="background:' + (VCOL[s.verdict] || '#7f8c8d') + '">' + esc(D.labels[s.verdict]) + '</span>';
+    if (s.reason) h += esc(s.reason) + '.';
+    if (s.paths.length) {
+      h += '<br><b>Paths (' + s.paths.length + '):</b><ul>';
+      s.paths.forEach(function(p) {
+        h += '<li>' + esc(p.name) + ' - ' + esc(STATE[p.state] || p.state) + (shell ? ' <a data-showpath="' + esc(p.id) + '">show path</a>' : '') + '</li>';
+      });
+      h += '</ul>';
+    }
+    return h + '</div>';
+  }
+  // every sensor popup of the QA map gets its verdict and the paths that start or end at it
+  map.on('popupopen', function(e) {
+    var c = e.popup.getContent();
+    if (typeof c !== 'string' || c.indexOf('triInfo') >= 0 || c.indexOf('triPop') >= 0) return;
+    var parts = c.split(/<hr[^>]*>/), changed = false;
+    parts = parts.map(function(part) {
+      var m = /ID:\\s*(\\d+)/.exec(part), h = m ? info(m[1]) : '';
+      if (h) changed = true;
+      return part + h;
+    });
+    if (changed) e.popup.setContent(parts.join('<hr style="margin:6px 0">'));
   });
   document.addEventListener('click', function(e) {
     var a = e.target.closest && e.target.closest('[data-showpath]');
@@ -299,8 +331,31 @@ def triangulation_html(result):
                    "A path that works proves both of its sensors are alive; a sensor whose every path fails while "
                    "the sensors at the other ends work elsewhere is the suspect." %
                    (m["runs_used"], m["runs_ignored_as_outage"], m["unusable_paths"]))
-    data = {"sensors": sensors, "summary": summary, "labels": bs.VERDICTS, "csv": bs.csv_rows(result)}
+    info = {str(sid): {"verdict": v["verdict"], "reason": v["reason"],
+                       "paths": [{"id": p["id"], "name": p["name"], "state": p["state"]} for p in v["paths"]]}
+            for sid, v in result["sensors"].items() if v["paths"] or v["reason"]}
+    data = {"sensors": sensors, "info": info, "summary": summary, "labels": bs.VERDICTS, "csv": bs.csv_rows(result)}
     return TRIANGULATION_JS.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
+
+
+def sensor_details(page):
+    """{sensor id: details} for the popups on the Paths map, read from the built Bluetooth sensors page.
+
+    The page already carries the API sensors (health, project, spreadsheet match) and the triangulation
+    verdicts, so nothing is computed twice.
+    """
+    out = {}
+    m = re.search(r"const apiMarkers = (\[.*?\]);\n", page, re.S)
+    for s in (json.loads(m.group(1)) if m else []):
+        out[str(s["id"])] = {k: s.get(k) for k in ("name", "site_code", "active", "health", "project", "accountability",
+                                                  "ref_name", "ref_source", "ref_dist")}
+    m = re.search(r"var D = (\{.*?\});\n", page, re.S)
+    if m:
+        data = json.loads(m.group(1))
+        for sid, v in data.get("info", {}).items():
+            d = out.setdefault(sid, {})
+            d.update(verdict=v["verdict"], label=data["labels"].get(v["verdict"], ""), reason=v["reason"], paths=v["paths"])
+    return out
 
 
 # ── sensor-location pages ────────────────────────────────────────────────────
@@ -431,6 +486,10 @@ def build_shell(views, query="", read_only=False):
             .replace("__Q__", query).replace("__BADGE__", badge))
 
 
+# Taller map than the standalone QA page (same width); the header and cards above stay visible.
+TALL_MAP_CSS = "<style>#map{height:max(420px,68vh)!important}</style>"
+
+
 def build_sensor_page(slug, views=None):
     """Sensor-vs-spreadsheet page for one group. Read-only: no DB writes."""
     import tempfile
@@ -455,6 +514,7 @@ def build_sensor_page(slug, views=None):
         import bt_sensor_suspects
         tri = triangulation_html(bt_sensor_suspects.analyse())
         page = page.replace("</body>", tri + "</body>", 1) if "</body>" in page else page + tri
+    page = page.replace("</head>", TALL_MAP_CSS + "</head>", 1)
     return add_nav(page, slug, views)
 
 
@@ -508,6 +568,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send(500, f"Could not build the map: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/api/sensor":
+            sid = (parse_qs(parts.query).get("id") or [""])[0]
+            try:
+                return self._send(200, self.server.sensor_details().get(sid, {}))
+            except Exception as exc:
+                return self._send(500, {"error": str(exc)})
         if path.startswith("/sensors/"):
             slug = path[len("/sensors/"):].strip("/")
             views = self.server.views
@@ -675,6 +741,16 @@ class Server(ThreadingHTTPServer):
             page = build()
             self.page_cache[key] = (stamp, page)
             return page
+
+    def sensor_details(self):
+        """Details of every Bluetooth sensor, rebuilt only when the Bluetooth page itself was rebuilt."""
+        if "bluetooth" not in self.views:
+            return {}
+        page = self.cached("bluetooth", lambda: self.sensor_builder("bluetooth"))
+        with self.build_lock:
+            if getattr(self, "_details", (None, None))[0] is not page:
+                self._details = (page, sensor_details(page))
+            return self._details[1]
 
     def warm(self):
         """Build every page once, so the first browser load is instant."""

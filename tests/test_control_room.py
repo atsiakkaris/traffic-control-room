@@ -448,3 +448,35 @@ def test_no_dialog_available_falls_back_to_downloads_and_says_so(tmp_path):
         assert code == 200 and out["fallback"] is True and Path(out["path"]).parent == tmp_path / "dl"
     finally:
         srv.shutdown()
+
+
+# ── sensor details for the Paths map popups ──────────────────────────────────
+
+FAKE_BT_PAGE = (
+    'x\nconst apiMarkers = [{"id": 140, "name": "Tseriou", "site_code": "1056", "active": true, "health": 0, '
+    '"project": "Diavlos", "accountability": "out_of_support", "ref_name": "Tseriou Ave", "ref_source": "x", '
+    '"ref_dist": 18.1, "lat": 1, "lon": 2}];\n'
+    '<script>var D = {"sensors": [], "info": {"140": {"verdict": "faulty_high", "reason": "no path works", '
+    '"paths": [{"id": "199", "name": "1021->1056", "state": "bad"}]}}, "labels": {"faulty_high": "Faulty (high confidence)"}, '
+    '"csv": []};\nvar x = 1;</script>'
+)
+
+
+def test_sensor_details_combine_health_match_and_verdict():
+    d = cr.sensor_details(FAKE_BT_PAGE)["140"]
+    assert d["project"] == "Diavlos" and d["ref_name"] == "Tseriou Ave" and d["health"] == 0
+    assert d["label"] == "Faulty (high confidence)" and d["paths"][0]["id"] == "199"
+
+
+def test_sensor_endpoint_returns_details_and_empty_for_unknown_ids(tmp_path):
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv",
+                         page_builder=lambda: ("", {}), paths_provider=dict, views={"bluetooth": ("Bluetooth", "Bluetooth", 100)},
+                         sensor_builder=lambda slug: FAKE_BT_PAGE, db_file=tmp_path / "none.db")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        code, out = _req(base + "/api/sensor?id=140")
+        assert code == 200 and out["verdict"] == "faulty_high"
+        assert _req(base + "/api/sensor?id=999") == (200, {})
+    finally:
+        srv.shutdown()
