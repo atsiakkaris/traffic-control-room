@@ -30,9 +30,11 @@ in your browser as before.
 """
 import argparse
 import csv
+import io
 import json
 import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -203,6 +205,7 @@ TRIANGULATION_JS = """<style>
   <div class="tb" id="triOpts"></div>
   <div class="tb" id="triList"></div>
   <button class="ex" id="triEx">Export CSV</button>
+  <div class="tb sm" id="triSaved" style="padding-top:0;word-break:break-all"></div>
 </div>
 <script>
 (function() {
@@ -261,11 +264,17 @@ TRIANGULATION_JS = """<style>
   }
   refresh();
   document.getElementById('triEx').onclick = function() {
-    var csv = D.csv.map(function(r) { return r.map(function(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }).join(','); }).join('\\n');
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
-    a.download = 'bt_sensor_suspects.csv';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    var note = document.getElementById('triSaved');
+    note.textContent = 'Choose where to save in the dialog that opened (it may be behind this window)...';
+    fetch('/api/save-csv', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({name: 'bt_sensor_suspects', rows: D.csv})})
+      .then(function(r) { return r.json(); })
+      .then(function(r) {
+        note.textContent = r.cancelled ? 'Cancelled - nothing saved.'
+          : r.path ? 'Saved to ' + r.path + (r.fallback ? ' (no Save dialog available, so the Downloads folder was used)' : '')
+          : 'Could not save: ' + (r.error || 'unknown error');
+      })
+      .catch(function(e) { note.textContent = 'Could not save: ' + e; });
   };
 })();
 </script>"""
@@ -473,11 +482,16 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
         return origin is None or origin in allowed
 
-    def _body(self):
+    def _drain(self):
+        """Read the request body up front, so an early 403/400 never leaves it unread (a reset connection)."""
         n = int(self.headers.get("Content-Length") or 0)
-        if n > 2_000_000:
+        self._raw = self.rfile.read(n) if 0 < n <= 2_000_000 else b""
+        self._too_big = n > 2_000_000
+
+    def _body(self):
+        if self._too_big:
             raise ValueError("body too large")
-        return json.loads(self.rfile.read(n) or b"{}")
+        return json.loads(self._raw or b"{}")
 
     def do_GET(self):
         parts = urlsplit(self.path)
@@ -507,6 +521,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_PUT(self):
+        self._drain()
         if self.path != "/api/review" or not self._same_origin():
             return self._send(403, {"error": "forbidden"})
         try:
@@ -519,12 +534,33 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"saved": len(clean_review(data))})
 
     def do_POST(self):
+        self._drain()
         if self.path == "/api/quit" and self._same_origin():
             self._send(200, {"stopping": True})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             if self.server.on_quit:
                 self.server.on_quit()
             return
+        if self.path == "/api/save-csv" and self._same_origin():
+            try:
+                body = self._body()
+                name = body.get("name")
+                folder = Path(self.server.downloads_dir or DOWNLOADS)
+                dest, fallback = None, False
+                if self.server.choose_path and name in EXPORT_NAMES:
+                    try:
+                        dest = self.server.choose_path(folder, default_csv_name(name))
+                    except Exception:      # no dialog possible on this PC: save to Downloads instead
+                        fallback = True
+                    else:
+                        if dest is None:
+                            return self._send(200, {"cancelled": True})
+                out = save_csv(name, body.get("rows"), folder, dest)
+            except (ValueError, AttributeError, TypeError) as exc:
+                return self._send(400, {"error": str(exc)})
+            except OSError as exc:
+                return self._send(500, {"error": f"could not write the file: {exc}"})
+            return self._send(200, {"path": str(out), "fallback": fallback})
         if self.path != "/api/delete" or not self._same_origin():
             return self._send(403, {"error": "forbidden"})
         if not self.server.allow_delete:
@@ -563,6 +599,68 @@ def current_paths():
 
 
 DB_FILE = ROOT / "results" / "history.db"
+DOWNLOADS = Path.home() / "Downloads"
+EXPORT_NAMES = ("bt_sensor_suspects",)   # the only files the page may ask the server to write
+
+
+def default_csv_name(name):
+    return f"{name}_{datetime.now():%Y%m%d_%H%M%S}.csv"
+
+
+_SAVE_DIALOG = r"""
+import sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)
+path = filedialog.asksaveasfilename(parent=root, title="Save CSV", initialdir=sys.argv[1], initialfile=sys.argv[2],
+                                    defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+sys.stdout.buffer.write(path.encode("utf-8"))
+"""
+
+
+def choose_save_path(initial_dir, initial_name):
+    """Ask on this PC's desktop where to save (a normal Save as dialog). Path, or None if cancelled.
+
+    Runs in its own python process so the dialog never fights the server threads; raises if the
+    dialog cannot be shown.
+    """
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
+        exe = exe.with_name("python.exe")      # pythonw has no stdout to read the answer from
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    r = subprocess.run([str(exe), "-c", _SAVE_DIALOG, str(initial_dir), initial_name],
+                       capture_output=True, timeout=900, creationflags=flags)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode("utf-8", "replace")[-300:] or "the save dialog failed")
+    chosen = r.stdout.decode("utf-8").strip()
+    return Path(chosen) if chosen else None
+
+
+def save_csv(name, rows, folder=None, dest=None):
+    """Write `rows` as a CSV into the Downloads folder and return its path.
+
+    The window the app runs in may block browser downloads, so exports are written by the
+    server instead. Only whitelisted names are accepted and the file name carries a timestamp.
+    """
+    if name not in EXPORT_NAMES:
+        raise ValueError("unknown export")
+    if (not isinstance(rows, list) or len(rows) > 50000
+            or not all(isinstance(r, list) and all(isinstance(v, (str, int, float, type(None))) for v in r)
+                       for r in rows)):
+        raise ValueError("rows must be a list of lists of plain values")
+    folder = Path(folder or DOWNLOADS)
+    if dest is not None:                      # chosen by the user in the Save dialog
+        out = Path(dest)
+        if out.suffix.lower() != ".csv":
+            out = out.with_name(out.name + ".csv")
+    else:
+        out = folder / default_csv_name(name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    buf = io.StringIO()
+    csv.writer(buf).writerows([["" if v is None else v for v in r] for r in rows])
+    out.write_bytes(buf.getvalue().encode("utf-8-sig"))   # BOM for Excel; bytes keep the csv module line endings as they are
+    return out
 
 
 class Server(ThreadingHTTPServer):
@@ -590,7 +688,7 @@ class Server(ThreadingHTTPServer):
 
 def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LOG,
                 page_builder=None, paths_provider=None, post=None,
-                sensor_builder=None, views=None, db_file=None, allow_delete=None, delete_url=None):
+                sensor_builder=None, views=None, db_file=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
@@ -605,6 +703,8 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LO
     srv.views = views if views is not None else sensor_views()
     srv.sensor_builder = sensor_builder or (lambda slug: build_sensor_page(slug, srv.views))
     srv.tokens = {}
+    srv.downloads_dir = downloads_dir
+    srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake
     srv.on_quit = None   # set by the app-window launcher to close the window
     return srv
 
@@ -620,6 +720,10 @@ def window_available():
 def run_window(srv, url):
     """Show the app in its own window; closing the window stops the server."""
     import webview
+    try:
+        webview.settings["ALLOW_DOWNLOADS"] = True
+    except Exception:
+        pass   # older pywebview: no such setting
     win = webview.create_window("Control Room", url, width=1500, height=950, min_size=(900, 600))
     srv.on_quit = win.destroy
     threading.Thread(target=srv.serve_forever, daemon=True).start()

@@ -299,9 +299,11 @@ def csv_rows(result):
     """Rows for an export: suspects first (most confident first)."""
     order = {v: i for i, v in enumerate(("faulty_high", "faulty_likely", "path_problem",
                                          "explained", "no_evidence", "working"))}
-    rows = [["Sensor ID", "Name", "Site code", "Verdict", "Reason", "Working paths", "Failing paths"]]
+    rows = [["Sensor ID", "Name", "Site code", "Latitude", "Longitude", "Verdict", "Reason",
+             "Working paths", "Failing paths", "Unclear paths", "Total paths counted"]]
     for sid, v in sorted(result["sensors"].items(), key=lambda kv: (order[kv[1]["verdict"]], kv[1]["name"])):
         if v["verdict"] in ("working", "no_evidence"):
             continue
-        rows.append([sid, v["name"], v["site_code"], VERDICTS[v["verdict"]], v["reason"], v["good"], v["bad"]])
+        rows.append([sid, v["name"], v["site_code"], v.get("lat"), v.get("lon"), VERDICTS[v["verdict"]], v["reason"],
+                     v["good"], v["bad"], v["mixed"], v["good"] + v["bad"] + v["mixed"]])
     return rows

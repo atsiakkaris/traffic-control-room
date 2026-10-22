@@ -361,3 +361,90 @@ def test_jump_bar_is_hidden_until_a_button_shows(tmp_path):
     assert ".crnav{" in out and "display:none" in out.split(".crnav.on")[0]   # hidden by default
     assert ".crnav.on{display:flex}" in out
     assert out.count("nav.classList.add('on')") == 2                           # back pill and "Paths here"
+
+
+# ── CSV export is written by the server ──────────────────────────────────────
+
+def test_save_csv_writes_a_real_csv_with_quotes_and_non_ascii(tmp_path):
+    rows = [["Sensor ID", "Name", "Reason"], ["1", 'Iroon, "Morfou"', "\u03a0\u03ac\u03c6\u03bf\u03c2"], ["2", None, 5]]
+    out = cr.save_csv("bt_sensor_suspects", rows, tmp_path)
+    assert out.parent == tmp_path and out.name.startswith("bt_sensor_suspects_") and out.suffix == ".csv"
+    import csv as _csv
+    back = list(_csv.reader(out.read_text(encoding="utf-8-sig").splitlines()))
+    assert back == [["Sensor ID", "Name", "Reason"], ["1", 'Iroon, "Morfou"', "\u03a0\u03ac\u03c6\u03bf\u03c2"], ["2", "", "5"]]
+
+
+def test_save_csv_refuses_unknown_names_and_odd_rows(tmp_path):
+    import pytest
+    with pytest.raises(ValueError):
+        cr.save_csv("../../evil", [["a"]], tmp_path)
+    with pytest.raises(ValueError):
+        cr.save_csv("bt_sensor_suspects", [[{"x": 1}]], tmp_path)
+    with pytest.raises(ValueError):
+        cr.save_csv("bt_sensor_suspects", "not rows", tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_save_csv_endpoint_saves_and_rejects_cross_origin(tmp_path):
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv",
+                         page_builder=lambda: ("", {}), paths_provider=dict, downloads_dir=tmp_path / "dl", choose_path=None)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    body = {"name": "bt_sensor_suspects", "rows": [["a", "b"], ["1", "2"]]}
+    try:
+        assert _req(base + "/api/save-csv", "POST", body, {"Origin": "http://evil.example"})[0] == 403
+        code, out = _req(base + "/api/save-csv", "POST", body)
+        assert code == 200 and Path(out["path"]).read_text(encoding="utf-8-sig").splitlines() == ["a,b", "1,2"]
+        assert _req(base + "/api/save-csv", "POST", {"name": "other", "rows": []})[0] == 400
+    finally:
+        srv.shutdown()
+
+
+def test_triangulation_export_uses_the_server_not_a_browser_download():
+    import bt_sensor_suspects as bs
+    result = {"sensors": {}, "meta": {"enough_history": True, "runs_used": 20, "runs_ignored_as_outage": 0,
+                                      "unusable_paths": 0}}
+    html = cr.triangulation_html(result)
+    assert "/api/save-csv" in html and "createObjectURL" not in html and 'id="triSaved"' in html
+
+
+def _dl_server(tmp_path, chooser):
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv",
+                         page_builder=lambda: ("", {}), paths_provider=dict, downloads_dir=tmp_path / "dl",
+                         choose_path=chooser)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def test_export_saves_where_the_user_chooses_in_the_dialog(tmp_path):
+    asked = []
+    chosen = tmp_path / "mine" / "suspects"          # no extension: .csv is added
+    srv, base = _dl_server(tmp_path, lambda folder, name: (asked.append((folder, name)), chosen)[1])
+    try:
+        code, out = _req(base + "/api/save-csv", "POST", {"name": "bt_sensor_suspects", "rows": [["a"], ["1"]]})
+        assert code == 200 and Path(out["path"]) == tmp_path / "mine" / "suspects.csv" and not out["fallback"]
+        assert Path(out["path"]).exists()
+        assert asked[0][0] == tmp_path / "dl" and asked[0][1].startswith("bt_sensor_suspects_")
+    finally:
+        srv.shutdown()
+
+
+def test_cancelling_the_dialog_saves_nothing(tmp_path):
+    srv, base = _dl_server(tmp_path, lambda folder, name: None)
+    try:
+        code, out = _req(base + "/api/save-csv", "POST", {"name": "bt_sensor_suspects", "rows": [["a"]]})
+        assert code == 200 and out == {"cancelled": True}
+        assert not (tmp_path / "dl").exists() or not any((tmp_path / "dl").iterdir())
+    finally:
+        srv.shutdown()
+
+
+def test_no_dialog_available_falls_back_to_downloads_and_says_so(tmp_path):
+    def broken(folder, name):
+        raise RuntimeError("no display")
+    srv, base = _dl_server(tmp_path, broken)
+    try:
+        code, out = _req(base + "/api/save-csv", "POST", {"name": "bt_sensor_suspects", "rows": [["a"]]})
+        assert code == 200 and out["fallback"] is True and Path(out["path"]).parent == tmp_path / "dl"
+    finally:
+        srv.shutdown()
