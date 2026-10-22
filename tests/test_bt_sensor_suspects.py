@@ -141,7 +141,10 @@ def test_csv_lists_suspects_first_and_skips_working_sensors():
     resolved = bs.resolve_paths(paths, SENSORS)
     verdicts = bs.judge_sensors(SENSORS, resolved, {"1": "bad", "2": "bad", "3": "good", "4": "good"})
     for sid, v in verdicts.items():
-        v.update(name=sid, site_code=SENSORS[sid]["site_code"])
+        v.update(name=sid, site_code=SENSORS[sid]["site_code"], lat=SENSORS[sid]["lat"], lon=SENSORS[sid]["lon"])
     rows = bs.csv_rows({"sensors": verdicts})
-    assert rows[0][0] == "Sensor ID" and rows[1][0] == "B" and rows[1][3] == bs.VERDICTS["faulty_high"]
+    assert rows[0][0] == "Sensor ID" and rows[1][0] == "B" and rows[1][5] == bs.VERDICTS["faulty_high"]
+    head = rows[0]
+    assert head[3:5] == ["Latitude", "Longitude"] and head[-1] == "Total paths counted"
+    assert rows[1][head.index("Total paths counted")] == 2 and rows[1][head.index("Failing paths")] == 2
     assert all(r[0] not in ("D", "J") for r in rows[1:])
