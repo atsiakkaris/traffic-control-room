@@ -164,30 +164,30 @@ def test_fetch_reads_all_pages_converts_coordinates_and_retries_a_hang():
 
     def get(url, params, timeout):
         calls.append((url.rsplit("/", 1)[1], params["start"]))
-        if url.endswith("path-list") and calls.count(("path-list", 0)) == 1:
+        if url.endswith("/paths") and calls.count(("paths", 0)) == 1:
             raise TimeoutError()                                   # first try hangs
-        if url.endswith("node-list"):
+        if url.endswith("/nodes"):
             return Resp({"data": nodes, "totalCount": 1})
         return Resp({"listPaths": paths, "total": 3})
-    snap = of.fetch_snapshot("http://omnia.test/P/", get=get, sleep=lambda s: None)
+    snap = of.fetch_snapshot({"nodes": "http://omnia.test/nodes", "paths": "http://omnia.test/paths"}, get=get, sleep=lambda s: None)
     assert [p["id"] for p in snap["paths"]] == [1, 2, 3] and snap["paths"][0]["end"] is None
     assert snap["nodes"][0]["name"] == "Athalassas" and abs(snap["nodes"][0]["lat"] - 35.15) < 0.02
-    assert calls.count(("path-list", 0)) == 2
+    assert calls.count(("paths", 0)) == 2
 
 
 def test_fetch_gives_up_with_a_readable_error_without_the_address():
     def get(url, params, timeout):
         raise ConnectionError()
     try:
-        of.fetch_snapshot("http://secret.internal/P", get=get, sleep=lambda s: None)
+        of.fetch_snapshot({"nodes": "http://secret.internal/n", "paths": "http://secret.internal/p"}, get=get, sleep=lambda s: None)
     except of.OmniaError as exc:
-        assert "node-list" in str(exc) and "secret.internal" not in str(exc)
+        assert "node list" in str(exc) and "secret.internal" not in str(exc)
     else:
         raise AssertionError("expected OmniaError")
     try:
-        of.fetch_snapshot("", get=get)
+        of.fetch_snapshot({}, get=get)
     except of.OmniaError as exc:
-        assert "CONTROL_ROOM_OMNIA_URL" in str(exc)
+        assert "CONTROL_ROOM_OMNIA_NODES_URL" in str(exc)
 
 
 def test_snapshot_round_trip_and_bad_files(tmp_path):

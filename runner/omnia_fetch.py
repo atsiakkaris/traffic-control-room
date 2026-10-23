@@ -1,14 +1,15 @@
 """
-omnia_fetch.py - read the configured paths and logical nodes from OMNIA (SWARCO path manager).
+omnia_fetch.py - read the configured paths and logical nodes from OMNIA (SWARCO's path manager).
 
 Read-only: only GET requests. Each path there has a start and an end *logical node* (the OMNIA copy of a
 Bluetooth sensor location) plus a min/max speed; `bt_wiring.py` compares those with the API sensors and the
-drawn paths. The address is never stored in the code (the repo is public): it comes from the git-ignored
+drawn paths. The addresses are never stored in the code (the repo is public): they come from the git-ignored
 .env (see tools/control_room.py), and the fetched data is saved as results/omnia_snapshot.json (git-ignored) so
 the check works offline afterwards.
 
-Notes from exploring the service: nodes answer in milliseconds, but path-list can hang for 30 s or more, and
-concurrent requests on one session make OMNIA abort - so requests are sent one at a time, with retries.
+Notes from exploring the service: the node list answers in milliseconds, but the path list can hang for 30 s
+or more, and concurrent requests on one session make OMNIA abort - so requests are sent one at a time, with
+retries.
 
 Node coordinates are Web Mercator metres (EPSG:3857), not degrees; `Latitude` is the y and `Longitude` the x.
 """
@@ -27,7 +28,7 @@ EARTH_R = 6378137.0
 
 
 class OmniaError(Exception):
-    """A readable reason the fetch failed (never contains the address)."""
+    """A readable reason the fetch failed (never contains an address)."""
 
 
 def mercator_to_wgs84(x, y):
@@ -37,11 +38,11 @@ def mercator_to_wgs84(x, y):
     return lat, lon
 
 
-def _get_json(get, base, name, sleep, timeout=TIMEOUT_S, retries=RETRIES, **params):
+def _get_json(get, url, label, sleep, timeout=TIMEOUT_S, retries=RETRIES, **params):
     last = "no answer"
     for attempt in range(1, retries + 1):
         try:
-            resp = get(f"{base.rstrip('/')}/{name}", params=params, timeout=timeout)
+            resp = get(url, params=params, timeout=timeout)
             if resp.status_code == 200:
                 return resp.json()
             last = f"HTTP {resp.status_code}"
@@ -49,32 +50,37 @@ def _get_json(get, base, name, sleep, timeout=TIMEOUT_S, retries=RETRIES, **para
             last = type(exc).__name__
         if attempt < retries:
             sleep(RETRY_WAIT_S)
-    raise OmniaError(f"OMNIA did not answer {name} after {retries} tries ({last}). "
+    raise OmniaError(f"OMNIA did not answer the {label} request after {retries} tries ({last}). "
                      "Check you are on the internal network and try again.")
 
 
-def _all_pages(get, base, name, key, total_key, sleep):
+def _all_pages(get, url, label, key, total_key, sleep):
     rows, total = [], None
     while True:
-        data = _get_json(get, base, name, sleep, page=len(rows) // PAGE_LIMIT + 1, start=len(rows), limit=PAGE_LIMIT)
+        data = _get_json(get, url, label, sleep, page=len(rows) // PAGE_LIMIT + 1, start=len(rows), limit=PAGE_LIMIT)
         page = data.get(key)
         if not isinstance(page, list):
-            raise OmniaError(f"OMNIA's answer to {name} had an unexpected shape.")
+            raise OmniaError(f"OMNIA's answer to the {label} request had an unexpected shape.")
         rows += page
         total = data.get(total_key, len(rows))
         if not page or len(rows) >= (total or 0):
             return rows
 
 
-def fetch_snapshot(base, get=None, sleep=time.sleep, now=None):
-    """Nodes and paths as {fetched_at, nodes, paths}; raises OmniaError with a readable message."""
-    if not base:
-        raise OmniaError("No OMNIA address is set on this PC (CONTROL_ROOM_OMNIA_URL in .env).")
+def fetch_snapshot(urls, get=None, sleep=time.sleep, now=None):
+    """Nodes and paths as {fetched_at, nodes, paths}; raises OmniaError with a readable message.
+
+    urls: {"nodes": full address of the node list, "paths": full address of the path list}.
+    """
+    urls = urls or {}
+    if not (urls.get("nodes") and urls.get("paths")):
+        raise OmniaError("The OMNIA addresses are not set on this PC "
+                         "(CONTROL_ROOM_OMNIA_NODES_URL and CONTROL_ROOM_OMNIA_PATHS_URL in .env).")
     if get is None:
         import httpx
         get = httpx.get
-    raw_nodes = _all_pages(get, base, "node-list", "data", "totalCount", sleep)
-    raw_paths = _all_pages(get, base, "path-list", "listPaths", "total", sleep)
+    raw_nodes = _all_pages(get, urls["nodes"], "node list", "data", "totalCount", sleep)
+    raw_paths = _all_pages(get, urls["paths"], "path list", "listPaths", "total", sleep)
     nodes = []
     for n in raw_nodes:
         lat, lon = mercator_to_wgs84(n["Longitude"], n["Latitude"])
@@ -100,7 +106,9 @@ def load_snapshot(path):
     """The saved snapshot, or None if there is none (or it cannot be read)."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError:
+        return None
+    except ValueError:
         return None
     ok = isinstance(data, dict) and isinstance(data.get("nodes"), list) and isinstance(data.get("paths"), list)
     return data if ok else None

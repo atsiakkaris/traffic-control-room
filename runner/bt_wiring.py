@@ -205,13 +205,14 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
                     "start_node": p.get("start"), "end_node": p.get("end"),
                     "start_name": sn["name"] if sn else None, "end_name": en["name"] if en else None,
                     "start_sensor": sn["sensor"] if sn else None, "end_sensor": en["sensor"] if en else None,
+                    "speed_min": p.get("speed_min"), "speed_max": p.get("speed_max"),
                     "findings": findings,
                     "severity": max((f["severity"] for f in findings), key=SEVERITY.get, default="ok")}
     for pid, feed in feed_paths.items():
         if str(pid) not in seen:
             out[str(pid)] = {"id": str(pid), "name": feed.get("name") or "", "feed_name": feed.get("name"),
                              "start_node": None, "end_node": None, "start_name": None, "end_name": None,
-                             "start_sensor": None, "end_sensor": None,
+                             "start_sensor": None, "end_sensor": None, "speed_min": None, "speed_max": None,
                              "findings": [{"code": "not_in_omnia", "severity": "medium",
                                            "text": "This path is in the API feed but not in OMNIA"}],
                              "severity": "medium"}

@@ -322,8 +322,8 @@ def find_duplicate_groups(paths):
 
 
 # Reversed-direction check -----------------------------------------------
-# Confirmed via manual API reverse-engineering (SWARCO Mistic path manager):
-# BuildPathArcs saves the geometry in one fixed direction regardless of which
+# Confirmed via manual API reverse-engineering (SWARCO's path manager):
+# The path builder saves the geometry in one fixed direction regardless of which
 # end a reverse-registered path names first. A path named "A->B" whose
 # saved coordinates don't actually start near A and end near B relative to
 # its "B->A" counterpart is evidence of that defect, not a genuine duplicate.
@@ -690,6 +690,7 @@ function _pushFlags(now) {
     var yes = back.querySelector('#crYes'), del = back.querySelector('#crDel');
     yes.oninput = function() { del.disabled = (yes.value !== 'YES'); };
     del.onclick = function() {
+      if (!confirm('Permanently delete ' + ids.length + ' path(s) from OMNIA?\\n\\nThis cannot be undone.')) return;
       del.disabled = true;
       say('Deleting…');
       post({ids: ids, dry_run: false, confirm: yes.value, token: token}).then(function(r) {

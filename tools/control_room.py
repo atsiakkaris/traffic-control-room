@@ -85,13 +85,18 @@ def delete_url_setting(env=None, env_file=ROOT / ".env"):
     return _setting("CONTROL_ROOM_DELETE_URL", env, env_file)
 
 
-def omnia_url_setting(env=None, env_file=ROOT / ".env"):
-    """The OMNIA path manager address: CONTROL_ROOM_OMNIA_URL, else the folder of the delete address."""
-    url = _setting("CONTROL_ROOM_OMNIA_URL", env, env_file)
-    if url:
-        return url
-    delete = delete_url_setting(env, env_file)
-    return delete.rsplit("/", 1)[0] if delete else None
+def allow_edit_setting(env=None, env_file=ROOT / ".env"):
+    """True only if this PC opted in to changing OMNIA paths via CONTROL_ROOM_ALLOW_EDIT=1 (environment or .env)."""
+    return (_setting("CONTROL_ROOM_ALLOW_EDIT", env, env_file) or "").lower() in ("1", "true", "yes")
+
+
+def omnia_urls_setting(env=None, env_file=ROOT / ".env"):
+    """The OMNIA addresses from .env, each a full address: {nodes, paths, edit} (None for one that is not set).
+
+    CONTROL_ROOM_OMNIA_NODES_URL / _PATHS_URL read the lists, CONTROL_ROOM_OMNIA_EDIT_URL changes speeds and nodes,
+    CONTROL_ROOM_OMNIA_RENAME_URL renames; deleting uses CONTROL_ROOM_DELETE_URL. None of them is in the code: the repo is public.
+    """
+    return {k: _setting("CONTROL_ROOM_OMNIA_%s_URL" % k.upper(), env, env_file) for k in ("nodes", "paths", "edit", "rename")}
 
 
 # ── review file ──────────────────────────────────────────────────────────────
@@ -143,7 +148,7 @@ def plan_delete(ids, review, known_ids):
 
 
 def delete_paths(ids, url, post=None, sleep=time.sleep, delay=DELAY_S):
-    """POST path-delete for each id in order; stop at the first failure.
+    """POST the delete address for each id in order; stop at the first failure.
 
     Returns (results, error). results = [{"id", "ok", "status"}, ...].
     """
@@ -379,7 +384,9 @@ header h1{margin:0 0 4px;font-size:18px}header .sub{font-size:12px;opacity:.85}
 main{padding:14px 20px 40px}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
 button,select,input{font:13px Arial,sans-serif;padding:6px 11px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text)}
-button{cursor:pointer;background:#2e86c1;color:#fff;border:0}button.sec{background:#2c3e50}button:disabled{opacity:.5;cursor:wait}
+input[type=number]{width:74px;-moz-appearance:textfield}
+input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+button{cursor:pointer;background:#2e86c1;color:#fff;border:0}button.sec{background:#2c3e50}button.danger{background:#c0392b}button:disabled{opacity:.5;cursor:not-allowed}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
 .chip{padding:5px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);cursor:pointer}
 .chip.on{background:#2e86c1;color:#fff;border-color:#2e86c1}
@@ -393,6 +400,11 @@ a.go{color:#2e86c1;cursor:pointer}
 h2{font-size:15px;margin:22px 0 8px}
 .msg{padding:10px 12px;border-radius:6px;background:var(--card);border:1px solid var(--line);margin:0 0 12px}
 .err{border-color:var(--high);color:var(--high)}
+.edit{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 14px}
+.edit .row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:4px 0}
+.edit label{display:inline-flex;gap:5px;align-items:center}
+.pv td.ch{font-family:Consolas,monospace}
+.del{color:var(--high)}.add{color:#27ae60}
 </style></head><body>
 <header><h1>Wiring check</h1><div class="sub" id="sub"></div></header>
 <main>
@@ -406,36 +418,51 @@ h2{font-size:15px;margin:22px 0 8px}
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   var status = document.getElementById('status'), body = document.getElementById('body');
   var fetchBtn = document.getElementById('fetch'), exBtn = document.getElementById('ex');
+  var withFindings = D.paths.filter(function(p) { return p.findings.length; }).length;
   document.getElementById('sub').textContent = D.has_snapshot
-    ? 'OMNIA data fetched ' + D.fetched_at + ' - ' + D.meta.paths + ' paths, ' + D.meta.paths_with_findings + ' with findings'
+    ? 'OMNIA data fetched ' + D.fetched_at + ' - ' + D.meta.paths + ' paths, ' + withFindings + ' with findings'
     : 'No OMNIA data yet';
-  if (!D.can_fetch) { fetchBtn.disabled = true; fetchBtn.title = 'Set CONTROL_ROOM_OMNIA_URL in .env'; }
+  if (!D.can_fetch) { fetchBtn.disabled = true; fetchBtn.title = 'Set the OMNIA addresses in .env'; }
+  function post(url, data) {
+    return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data || {})})
+      .then(function(r) { return r.json().then(function(j) { j.__status = r.status; return j; }); });
+  }
   fetchBtn.onclick = function() {
     fetchBtn.disabled = true; status.textContent = 'Fetching from OMNIA - the path list can take up to a minute...';
-    fetch('/api/wiring/fetch', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(r) {
+    post('/api/wiring/fetch').then(function(r) {
       if (r.error) { status.textContent = r.error; fetchBtn.disabled = false; } else { location.reload(); }
     }).catch(function(e) { status.textContent = 'Could not fetch: ' + e; fetchBtn.disabled = false; });
   };
   if (!D.has_snapshot) {
     exBtn.style.display = 'none';
-    body.innerHTML = '<div class="msg">The check compares what is configured in OMNIA (each path\'s start and end node) with the API sensors and the drawn paths. '
+    body.innerHTML = '<div class="msg">The check compares what is configured in OMNIA (each path start and end node) with the API sensors and the drawn paths. '
       + (D.can_fetch ? 'Press <b>Fetch from OMNIA</b> (you must be on the internal network).'
-                     : 'This PC has no OMNIA address: add <b>CONTROL_ROOM_OMNIA_URL</b> to the .env file, or copy a results/omnia_snapshot.json from a PC that has fetched one.') + '</div>';
+                     : 'This PC has no OMNIA address: add the OMNIA addresses (<b>CONTROL_ROOM_OMNIA_NODES_URL</b> and <b>CONTROL_ROOM_OMNIA_PATHS_URL</b>) to the .env file, or copy a results/omnia_snapshot.json from a PC that has fetched one.') + '</div>';
     return;
   }
   exBtn.onclick = function() {
     status.textContent = 'Choose where to save in the dialog that opened (it may be behind this window)...';
-    fetch('/api/save-csv', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: 'bt_wiring', rows: D.csv})})
-      .then(function(r) { return r.json(); }).then(function(r) {
-        status.textContent = r.cancelled ? 'Cancelled - nothing saved.' : r.path ? 'Saved to ' + r.path + (r.fallback ? ' (no Save dialog available, so the Downloads folder was used)' : '') : 'Could not save: ' + (r.error || 'unknown error');
-      }).catch(function(e) { status.textContent = 'Could not save: ' + e; });
+    post('/api/save-csv', {name: 'bt_wiring', rows: D.csv}).then(function(r) {
+      status.textContent = r.cancelled ? 'Cancelled - nothing saved.' : r.path ? 'Saved to ' + r.path + (r.fallback ? ' (no Save dialog available, so the Downloads folder was used)' : '') : 'Could not save: ' + (r.error || 'unknown error');
+    }).catch(function(e) { status.textContent = 'Could not save: ' + e; });
   };
-  var code = '', q = '';
-  var chips = '<div class="chips" id="chips"></div>';
-  body.innerHTML = '<div class="bar"><input id="q" placeholder="Search path, name or node..."></div>' + chips
-    + '<table><thead><tr><th>Path</th><th>Start node</th><th>End node</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
+
+  var code = '', q = '', selected = {};
+  body.innerHTML = '<div class="edit" id="edit"></div><div class="bar"><input id="q" placeholder="Search path, name or node..."></div><div class="chips" id="chips"></div>'
+    + '<table><thead><tr><th><input type="checkbox" id="all" title="Select all shown"></th><th>Path ID</th><th>Path name</th><th>Start node</th><th>End node</th><th>Speed</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
     + '<h2>Nodes that need attention (' + D.nodes.length + ')</h2><table><thead><tr><th>Node</th><th>Status</th><th>Detail</th></tr></thead><tbody id="nodes"></tbody></table>'
     + '<h2>API sensors no node stands for (' + D.sensors_without_node.length + ')</h2><div class="note" id="swn"></div>';
+
+  function countSelected() { return Object.keys(selected).length; }
+  function shown() {
+    return D.paths.filter(function(p) {
+      if (code === '__all') { /* every path */ }
+      else if (code === '') { if (!p.findings.length) return false; }
+      else if (!p.findings.some(function(f) { return f.code === code; })) return false;
+      var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ')).toLowerCase();
+      return !q || hay.indexOf(q) >= 0;
+    });
+  }
   function chip(label, c, n) {
     var el = document.createElement('span');
     el.className = 'chip' + (code === c ? ' on' : ''); el.textContent = label + ' (' + n + ')';
@@ -444,29 +471,159 @@ h2{font-size:15px;margin:22px 0 8px}
   }
   function draw() {
     var cs = document.getElementById('chips'); cs.innerHTML = '';
-    cs.appendChild(chip('All with findings', '', D.paths.length));
+    cs.appendChild(chip('All with findings', '', withFindings));
     Object.keys(D.meta.by_code).sort(function(a, b) { return D.meta.by_code[b] - D.meta.by_code[a]; }).forEach(function(c) {
       cs.appendChild(chip(D.labels[c] ? D.labels[c][1] : c, c, D.meta.by_code[c]));
     });
+    cs.appendChild(chip('All paths', '__all', D.paths.length));
     var rows = document.getElementById('rows'); rows.innerHTML = '';
-    D.paths.forEach(function(p) {
-      if (code && !p.findings.some(function(f) { return f.code === code; })) return;
-      var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ')).toLowerCase();
-      if (q && hay.indexOf(q) < 0) return;
+    var list = shown();
+    list.forEach(function(p) {
       var tr = document.createElement('tr');
-      tr.innerHTML = '<td><b>' + esc(p.id) + '</b><br>' + esc(p.name) + '</td><td>' + esc(p.start_node || '-') + '<br>' + esc(p.start_name || '') + '</td><td>'
-        + esc(p.end_node || '-') + '<br>' + esc(p.end_name || '') + '</td><td>'
+      var speed = p.speed_min == null ? '-' : p.speed_min + '-' + p.speed_max;
+      tr.innerHTML = '<td><input type="checkbox" data-sel="' + esc(p.id) + '"' + (selected[p.id] ? ' checked' : '') + '></td><td><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + esc(p.start_node || '-') + '<br>' + esc(p.start_name || '') + '</td><td>'
+        + esc(p.end_node || '-') + '<br>' + esc(p.end_name || '') + '</td><td>' + esc(speed) + '</td><td>'
         + p.findings.map(function(f) { return '<span class="f ' + esc(f.severity) + '">' + esc(f.text) + '</span>'; }).join('')
         + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '">show on map</a>' : '') + '</td>';
       rows.appendChild(tr);
     });
-    if (!rows.children.length) rows.innerHTML = '<tr><td colspan="5" class="note">Nothing matches.</td></tr>';
+    if (!rows.children.length) rows.innerHTML = '<tr><td colspan="8" class="note">Nothing matches.</td></tr>';
+    document.getElementById('all').checked = list.length > 0 && list.every(function(p) { return selected[p.id]; });
+    drawEdit();
   }
   document.getElementById('q').oninput = function() { q = this.value.toLowerCase(); draw(); };
+  document.getElementById('all').onchange = function() {
+    var on = this.checked;
+    shown().forEach(function(p) { if (on) selected[p.id] = true; else delete selected[p.id]; });
+    draw();
+  };
   document.addEventListener('click', function(e) {
     var a = e.target.closest && e.target.closest('[data-p]');
     if (a && shell) shell.crShow('paths', {path: a.getAttribute('data-p')});
   });
+  document.addEventListener('change', function(e) {
+    var c = e.target.getAttribute && e.target.getAttribute('data-sel');
+    if (c) { if (e.target.checked) selected[c] = true; else delete selected[c]; drawEdit(); }
+  });
+
+  // ---- bulk edit ------------------------------------------------------------
+  var preview = null;          // the last preview answer {items, refused, token}
+  function nodeLabel(v) { return v && D.node_names[v] ? D.node_names[v] : ''; }
+  function drawEdit() {
+    var el = document.getElementById('edit');
+    var keep = {};
+    ['smin', 'smax', 'nstart', 'nend', 'swap', 'yes', 'rfind', 'rrep', 'rpre', 'rsuf', 'rnew', 'rstd'].forEach(function(id) { var x = document.getElementById(id); if (x) keep[id] = x.type === 'checkbox' ? x.checked : x.value; });
+    var h = '<b>Bulk edit in OMNIA</b> <span class="note">' + countSelected() + ' path(s) selected (up to 50 per batch)</span>';
+    h += '<div class="row"><label>Speed min <input type="number" id="smin" min="1" step="1"></label><label>Speed max <input type="number" id="smax" min="1" step="1"></label>'
+      + '<label><input type="checkbox" id="swap"> swap start and end node</label>'
+      + '<label>Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label>End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
+      + '<div class="row"><b>Rename:</b><label>Find <input id="rfind" size="9"></label><label>Replace with <input id="rrep" size="9"></label><label>Prefix <input id="rpre" size="6"></label><label>Suffix <input id="rsuf" size="6"></label>'
+      + '<label>New name (one path) <input id="rnew" size="14"></label><label><input type="checkbox" id="rstd"> name from its nodes (site codes)</label></div>'
+      + '<div class="row"><button id="pv">Preview changes</button><button class="sec" id="pvr">Preview rename</button><button class="sec" id="pvu">Preview undo of last batch</button><button class="sec" id="pvru">Preview undo of last rename</button><button class="sec" id="clr">Clear selection</button>' + (D.can_delete ? '<button class="danger" id="del">Delete selected paths...</button>' : '') + '<span class="note" id="pvs"></span></div>'
+      + '<div id="pvbox"></div>';
+    el.innerHTML = h;
+    Object.keys(keep).forEach(function(id) { var x = document.getElementById(id); if (x) { if (x.type === 'checkbox') x.checked = keep[id]; else x.value = keep[id]; } });
+    function labels() { document.getElementById('nsl').textContent = nodeLabel(+document.getElementById('nstart').value); document.getElementById('nel').textContent = nodeLabel(+document.getElementById('nend').value); }
+    document.getElementById('nstart').oninput = labels; document.getElementById('nend').oninput = labels; labels();
+    document.getElementById('clr').onclick = function() { selected = {}; preview = null; draw(); };
+    ['smin', 'smax', 'nstart', 'nend'].forEach(function(id) {
+      document.getElementById(id).onkeydown = function(e) { if (['-', '+', 'e', 'E', '.', ','].indexOf(e.key) >= 0) e.preventDefault(); };
+    });
+    if (document.getElementById('del')) document.getElementById('del').onclick = function() {
+      if (!countSelected()) { document.getElementById('pvs').textContent = 'Select the paths to delete first.'; return; }
+      runPreview({delete: true, ids: Object.keys(selected)});
+    };
+    document.getElementById('pv').onclick = function() {
+      var bad = '';
+      [['smin', 'Speed min'], ['smax', 'Speed max'], ['nstart', 'Start node'], ['nend', 'End node']].forEach(function(f) {
+        var v = document.getElementById(f[0]).value.trim();
+        if (v !== '' && !/^[1-9][0-9]*$/.test(v)) bad = f[1] + ' must be a whole number above 0.';
+      });
+      var lo = document.getElementById('smin').value, hi = document.getElementById('smax').value;
+      if (!bad && lo !== '' && hi !== '' && +lo >= +hi) bad = 'Speed min must be below speed max.';
+      if (!bad && !countSelected()) bad = 'Select at least one path first.';
+      if (!bad && lo === '' && hi === '' && !document.getElementById('swap').checked && !document.getElementById('nstart').value.trim() && !document.getElementById('nend').value.trim()) bad = 'Set a speed, a node, or tick swap first.';
+      if (bad) { document.getElementById('pvs').textContent = bad; return; }
+      runPreview({ids: Object.keys(selected), speed_min: document.getElementById('smin').value, speed_max: document.getElementById('smax').value,
+                  swap: document.getElementById('swap').checked, start: document.getElementById('nstart').value, end: document.getElementById('nend').value});
+    };
+    document.getElementById('pvu').onclick = function() { runPreview({undo: true}); };
+    document.getElementById('pvru').onclick = function() { runPreview({undo_rename: true}); };
+    document.getElementById('pvr').onclick = function() {
+      var r = {find: document.getElementById('rfind').value, replace: document.getElementById('rrep').value, prefix: document.getElementById('rpre').value,
+               suffix: document.getElementById('rsuf').value, new_name: document.getElementById('rnew').value, standard: document.getElementById('rstd').checked};
+      var s = document.getElementById('pvs');
+      if (!countSelected()) { s.textContent = 'Select at least one path first.'; return; }
+      if (!r.standard && !r.find && !r.prefix && !r.suffix && !r.new_name.trim()) { s.textContent = 'Give a new name, a find/replace, a prefix or a suffix first.'; return; }
+      runPreview({ids: Object.keys(selected), rename: r});
+    };
+    if (preview) drawPreview();
+  }
+  function runPreview(req) {
+    var s = document.getElementById('pvs'); s.textContent = 'Reading OMNIA (can take up to a minute)... nothing is sent yet.';
+    post('/api/edit/plan', req).then(function(r) {
+      if (r.error) { s.textContent = r.error; return; }
+      preview = r; s.textContent = ''; drawPreview();
+    }).catch(function(e) { s.textContent = 'Could not preview: ' + e; });
+  }
+  function chg(a, b) { return a === b ? esc(a == null ? '-' : a) : '<span class="del">' + esc(a == null ? '-' : a) + '</span> &rarr; <span class="add">' + esc(b == null ? '-' : b) + '</span>'; }
+  function drawPreview() {
+    var box = document.getElementById('pvbox'); if (!box) return;
+    var h = '<div class="note">Read from OMNIA at ' + esc(preview.fetched_at) + '. Nothing has been changed yet.</div>';
+    var isDel = preview.kind === 'delete';
+    if (preview.kind === 'rename' && preview.items.length) {
+      h += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name (old to new)</th></tr></thead><tbody>';
+      preview.items.forEach(function(it) { h += '<tr><td><b>' + esc(it.id) + '</b></td><td class="ch">' + chg(it.name, it.new_name) + '</td></tr>'; });
+      h += '</tbody></table>';
+    } else if (isDel && preview.items.length) {
+      h += '<table class="pv"><thead><tr><th>Path ID (to DELETE)</th><th>Path name</th><th>Speed</th><th>Start node</th><th>End node</th></tr></thead><tbody>';
+      preview.items.forEach(function(it) {
+        h += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td>' + esc(it.before.speed_min == null ? '-' : it.before.speed_min + '-' + it.before.speed_max) + '</td><td>'
+          + esc(it.before.start || '-') + ' ' + esc(it.start_name) + '</td><td>' + esc(it.before.end || '-') + ' ' + esc(it.end_name) + '</td></tr>';
+      });
+      h += '</tbody></table>';
+    } else if (preview.items.length) {
+      h += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name</th><th>Speed min</th><th>Speed max</th><th>Start node</th><th>End node</th></tr></thead><tbody>';
+      preview.items.forEach(function(it) {
+        h += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td class="ch">' + chg(it.before.speed_min, it.after.speed_min) + '</td><td class="ch">' + chg(it.before.speed_max, it.after.speed_max)
+          + '</td><td class="ch">' + chg(it.before.start, it.after.start) + ' ' + esc(it.start_name) + '</td><td class="ch">' + chg(it.before.end, it.after.end) + ' ' + esc(it.end_name) + '</td></tr>';
+      });
+      h += '</tbody></table>';
+    }
+    if (preview.refused.length) {
+      h += '<div class="msg err"><b>' + preview.refused.length + ' path(s) will not be changed:</b><br>'
+        + preview.refused.map(function(r) { return esc(r.id) + ': ' + esc(r.reason); }).join('<br>') + '</div>';
+    }
+    var word = isDel ? 'DELETE' : 'YES';
+    if (preview.items.length && preview.token && preview.allowed) {
+      h += '<div class="row"><b>' + preview.items.length + (isDel ? ' path(s) will be PERMANENTLY DELETED from OMNIA (this cannot be undone).' : preview.kind === 'rename' ? ' path(s) will be renamed in OMNIA.' : ' path(s) will be changed in OMNIA.') + '</b> Type ' + word
+        + ': <input id="yes" size="8" autocomplete="off"> <button class="danger" id="apply" disabled>' + (isDel ? 'Delete from OMNIA' : 'Apply to OMNIA') + '</button></div>';
+    } else if (preview.items.length) {
+      h += '<div class="note">' + (isDel ? 'Deleting' : 'Editing') + ' is switched off on this PC, so this is a preview only.</div>';
+    }
+    h += '<div id="res"></div>';
+    box.innerHTML = h;
+    var yes = document.getElementById('yes'), ap = document.getElementById('apply');
+    if (yes) {
+      yes.oninput = function() { ap.disabled = yes.value !== word; };
+      ap.onclick = function() {
+        if (isDel && !confirm('Permanently delete ' + preview.items.length + ' path(s) from OMNIA?\n\nThis cannot be undone.')) return;
+        ap.disabled = true; yes.disabled = true;
+        document.getElementById('res').innerHTML = '<div class="note">Sending to OMNIA one path at a time...</div>';
+        post('/api/edit/apply', {token: preview.token, confirm: word}).then(function(r) {
+          var res = document.getElementById('res');
+          if (r.__status !== 200) { res.innerHTML = '<div class="msg err">' + esc(r.error || 'failed') + '</div>'; return; }
+          var ok = r.results.filter(function(x) { return x.ok; }).length;
+          res.innerHTML = '<div class="msg' + (r.error ? ' err' : '') + '"><b>' + ok + ' of ' + preview.items.length + (r.kind === 'delete' ? ' path(s) deleted.</b> ' : r.kind === 'rename' ? ' path(s) renamed.</b> ' : ' path(s) changed.</b> ') + esc(r.error || '')
+            + (r.kind === 'delete' ? ' Logged in results/delete_log.csv.' : r.kind === 'rename' ? ' Logged as batch ' + esc(r.batch) + ' ("Preview undo of last rename" reverts it).' : ' Logged as batch ' + esc(r.batch) + ' (results/omnia_edit_log.csv; "Preview undo of last batch" reverts it).')
+            + ' <button id="rl">Reload with the new data</button></div>';
+          document.getElementById('rl').onclick = function() { location.reload(); };
+          preview = null;
+        }).catch(function(e) { document.getElementById('res').innerHTML = '<div class="msg err">Could not apply: ' + esc(e) + '</div>'; });
+      };
+    }
+  }
+
   var nodes = document.getElementById('nodes');
   D.nodes.forEach(function(n) {
     var tr = document.createElement('tr');
@@ -478,18 +635,20 @@ h2{font-size:15px;margin:22px 0 8px}
     ? D.sensors_without_node.map(function(s) { return s[1] + ' (id ' + s[0] + ')'; }).join(', ') : 'None.';
   draw();
 })();
-</script></body></html>"""
+</script></body></html>
+"""
 
 
-def build_wiring_page(result, snapshot, can_fetch):
+def build_wiring_page(result, snapshot, can_fetch, can_edit=False, can_delete=False):
     """The Wiring tab: configured OMNIA nodes versus the API sensors and the drawn paths."""
     import bt_wiring as bw
-    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "labels": bw.FINDINGS,
+    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "can_edit": bool(can_edit), "can_delete": bool(can_delete), "labels": bw.FINDINGS,
+            "node_names": {n["id"]: n["name"] for n in (snapshot or {}).get("nodes", [])},
             "fetched_at": (snapshot or {}).get("fetched_at", ""), "meta": {}, "paths": [], "nodes": [],
             "sensors_without_node": [], "csv": []}
     if result:
         order = {"high": 0, "medium": 1, "low": 2}
-        paths = [p for p in result["paths"].values() if p["findings"]]
+        paths = list(result["paths"].values())          # every path; the page filters to those with findings
         paths.sort(key=lambda p: (order.get(p["severity"], 3), int(p["id"]) if str(p["id"]).isdigit() else 0))
         nodes = []
         for m in sorted(result["nodes"].values(), key=lambda m: m["id"]):
@@ -736,7 +895,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/wiring":
             try:
                 result, snap = self.server.wiring()
-                page = build_wiring_page(result, snap, bool(self.server.omnia_url))
+                page = build_wiring_page(result, snap, _can_fetch(self.server.omnia), self.server.allow_edit and bool(self.server.omnia["edit"]),
+                                         self.server.allow_delete and bool(self.server.delete_url))
             except Exception as exc:
                 return self._send(500, f"Could not build the page: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
@@ -772,6 +932,100 @@ class Handler(BaseHTTPRequestHandler):
         save_review(data, self.server.review_file)
         self._send(200, {"saved": len(clean_review(data))})
 
+    def _standard_names(self, snap, ids):
+        """{path id: name built from the site codes of its two nodes' sensors, e.g. 1001->1002}."""
+        import bt_wiring
+        _feed, sensors = self.server.wiring_inputs()
+        matches = bt_wiring.match_nodes(snap["nodes"], sensors)
+        out = {}
+        paths = {str(p["id"]): p for p in snap["paths"]}
+        for pid in ids:
+            p = paths.get(str(pid))
+            a, b = (matches.get(p.get("start")), matches.get(p.get("end"))) if p else (None, None)
+            if a and b and a["sensor"] is not None and b["sensor"] is not None:
+                out[str(pid)] = "%s->%s" % (sensors[a["sensor"]].get("site_code"), sensors[b["sensor"]].get("site_code"))
+        return out
+
+    def _edit(self, action):
+        """Bulk edit of OMNIA paths: 'plan' previews (reads OMNIA live, sends nothing), 'apply' writes."""
+        import omnia_edit
+        import omnia_fetch
+        srv = self.server
+        try:
+            body = self._body()
+            if not _can_fetch(srv.omnia):
+                return self._send(400, {"error": "The OMNIA addresses are not set on this PC (CONTROL_ROOM_OMNIA_NODES_URL and "
+                                                 "CONTROL_ROOM_OMNIA_PATHS_URL in .env)."})
+            fetch = srv.fetch_omnia or omnia_fetch.fetch_snapshot
+            snap = fetch(srv.omnia)                 # always the live state, never an old snapshot
+            omnia_fetch.save_snapshot(snap, srv.snapshot_file)
+            if action == "plan":
+                if body.get("delete"):
+                    plan = omnia_edit.plan_deletes(snap, body.get("ids") or [])
+                elif body.get("undo_rename"):
+                    plan = omnia_edit.undo_renames(srv.rename_log, snap)
+                elif body.get("rename"):
+                    r = body["rename"]
+                    standard = self._standard_names(snap, body.get("ids") or []) if r.get("standard") else None
+                    plan = omnia_edit.plan_renames(snap, body.get("ids") or [], r.get("find") or "", r.get("replace") or "",
+                                                   r.get("prefix") or "", r.get("suffix") or "", r.get("new_name") or "", standard)
+                elif body.get("undo"):
+                    plan = omnia_edit.undo_items(srv.edit_log, snap)
+                else:
+                    plan = omnia_edit.plan_edits(snap, body.get("ids") or [], body.get("speed_min"), body.get("speed_max"),
+                                                 bool(body.get("swap")), body.get("start"), body.get("end"))
+                kind = "delete" if body.get("delete") else "rename" if (body.get("rename") or body.get("undo_rename")) else "edit"
+                token = None
+                if plan["items"]:
+                    token = secrets.token_hex(8)
+                    srv.edit_tokens = {token: (kind, plan["items"])}      # only the newest preview can be applied
+                allowed = (srv.allow_delete and bool(srv.delete_url)) if kind == "delete" else (srv.allow_edit and bool(srv.omnia["rename" if kind == "rename" else "edit"]))
+                return self._send(200, dict(plan, token=token, kind=kind, allowed=allowed, fetched_at=snap["fetched_at"]))
+            held = srv.edit_tokens.get(body.get("token"))
+            kind = held[0] if held else "edit"
+            if kind == "delete":
+                if not (srv.allow_delete and srv.delete_url):
+                    return self._send(403, {"error": "Deleting is switched off on this PC (CONTROL_ROOM_ALLOW_DELETE=1 and the delete address in .env)."})
+                if body.get("confirm") != "DELETE":
+                    return self._send(400, {"error": "Type DELETE to confirm."})
+            else:
+                needed = "CONTROL_ROOM_OMNIA_RENAME_URL" if kind == "rename" else "CONTROL_ROOM_OMNIA_EDIT_URL"
+                if not (srv.allow_edit and srv.omnia["rename" if kind == "rename" else "edit"]):
+                    return self._send(403, {"error": "Editing is switched off on this PC (CONTROL_ROOM_ALLOW_EDIT=1 and "
+                                                     + needed + " in .env)."})
+                if body.get("confirm") != "YES":
+                    return self._send(400, {"error": "Type YES to confirm."})
+            if not held:
+                return self._send(400, {"error": "Preview the changes first (the preview can be applied once)."})
+            items = srv.edit_tokens.pop(body.get("token"))[1]
+            stale = omnia_edit.stale_ids(items, snap)
+            if stale:
+                return self._send(409, {"error": "Changed in OMNIA since the preview (paths %s). Preview again." % ", ".join(stale), "stale": stale})
+            if kind == "delete":
+                results, error = delete_paths([it["id"] for it in items], srv.delete_url, post=srv.post)
+                log_deletes(results, {it["id"]: it["name"] for it in items}, srv.delete_log)
+                srv.page_cache.clear()                  # the map page still lists the deleted paths
+                batch = "deleted"
+            elif kind == "rename":
+                batch, results, error = omnia_edit.apply_renames(items, srv.omnia["rename"], srv.rename_log, post=srv.omnia_post)
+            else:
+                batch, results, error = omnia_edit.apply_items(items, srv.omnia["edit"], srv.edit_log, post=srv.omnia_post)
+            after = fetch(srv.omnia)
+            if kind == "rename":
+                took = omnia_edit.verify_renames(items, after)      # OMNIA's answer is not trusted: read the names back
+                for r in results:
+                    r["ok"] = r["ok"] and took.get(r["id"], False)
+                if not error and not all(r["ok"] for r in results):
+                    error = "OMNIA answered but did not change every name (see the list); nothing else was sent."
+            omnia_fetch.save_snapshot(after, srv.snapshot_file)
+            return self._send(200, {"batch": batch, "kind": kind, "results": results, "error": error, "fetched_at": after["fetched_at"]})
+        except omnia_fetch.OmniaError as exc:
+            return self._send(502, {"error": str(exc)})
+        except (ValueError, TypeError, AttributeError) as exc:
+            return self._send(400, {"error": str(exc)})
+        except Exception as exc:
+            return self._send(500, {"error": "could not complete: " + type(exc).__name__})
+
     def do_POST(self):
         self._drain()
         if self.path == "/api/quit" and self._same_origin():
@@ -780,10 +1034,12 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.on_quit:
                 self.server.on_quit()
             return
+        if self.path in ("/api/edit/plan", "/api/edit/apply") and self._same_origin():
+            return self._edit(self.path.rsplit("/", 1)[1])
         if self.path == "/api/wiring/fetch" and self._same_origin():
             import omnia_fetch
             try:
-                snap = (self.server.fetch_omnia or omnia_fetch.fetch_snapshot)(self.server.omnia_url)
+                snap = (self.server.fetch_omnia or omnia_fetch.fetch_snapshot)(self.server.omnia)
                 omnia_fetch.save_snapshot(snap, self.server.snapshot_file)
             except omnia_fetch.OmniaError as exc:
                 return self._send(502, {"error": str(exc)})
@@ -842,6 +1098,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"results": results, "error": error})
 
 
+def _can_fetch(omnia):
+    return bool(omnia.get("nodes") and omnia.get("paths"))
+
+
 def current_sensors():
     import db
     return db.fetch_sensor_coords().get("Bluetooth", {})
@@ -855,6 +1115,8 @@ def current_paths():
 DB_FILE = ROOT / "results" / "history.db"
 DOWNLOADS = Path.home() / "Downloads"
 SNAPSHOT_FILE = ROOT / "results" / "omnia_snapshot.json"
+EDIT_LOG = ROOT / "results" / "omnia_edit_log.csv"
+RENAME_LOG = ROOT / "results" / "omnia_rename_log.csv"
 EXPORT_NAMES = ("bt_sensor_suspects", "bt_wiring")   # the only files the page may ask the server to write
 
 
@@ -970,7 +1232,7 @@ class Server(ThreadingHTTPServer):
 
 def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LOG,
                 page_builder=None, paths_provider=None, post=None,
-                sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_url=None,
+                sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
@@ -986,7 +1248,12 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LO
     srv.views = views if views is not None else sensor_views()
     srv.sensor_builder = sensor_builder or (lambda slug: build_sensor_page(slug, srv.views))
     srv.snapshot_file = snapshot_file or SNAPSHOT_FILE
-    srv.omnia_url = omnia_url_setting() if omnia_url is None else omnia_url
+    srv.allow_edit = allow_edit_setting() if allow_edit is None else allow_edit
+    srv.edit_log = edit_log or EDIT_LOG
+    srv.rename_log = rename_log or RENAME_LOG
+    srv.edit_tokens = {}
+    srv.omnia_post = omnia_post         # None = httpx.post; tests pass a fake
+    srv.omnia = dict({"nodes": None, "paths": None, "edit": None, "rename": None}, **(omnia_urls_setting() if omnia_urls is None else omnia_urls))
     srv.fetch_omnia = fetch_omnia      # None = the real OMNIA fetch; tests pass a fake
     srv.wiring_inputs = wiring_inputs or (lambda: (srv.paths_provider(), current_sensors()))
     srv.tokens = {}

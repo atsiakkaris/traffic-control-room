@@ -70,8 +70,25 @@ and paths whose name doesn't match where they really end are left out rather tha
 chosen by hand. The tab compares those with the API sensors (exact, case-sensitive names) and with where the path is
 drawn, and lists wrong, swapped or missing nodes; it can export a CSV, and the Paths inspector and sensor popups carry
 the same findings. **Fetch from OMNIA** reads the node and path lists (read-only, needs the internal network, up to a
-minute) and keeps `results/omnia_snapshot.json`, which is git-ignored. The address comes from `CONTROL_ROOM_OMNIA_URL`
-in `.env` (or, if unset, from the folder of the delete address). Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md).
+minute) and keeps `results/omnia_snapshot.json`, which is git-ignored. The OMNIA addresses come from the git-ignored `.env`.
+Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md).
+
+**Changing many OMNIA paths at once (Wiring tab -> Bulk edit).** Tick paths (or a whole filter, up to 50), then set a
+speed range, swap start and end node, or set the nodes, and press *Preview changes*: OMNIA is read live and every path is
+shown old value -> new value, nothing is sent. OMNIA needs all of
+speed min, speed max, start and end node for every call, so a path with no nodes only changes once both nodes are given;
+each path's current name is always sent back so nothing is renamed. Every change is logged with its old values in
+`results/omnia_edit_log.csv`, and *Preview undo of last batch* puts the last batch back (paths edited by hand since are
+left alone). Only whole numbers above 0 are accepted. **Rename** works the same way (preview, then apply): give one path a
+new name, or find/replace, a prefix or a suffix across the selected paths, or tick *name from its nodes* to rebuild
+`start->end` from the site codes of its two nodes' sensors; after sending, the names are read back from OMNIA to confirm they
+changed, and *Preview undo of last rename* restores the old ones (`results/omnia_rename_log.csv`).
+
+**A path was re-created under a new id? (history merge).** OMNIA cannot turn a path into another geometry and never gives a
+deleted id out again, so a re-drawn path gets a new id and starts with an empty history. `python tools/merge_path_history.py 250=661`
+(OLD=NEW, several pairs allowed) shows a dry run; with `--apply` it first backs up `results/history.db`, then re-keys the old
+history onto the new id so the path keeps one continuous history. Pairs are found by comparing the road segments of the old and new
+path (old paths keep theirs in OMNIA after a delete).
 
 **Map of OMNIA nodes versus API sensors (stand-alone).** `tools\omnia_nodes_map.bat` (or
 `python runner/omnia_nodes_map.py [--fetch]`) writes `reports/omnia_nodes_map.html`, a separate page that opens in any

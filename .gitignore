@@ -23,3 +23,7 @@ results/delete_log.csv
 results/control_room.log
 results/omnia_snapshot.json
 reports/omnia_nodes_map.html
+reports/omnia_paths_speeds.csv
+results/omnia_edit_log.csv
+results/history.db.bak-*
+results/omnia_rename_log.csv
