@@ -85,6 +85,15 @@ def delete_url_setting(env=None, env_file=ROOT / ".env"):
     return _setting("CONTROL_ROOM_DELETE_URL", env, env_file)
 
 
+def omnia_url_setting(env=None, env_file=ROOT / ".env"):
+    """The OMNIA path manager address: CONTROL_ROOM_OMNIA_URL, else the folder of the delete address."""
+    url = _setting("CONTROL_ROOM_OMNIA_URL", env, env_file)
+    if url:
+        return url
+    delete = delete_url_setting(env, env_file)
+    return delete.rsplit("/", 1)[0] if delete else None
+
+
 # ── review file ──────────────────────────────────────────────────────────────
 
 def load_review(path=REVIEW_FILE):
@@ -358,6 +367,147 @@ def sensor_details(page):
     return out
 
 
+# ── wiring page ──────────────────────────────────────────────────────────────
+
+WIRING_PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Wiring</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--text:#1d2630;--dim:#5b6874;--line:#dde2e7;--high:#c0392b;--medium:#e67e22;--low:#7f8c8d}
+@media (prefers-color-scheme: dark){:root{--bg:#111a22;--card:#1a2530;--text:#e3e9ee;--dim:#9fb0bd;--line:#2c3a47}}
+body{margin:0;background:var(--bg);color:var(--text);font:13px Arial,sans-serif}
+header{padding:14px 20px;background:#1f4e79;color:#fff}
+header h1{margin:0 0 4px;font-size:18px}header .sub{font-size:12px;opacity:.85}
+main{padding:14px 20px 40px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+button,select,input{font:13px Arial,sans-serif;padding:6px 11px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text)}
+button{cursor:pointer;background:#2e86c1;color:#fff;border:0}button.sec{background:#2c3e50}button:disabled{opacity:.5;cursor:wait}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.chip{padding:5px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);cursor:pointer}
+.chip.on{background:#2e86c1;color:#fff;border-color:#2e86c1}
+.note{color:var(--dim);margin:6px 0}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);margin:0 0 20px}
+th{background:#1f4e79;color:#fff;text-align:left;padding:7px 9px;font-size:12px}
+td{padding:7px 9px;border-top:1px solid var(--line);vertical-align:top}
+.f{display:block;margin:0 0 3px;padding-left:8px;border-left:4px solid var(--low)}
+.f.high{border-color:var(--high)}.f.medium{border-color:var(--medium)}
+a.go{color:#2e86c1;cursor:pointer}
+h2{font-size:15px;margin:22px 0 8px}
+.msg{padding:10px 12px;border-radius:6px;background:var(--card);border:1px solid var(--line);margin:0 0 12px}
+.err{border-color:var(--high);color:var(--high)}
+</style></head><body>
+<header><h1>Wiring check</h1><div class="sub" id="sub"></div></header>
+<main>
+<div class="bar"><button id="fetch">Fetch from OMNIA</button><button class="sec" id="ex">Export CSV</button><span class="note" id="status"></span></div>
+<div id="body"></div>
+</main>
+<script>
+(function() {
+  var D = __DATA__;
+  var shell = (window.parent !== window && window.parent.crShow) ? window.parent : null;
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  var status = document.getElementById('status'), body = document.getElementById('body');
+  var fetchBtn = document.getElementById('fetch'), exBtn = document.getElementById('ex');
+  document.getElementById('sub').textContent = D.has_snapshot
+    ? 'OMNIA data fetched ' + D.fetched_at + ' - ' + D.meta.paths + ' paths, ' + D.meta.paths_with_findings + ' with findings'
+    : 'No OMNIA data yet';
+  if (!D.can_fetch) { fetchBtn.disabled = true; fetchBtn.title = 'Set CONTROL_ROOM_OMNIA_URL in .env'; }
+  fetchBtn.onclick = function() {
+    fetchBtn.disabled = true; status.textContent = 'Fetching from OMNIA - the path list can take up to a minute...';
+    fetch('/api/wiring/fetch', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(r) {
+      if (r.error) { status.textContent = r.error; fetchBtn.disabled = false; } else { location.reload(); }
+    }).catch(function(e) { status.textContent = 'Could not fetch: ' + e; fetchBtn.disabled = false; });
+  };
+  if (!D.has_snapshot) {
+    exBtn.style.display = 'none';
+    body.innerHTML = '<div class="msg">The check compares what is configured in OMNIA (each path\'s start and end node) with the API sensors and the drawn paths. '
+      + (D.can_fetch ? 'Press <b>Fetch from OMNIA</b> (you must be on the internal network).'
+                     : 'This PC has no OMNIA address: add <b>CONTROL_ROOM_OMNIA_URL</b> to the .env file, or copy a results/omnia_snapshot.json from a PC that has fetched one.') + '</div>';
+    return;
+  }
+  exBtn.onclick = function() {
+    status.textContent = 'Choose where to save in the dialog that opened (it may be behind this window)...';
+    fetch('/api/save-csv', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: 'bt_wiring', rows: D.csv})})
+      .then(function(r) { return r.json(); }).then(function(r) {
+        status.textContent = r.cancelled ? 'Cancelled - nothing saved.' : r.path ? 'Saved to ' + r.path + (r.fallback ? ' (no Save dialog available, so the Downloads folder was used)' : '') : 'Could not save: ' + (r.error || 'unknown error');
+      }).catch(function(e) { status.textContent = 'Could not save: ' + e; });
+  };
+  var code = '', q = '';
+  var chips = '<div class="chips" id="chips"></div>';
+  body.innerHTML = '<div class="bar"><input id="q" placeholder="Search path, name or node..."></div>' + chips
+    + '<table><thead><tr><th>Path</th><th>Start node</th><th>End node</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
+    + '<h2>Nodes that need attention (' + D.nodes.length + ')</h2><table><thead><tr><th>Node</th><th>Status</th><th>Detail</th></tr></thead><tbody id="nodes"></tbody></table>'
+    + '<h2>API sensors no node stands for (' + D.sensors_without_node.length + ')</h2><div class="note" id="swn"></div>';
+  function chip(label, c, n) {
+    var el = document.createElement('span');
+    el.className = 'chip' + (code === c ? ' on' : ''); el.textContent = label + ' (' + n + ')';
+    el.onclick = function() { code = c; draw(); };
+    return el;
+  }
+  function draw() {
+    var cs = document.getElementById('chips'); cs.innerHTML = '';
+    cs.appendChild(chip('All with findings', '', D.paths.length));
+    Object.keys(D.meta.by_code).sort(function(a, b) { return D.meta.by_code[b] - D.meta.by_code[a]; }).forEach(function(c) {
+      cs.appendChild(chip(D.labels[c] ? D.labels[c][1] : c, c, D.meta.by_code[c]));
+    });
+    var rows = document.getElementById('rows'); rows.innerHTML = '';
+    D.paths.forEach(function(p) {
+      if (code && !p.findings.some(function(f) { return f.code === code; })) return;
+      var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ')).toLowerCase();
+      if (q && hay.indexOf(q) < 0) return;
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td><b>' + esc(p.id) + '</b><br>' + esc(p.name) + '</td><td>' + esc(p.start_node || '-') + '<br>' + esc(p.start_name || '') + '</td><td>'
+        + esc(p.end_node || '-') + '<br>' + esc(p.end_name || '') + '</td><td>'
+        + p.findings.map(function(f) { return '<span class="f ' + esc(f.severity) + '">' + esc(f.text) + '</span>'; }).join('')
+        + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '">show on map</a>' : '') + '</td>';
+      rows.appendChild(tr);
+    });
+    if (!rows.children.length) rows.innerHTML = '<tr><td colspan="5" class="note">Nothing matches.</td></tr>';
+  }
+  document.getElementById('q').oninput = function() { q = this.value.toLowerCase(); draw(); };
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest && e.target.closest('[data-p]');
+    if (a && shell) shell.crShow('paths', {path: a.getAttribute('data-p')});
+  });
+  var nodes = document.getElementById('nodes');
+  D.nodes.forEach(function(n) {
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><b>' + esc(n.id) + '</b> ' + esc(n.name) + '</td><td>' + esc(n.status_text) + '</td><td>' + esc(n.detail) + '</td>';
+    nodes.appendChild(tr);
+  });
+  if (!D.nodes.length) nodes.innerHTML = '<tr><td colspan="3" class="note">Every node matches a sensor.</td></tr>';
+  document.getElementById('swn').textContent = D.sensors_without_node.length
+    ? D.sensors_without_node.map(function(s) { return s[1] + ' (id ' + s[0] + ')'; }).join(', ') : 'None.';
+  draw();
+})();
+</script></body></html>"""
+
+
+def build_wiring_page(result, snapshot, can_fetch):
+    """The Wiring tab: configured OMNIA nodes versus the API sensors and the drawn paths."""
+    import bt_wiring as bw
+    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "labels": bw.FINDINGS,
+            "fetched_at": (snapshot or {}).get("fetched_at", ""), "meta": {}, "paths": [], "nodes": [],
+            "sensors_without_node": [], "csv": []}
+    if result:
+        order = {"high": 0, "medium": 1, "low": 2}
+        paths = [p for p in result["paths"].values() if p["findings"]]
+        paths.sort(key=lambda p: (order.get(p["severity"], 3), int(p["id"]) if str(p["id"]).isdigit() else 0))
+        nodes = []
+        for m in sorted(result["nodes"].values(), key=lambda m: m["id"]):
+            if m["status"] == "ok" and not m["notes"]:
+                continue
+            detail = []
+            if m["sensor_name"] and m["status"] != "ok":
+                detail.append("sensor '%s' (%s m away)" % (m["sensor_name"], m["distance_m"]))
+            if m["similar"]:
+                detail.append("looks like: " + ", ".join(m["similar"]))
+            detail += m["notes"]
+            nodes.append({"id": m["id"], "name": m["name"], "status_text": bw.NODE_STATUS[m["status"]],
+                          "detail": "; ".join(detail)})
+        data.update(meta=result["meta"], paths=paths, nodes=nodes,
+                    sensors_without_node=result["sensors_without_node"], csv=bw.csv_rows(result))
+    return WIRING_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
+
+
 # ── sensor-location pages ────────────────────────────────────────────────────
 
 def sensor_views():
@@ -427,8 +577,8 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #stage iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;visibility:hidden}
 #stage iframe.on{visibility:visible}
 </style></head><body>
-<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rf" title="Rebuild the open tab from the latest data">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
-<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe>__FRAMES__</div>
+<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rf" title="Rebuild the open tab from the latest data">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
 function frame(t) { return document.getElementById('f-' + t); }
@@ -444,7 +594,9 @@ function render() {
 window.crShow = function(t, o) {
   o = o || {};
   var f = frame(t);
-  if (t !== 'paths') {
+  if (t === 'wiring') {
+    if (!f.getAttribute('src')) f.src = '/wiring';
+  } else if (t !== 'paths') {
     var q = o.lat != null ? '?lat=' + o.lat + '&lon=' + o.lon + (o.path ? '&path=' + encodeURIComponent(o.path) : '') : '';
     if (q || !f.getAttribute('src')) f.src = '/sensors/' + t + q;
   } else {
@@ -460,7 +612,7 @@ Array.prototype.forEach.call(document.querySelectorAll('#bar a[data-t]'), functi
 });
 document.getElementById('rf').onclick = function() {
   var btn = this, f = frame(cur);
-  var base = cur === 'paths' ? '/map' : '/sensors/' + cur;
+  var base = cur === 'paths' ? '/map' : cur === 'wiring' ? '/wiring' : '/sensors/' + cur;
   btn.textContent = 'Refreshing...';
   fetch(base + '?refresh=1').then(function() {
     f.contentWindow.location.reload();
@@ -571,7 +723,28 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sensor":
             sid = (parse_qs(parts.query).get("id") or [""])[0]
             try:
-                return self._send(200, self.server.sensor_details().get(sid, {}))
+                import bt_wiring
+                out = dict(self.server.sensor_details().get(sid, {}))
+                result, _snap = self.server.wiring()
+                if result:
+                    w = bt_wiring.wiring_for_sensor(result, sid)
+                    if w["nodes"] or w["paths"]:
+                        out["wiring"] = w
+                return self._send(200, out)
+            except Exception as exc:
+                return self._send(500, {"error": str(exc)})
+        if path == "/wiring":
+            try:
+                result, snap = self.server.wiring()
+                page = build_wiring_page(result, snap, bool(self.server.omnia_url))
+            except Exception as exc:
+                return self._send(500, f"Could not build the page: {exc}".encode("utf-8"), "text/plain")
+            return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/api/wiring":
+            pid = (parse_qs(parts.query).get("path") or [""])[0]
+            try:
+                result, _snap = self.server.wiring()
+                return self._send(200, (result or {"paths": {}})["paths"].get(pid, {}))
             except Exception as exc:
                 return self._send(500, {"error": str(exc)})
         if path.startswith("/sensors/"):
@@ -607,6 +780,16 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.on_quit:
                 self.server.on_quit()
             return
+        if self.path == "/api/wiring/fetch" and self._same_origin():
+            import omnia_fetch
+            try:
+                snap = (self.server.fetch_omnia or omnia_fetch.fetch_snapshot)(self.server.omnia_url)
+                omnia_fetch.save_snapshot(snap, self.server.snapshot_file)
+            except omnia_fetch.OmniaError as exc:
+                return self._send(502, {"error": str(exc)})
+            except Exception as exc:
+                return self._send(500, {"error": "could not fetch: " + type(exc).__name__})
+            return self._send(200, {"fetched_at": snap["fetched_at"], "paths": len(snap["paths"]), "nodes": len(snap["nodes"])})
         if self.path == "/api/save-csv" and self._same_origin():
             try:
                 body = self._body()
@@ -659,6 +842,11 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"results": results, "error": error})
 
 
+def current_sensors():
+    import db
+    return db.fetch_sensor_coords().get("Bluetooth", {})
+
+
 def current_paths():
     import bt_paths_map as m
     return m.fetch_bt_path_coords()
@@ -666,7 +854,8 @@ def current_paths():
 
 DB_FILE = ROOT / "results" / "history.db"
 DOWNLOADS = Path.home() / "Downloads"
-EXPORT_NAMES = ("bt_sensor_suspects",)   # the only files the page may ask the server to write
+SNAPSHOT_FILE = ROOT / "results" / "omnia_snapshot.json"
+EXPORT_NAMES = ("bt_sensor_suspects", "bt_wiring")   # the only files the page may ask the server to write
 
 
 def default_csv_name(name):
@@ -742,6 +931,23 @@ class Server(ThreadingHTTPServer):
             self.page_cache[key] = (stamp, page)
             return page
 
+    def wiring(self):
+        """(analysis, snapshot) from the saved OMNIA snapshot, or (None, None) if there is none."""
+        import bt_wiring
+        import omnia_fetch
+        stamps = tuple(os.stat(f).st_mtime if os.path.exists(f) else 0 for f in (self.snapshot_file, self.db_file))
+        with self.build_lock:
+            hit = getattr(self, "_wiring", None)
+            if hit and hit[0] == stamps:
+                return hit[1], hit[2]
+            snap = omnia_fetch.load_snapshot(self.snapshot_file)
+            result = None
+            if snap:
+                feed, sensors = self.wiring_inputs()
+                result = bt_wiring.analyse(snap, feed, sensors)
+            self._wiring = (stamps, result, snap)
+            return result, snap
+
     def sensor_details(self):
         """Details of every Bluetooth sensor, rebuilt only when the Bluetooth page itself was rebuilt."""
         if "bluetooth" not in self.views:
@@ -764,7 +970,8 @@ class Server(ThreadingHTTPServer):
 
 def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LOG,
                 page_builder=None, paths_provider=None, post=None,
-                sensor_builder=None, views=None, db_file=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path):
+                sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_url=None,
+                fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
@@ -778,6 +985,10 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LO
     srv.post = post
     srv.views = views if views is not None else sensor_views()
     srv.sensor_builder = sensor_builder or (lambda slug: build_sensor_page(slug, srv.views))
+    srv.snapshot_file = snapshot_file or SNAPSHOT_FILE
+    srv.omnia_url = omnia_url_setting() if omnia_url is None else omnia_url
+    srv.fetch_omnia = fetch_omnia      # None = the real OMNIA fetch; tests pass a fake
+    srv.wiring_inputs = wiring_inputs or (lambda: (srv.paths_provider(), current_sensors()))
     srv.tokens = {}
     srv.downloads_dir = downloads_dir
     srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake

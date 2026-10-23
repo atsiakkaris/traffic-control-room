@@ -245,7 +245,8 @@ def test_sensor_pages_talk_to_the_app_shell_not_a_second_tab():
 
 def test_shell_has_one_frame_per_view_and_a_refresh_button(tmp_path):
     shell = cr.build_shell(cr.sensor_views(), "?path=7")
-    assert shell.count("<iframe") == 1 + len(cr.sensor_views())
+    assert shell.count("<iframe") == 2 + len(cr.sensor_views())        # paths + wiring + sensor tabs
+    assert 'data-t="wiring"' in shell
     assert 'src="/map?path=7"' in shell and 'id="rf"' in shell and "crShow" in shell
 
 
@@ -480,3 +481,71 @@ def test_sensor_endpoint_returns_details_and_empty_for_unknown_ids(tmp_path):
         assert _req(base + "/api/sensor?id=999") == (200, {})
     finally:
         srv.shutdown()
+
+
+# ── wiring tab ───────────────────────────────────────────────────────────────
+
+def _wiring_server(tmp_path, fetch=None, url="http://omnia.test/path manager"):
+    sensors = {"1": {"name": "A", "site_code": "1001", "lat": 35.00, "lon": 33.0},
+               "2": {"name": "B", "site_code": "1002", "lat": 35.01, "lon": 33.0}}
+    feed = {"10": {"name": "1001->1002", "coords": [[35.00, 33.0], [35.01, 33.0]]}}
+    snap_nodes = [{"id": 1, "name": "A", "lat": 35.00, "lon": 33.0}, {"id": 2, "name": "B", "lat": 35.01, "lon": 33.0}]
+    snap_paths = [{"id": 10, "name": "1001->1002", "start": 1, "end": 2, "speed_min": 10, "speed_max": 50}]
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv",
+                         page_builder=lambda: ("", {}), paths_provider=lambda: feed, views={},
+                         db_file=tmp_path / "none.db", snapshot_file=tmp_path / "snap.json", omnia_url=url,
+                         fetch_omnia=fetch or (lambda base: {"fetched_at": "2026-10-23T10:00:00+00:00",
+                                                            "nodes": snap_nodes, "paths": snap_paths}),
+                         wiring_inputs=lambda: (feed, sensors), choose_path=None, downloads_dir=tmp_path / "dl")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def test_wiring_page_asks_for_a_fetch_until_a_snapshot_exists_then_shows_results(tmp_path):
+    srv, base = _wiring_server(tmp_path)
+    try:
+        import urllib.request
+        page = urllib.request.urlopen(base + "/wiring").read().decode("utf-8")
+        assert '"has_snapshot": false' in page and "omnia.test" not in page          # address never in the page
+        assert _req(base + "/api/wiring?path=10") == (200, {})
+        code, out = _req(base + "/api/wiring/fetch", "POST", {})
+        assert code == 200 and out["paths"] == 1 and (tmp_path / "snap.json").exists()
+        code, w = _req(base + "/api/wiring?path=10")
+        assert code == 200 and w["findings"] == [] and w["start_name"] == "A"
+        page = urllib.request.urlopen(base + "/wiring").read().decode("utf-8")
+        assert '"has_snapshot": true' in page
+    finally:
+        srv.shutdown()
+
+
+def test_wiring_fetch_failure_is_readable_and_cross_origin_is_refused(tmp_path):
+    import omnia_fetch
+
+    def broken(base):
+        raise omnia_fetch.OmniaError("OMNIA did not answer path-list after 3 tries (ReadTimeout).")
+    srv, base = _wiring_server(tmp_path, fetch=broken)
+    try:
+        assert _req(base + "/api/wiring/fetch", "POST", {}, {"Origin": "http://evil.example"})[0] == 403
+        code, out = _req(base + "/api/wiring/fetch", "POST", {})
+        assert code == 502 and "path-list" in out["error"] and "omnia.test" not in out["error"]
+        assert not (tmp_path / "snap.json").exists()
+    finally:
+        srv.shutdown()
+
+
+def test_sensor_endpoint_gets_a_wiring_line_after_a_snapshot(tmp_path):
+    srv, base = _wiring_server(tmp_path)
+    try:
+        _req(base + "/api/wiring/fetch", "POST", {})
+        code, out = _req(base + "/api/sensor?id=1")
+        assert code == 200 and out["wiring"] == {"nodes": [{"id": 1, "name": "A", "status": "ok", "distance_m": 0.0}], "paths": 1}
+    finally:
+        srv.shutdown()
+
+
+def test_omnia_url_comes_from_its_own_setting_or_the_delete_address_folder(tmp_path):
+    env_file = tmp_path / ".env"
+    assert cr.omnia_url_setting(env={}, env_file=env_file) is None
+    env_file.write_text("CONTROL_ROOM_DELETE_URL=http://x.test/path manager/path-delete\n")
+    assert cr.omnia_url_setting(env={}, env_file=env_file) == "http://x.test/path manager"
+    assert cr.omnia_url_setting(env={"CONTROL_ROOM_OMNIA_URL": "http://y.test/P"}, env_file=env_file) == "http://y.test/P"

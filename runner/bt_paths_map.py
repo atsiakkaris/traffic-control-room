@@ -538,6 +538,18 @@ SERVER_INSPECTOR_JS = """
       if (window.parent !== window && window.parent.crShow) window.parent.crShow('bluetooth', {lat: ll[0], lon: ll[1], path: f.id});
       else window.open('/sensors/bluetooth?lat=' + ll[0] + '&lon=' + ll[1] + '&path=' + encodeURIComponent(f.id));
     };
+    var wl = document.createElement('div');
+    wl.style.cssText = 'margin-top:8px;font-size:12px';
+    insBody.appendChild(wl);
+    fetch('/api/wiring?path=' + encodeURIComponent(f.id)).then(function(r) { return r.json(); }).then(function(w) {
+      if (!w || !w.findings) return;
+      var h = '<b>Wiring</b> (OMNIA nodes' + (w.start_node ? ': ' + w.start_node + ' &rarr; ' + w.end_node : '') + ')';
+      if (!w.findings.length) h += '<br><span style="color:#27ae60">&#10003; wired to the sensors it is drawn between</span>';
+      w.findings.forEach(function(x) {
+        h += '<div style="margin-top:3px;padding-left:6px;border-left:3px solid ' + (x.severity === 'high' ? '#c0392b' : x.severity === 'medium' ? '#e67e22' : '#7f8c8d') + '">' + x.text.replace(/[<>&]/g, '') + '</div>';
+      });
+      wl.innerHTML = h;
+    }).catch(function() {});
     document.getElementById('jmpStart').onclick = function(e) { L.DomEvent.stopPropagation(e); _jump(obj.polyline._startLL); };
     document.getElementById('jmpEnd').onclick = function(e) { L.DomEvent.stopPropagation(e); _jump(obj.polyline._endLL); };
   }
@@ -566,6 +578,10 @@ SERVER_BLOCK_JS = """
     if (d.project) h += '<br>Project: <b>' + esc(d.project) + '</b>';
     if (d.accountability === 'out_of_support') h += '<br><span style="opacity:.7">Out of support</span>';
     if (d.ref_name) h += '<br><span style="color:#b8860b">&#10003; Spreadsheet match: <b>' + esc(d.ref_name) + '</b>' + (d.ref_dist ? ' (' + esc(d.ref_dist) + ' m)' : '') + '</span>';
+    if (d.wiring) {
+      h += '<br>OMNIA: ' + (d.wiring.nodes.length ? d.wiring.nodes.map(function(n) { return 'node ' + esc(n.id) + (n.status === 'name_only' ? ' <span style="color:#e67e22">(' + esc(n.distance_m) + ' m from this sensor)</span>' : n.status === 'location_only' ? ' <span style="color:#e67e22">(named differently)</span>' : ''); }).join(', ') : '<span style="color:#c0392b">no node stands for this sensor</span>')
+        + ' &middot; used by ' + esc(d.wiring.paths) + ' path(s)';
+    }
     if (d.verdict) {
       h += '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #888"><span style="display:block;padding:4px 7px;border-radius:5px;color:#fff;margin-bottom:4px;background:'
         + (VCOL[d.verdict] || '#7f8c8d') + '">' + esc(d.label) + '</span>' + (d.reason ? esc(d.reason) + '.' : '');

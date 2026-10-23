@@ -66,6 +66,19 @@ only a *path problem*. The panel (bottom-left of the Bluetooth tab) lists the su
 each popup links to its paths on the Paths tab; it can export a CSV. Runs during whole-feed outages are ignored,
 and paths whose name doesn't match where they really end are left out rather than guessed.
 
+**Is a path wired to the right sensors? (Wiring tab).** In OMNIA every path has a start and an end *logical node*,
+chosen by hand. The tab compares those with the API sensors (exact, case-sensitive names) and with where the path is
+drawn, and lists wrong, swapped or missing nodes; it can export a CSV, and the Paths inspector and sensor popups carry
+the same findings. **Fetch from OMNIA** reads the node and path lists (read-only, needs the internal network, up to a
+minute) and keeps `results/omnia_snapshot.json`, which is git-ignored. The address comes from `CONTROL_ROOM_OMNIA_URL`
+in `.env` (or, if unset, from the folder of the delete address). Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md).
+
+**Map of OMNIA nodes versus API sensors (stand-alone).** `tools\omnia_nodes_map.bat` (or
+`python runner/omnia_nodes_map.py [--fetch]`) writes `reports/omnia_nodes_map.html`, a separate page that opens in any
+browser: every OMNIA logical node (coloured by how it matches a sensor) next to the sensor positions from the API, with
+dashed lines where a node and its sensor are apart, a search box and filters. It uses the saved OMNIA snapshot (`--fetch`
+reads OMNIA first) and is git-ignored because it holds OMNIA data.
+
 **Who can delete.** The app is **read-only by default**: anyone can view the maps, compare
 sensors and flag paths, but the *Review & delete…* button is absent (a *Read-only* badge
 shows in the tab bar) and the server refuses delete requests. Deleting is switched on per PC
