@@ -468,11 +468,21 @@ def _render_note_html(text):
     parts = []
     for block in re.split(r'\n\s*\n', text):
         lines = [l.strip() for l in block.split('\n') if l.strip()]
-        if lines and all(l.startswith('- ') for l in lines):
-            items = "".join(f'<li style="margin-bottom:4px">{l[2:]}</li>' for l in lines)
-            parts.append(f'<ul style="margin:0 0 10px;padding-left:20px">{items}</ul>')
-        else:
-            parts.append(f'<p style="margin:0 0 10px">{"<br>".join(lines)}</p>')
+        # A block may mix text and "- " lines (a heading line straight above
+        # its bullets): split it into runs so each run is a <p> or a <ul>.
+        runs = []
+        for l in lines:
+            is_item = l.startswith('- ')
+            if runs and runs[-1][0] == is_item:
+                runs[-1][1].append(l)
+            else:
+                runs.append((is_item, [l]))
+        for is_item, run in runs:
+            if is_item:
+                items = "".join(f'<li style="margin-bottom:4px">{l[2:]}</li>' for l in run)
+                parts.append(f'<ul style="margin:0 0 10px;padding-left:20px">{items}</ul>')
+            else:
+                parts.append(f'<p style="margin:0 0 10px">{"<br>".join(run)}</p>')
     return "".join(parts)
 
 
