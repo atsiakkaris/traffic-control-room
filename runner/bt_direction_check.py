@@ -3,7 +3,7 @@
 bt_direction_check.py - ad-hoc check for NON-REVERSED Bluetooth path pairs.
 
 SWARCO BT paths come in directional pairs ("A->B" and "B->A") and each pair
-should be stored in OPPOSITE point order. A SWARCO defect (BuildPathArcs) once
+should be stored in OPPOSITE point order. A SWARCO defect (in the path builder) once
 saved the reverse-registered path in the same direction as its partner. This
 tool finds pairs purely from GEOMETRY (names are only a label afterwards) and
 reports whether that problem has come back. It is read-only.

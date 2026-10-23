@@ -6,7 +6,7 @@ OMNIA data) that opens in any browser. Nodes come from the saved OMNIA snapshot 
 made by the Control Room's Fetch button or by `--fetch` here); sensors come from results/history.db.
 
     python runner/omnia_nodes_map.py            map from the saved snapshot
-    python runner/omnia_nodes_map.py --fetch    read OMNIA first (internal network needed; address in .env)
+    python runner/omnia_nodes_map.py --fetch    read OMNIA first (internal network needed; addresses in .env)
 """
 
 import argparse
@@ -169,7 +169,7 @@ def main(argv=None):
         sys.path.insert(0, str(ROOT / "tools"))
         import control_room
         try:
-            snap = omnia_fetch.fetch_snapshot(control_room.omnia_url_setting())
+            snap = omnia_fetch.fetch_snapshot(control_room.omnia_urls_setting())
         except omnia_fetch.OmniaError as exc:
             print(exc)
             return 1
