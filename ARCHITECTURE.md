@@ -461,6 +461,14 @@ sensors), `faulty_likely`, `path_problem` (has working and failing paths), `expl
 faulty_high sensor), `working`, `no_evidence`. Pure functions, constants at the top of the module.
 The Paths map's sensor popups fetch `GET /api/sensor?id=` (`Server.sensor_details`, read from the cached Bluetooth page's
 `apiMarkers` and triangulation data) in server mode only. Run ids are random UUIDs, so runs are ordered by `run_at`.
+The **Wiring** tab (`/wiring`, `build_wiring_page`) compares OMNIA's configured nodes with the API sensors and drawn paths:
+`runner/omnia_fetch.py` GETs `node-list` and `path-list` one request at a time with retries (Web Mercator
+node coordinates converted to degrees) into `results/omnia_snapshot.json` (git-ignored; address from `.env`, never in code);
+`runner/bt_wiring.py` is pure (`match_nodes`: exact case-sensitive name, duplicate names resolved by location within 15 m;
+`check_paths`: drawn end vs node 150 m / 500 m, swapped, wrong node via `bt_sensor_suspects.resolve_endpoint`, ...).
+`Server.wiring()` caches on the snapshot and database mtimes; `GET /api/wiring?path=` feeds the inspector line,
+`POST /api/wiring/fetch` (same-origin) refreshes the snapshot, and `/api/sensor` adds the node/path summary.
+`runner/omnia_nodes_map.py` is the stand-alone sibling: `build_html(snapshot, sensors)` -> one Leaflet page (OpenFreeMap basemap, node/sensor layers) written to `reports/omnia_nodes_map.html` (git-ignored); no Control Room involved.
 Built pages are cached in the server keyed by `results/history.db` mtime (warmed in a
 thread at start-up; `?refresh=1` forces a rebuild). `/` is a small shell page (tab bar + one iframe per view, all kept loaded); the map itself is
 served at `/map`. The shell exposes `crShow(tab, {path|lat,lon})`, which the pages inside

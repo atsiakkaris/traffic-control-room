@@ -21,3 +21,5 @@ runner/results/
 results/path_review.json
 results/delete_log.csv
 results/control_room.log
+results/omnia_snapshot.json
+reports/omnia_nodes_map.html
