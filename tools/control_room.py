@@ -447,8 +447,29 @@ h2{font-size:15px;margin:22px 0 8px}
     }).catch(function(e) { status.textContent = 'Could not save: ' + e; });
   };
 
-  var code = '', q = '', selected = {};
-  body.innerHTML = '<div class="edit" id="edit"></div><div class="bar"><input id="q" placeholder="Search path, name or node..."></div><div class="chips" id="chips"></div>'
+  var code = '', q = '', selected = {}, sortKey = 'severity', sortDesc = false;
+  var SORTS = [['severity', 'Severity (worst first)'], ['id', 'Path ID'], ['name', 'Path name'], ['start', 'Start node'], ['end', 'End node'],
+               ['speed_min', 'Speed min'], ['speed_max', 'Speed max'], ['count', 'Number of findings']];
+  var SEV = {high: 0, medium: 1, low: 2};
+  function sortVal(p, k) {
+    if (k === 'severity') return SEV[p.severity] == null ? 3 : SEV[p.severity];
+    if (k === 'id') return +p.id;
+    if (k === 'name') return String(p.name || '').toLowerCase();
+    if (k === 'start') return p.start_node == null ? null : +p.start_node;
+    if (k === 'end') return p.end_node == null ? null : +p.end_node;
+    if (k === 'count') return p.findings.length;
+    return p[k] == null ? null : +p[k];
+  }
+  function cmp(a, b) {
+    var x = sortVal(a, sortKey), y = sortVal(b, sortKey);
+    if (x === null || y === null) { if (x === y) return 0; return x === null ? 1 : -1; }   // empty values always last
+    var r = typeof x === 'string' ? x.localeCompare(y, undefined, {numeric: true}) : x - y;
+    if (sortDesc) r = -r;
+    return r || (+a.id - +b.id);
+  }
+  body.innerHTML = '<div class="edit" id="edit"></div><div class="bar"><input id="q" placeholder="Search path, name or node...">'
+    + '<label>Sort by <select id="sk">' + SORTS.map(function(s) { return '<option value="' + s[0] + '">' + s[1] + '</option>'; }).join('') + '</select></label>'
+    + '<button class="sec" id="sd" title="Reverse the order"></button></div><div class="chips" id="chips"></div>'
     + '<table><thead><tr><th><input type="checkbox" id="all" title="Select all shown"></th><th>Path ID</th><th>Path name</th><th>Start node</th><th>End node</th><th>Speed</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
     + '<h2>Nodes that need attention (' + D.nodes.length + ')</h2><table><thead><tr><th>Node</th><th>Status</th><th>Detail</th></tr></thead><tbody id="nodes"></tbody></table>'
     + '<h2>API sensors no node stands for (' + D.sensors_without_node.length + ')</h2><div class="note" id="swn"></div>';
@@ -477,7 +498,8 @@ h2{font-size:15px;margin:22px 0 8px}
     });
     cs.appendChild(chip('All paths', '__all', D.paths.length));
     var rows = document.getElementById('rows'); rows.innerHTML = '';
-    var list = shown();
+    var list = shown().sort(cmp);
+    document.getElementById('sd').textContent = sortDesc ? 'Descending (Z-A, high-low)' : 'Ascending (A-Z, low-high)';
     list.forEach(function(p) {
       var tr = document.createElement('tr');
       var speed = p.speed_min == null ? '-' : p.speed_min + '-' + p.speed_max;
@@ -492,6 +514,8 @@ h2{font-size:15px;margin:22px 0 8px}
     drawEdit();
   }
   document.getElementById('q').oninput = function() { q = this.value.toLowerCase(); draw(); };
+  document.getElementById('sk').onchange = function() { sortKey = this.value; sortDesc = false; draw(); };
+  document.getElementById('sd').onclick = function() { sortDesc = !sortDesc; draw(); };
   document.getElementById('all').onchange = function() {
     var on = this.checked;
     shown().forEach(function(p) { if (on) selected[p.id] = true; else delete selected[p.id]; });
