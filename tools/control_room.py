@@ -536,10 +536,11 @@ h2{font-size:15px;margin:22px 0 8px}
   function drawEdit() {
     var el = document.getElementById('edit');
     var keep = {};
-    ['smin', 'smax', 'nstart', 'nend', 'swap', 'yes', 'rfind', 'rrep', 'rpre', 'rsuf', 'rnew', 'rstd'].forEach(function(id) { var x = document.getElementById(id); if (x) keep[id] = x.type === 'checkbox' ? x.checked : x.value; });
+    ['smin', 'smax', 'nstart', 'nend', 'swap', 'sugg', 'yes', 'rfind', 'rrep', 'rpre', 'rsuf', 'rnew', 'rstd'].forEach(function(id) { var x = document.getElementById(id); if (x) keep[id] = x.type === 'checkbox' ? x.checked : x.value; });
     var h = '<b>Bulk edit in OMNIA</b> <span class="note">' + countSelected() + ' path(s) selected (up to 50 per batch)</span>';
     h += '<div class="row"><label>Speed min <input type="number" id="smin" min="1" step="1"></label><label>Speed max <input type="number" id="smax" min="1" step="1"></label>'
       + '<label><input type="checkbox" id="swap"> swap start and end node</label>'
+      + '<label title="Only for a missing or unknown node, and only when one node is clearly the nearest to the drawn end (within 150 m, no close rival). Needs a speed range if the path has none."><input type="checkbox" id="sugg"> fill missing nodes with the nearest one</label>'
       + '<label>Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label>End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
       + '<div class="row"><b>Rename:</b><label>Find <input id="rfind" size="9"></label><label>Replace with <input id="rrep" size="9"></label><label>Prefix <input id="rpre" size="6"></label><label>Suffix <input id="rsuf" size="6"></label>'
       + '<label>New name (one path) <input id="rnew" size="14"></label><label><input type="checkbox" id="rstd"> name from its nodes (site codes)</label></div>'
@@ -566,10 +567,10 @@ h2{font-size:15px;margin:22px 0 8px}
       var lo = document.getElementById('smin').value, hi = document.getElementById('smax').value;
       if (!bad && lo !== '' && hi !== '' && +lo >= +hi) bad = 'Speed min must be below speed max.';
       if (!bad && !countSelected()) bad = 'Select at least one path first.';
-      if (!bad && lo === '' && hi === '' && !document.getElementById('swap').checked && !document.getElementById('nstart').value.trim() && !document.getElementById('nend').value.trim()) bad = 'Set a speed, a node, or tick swap first.';
+      if (!bad && lo === '' && hi === '' && !document.getElementById('swap').checked && !document.getElementById('sugg').checked && !document.getElementById('nstart').value.trim() && !document.getElementById('nend').value.trim()) bad = 'Set a speed, a node, or tick swap or the nearest-node option first.';
       if (bad) { document.getElementById('pvs').textContent = bad; return; }
       runPreview({ids: Object.keys(selected), speed_min: document.getElementById('smin').value, speed_max: document.getElementById('smax').value,
-                  swap: document.getElementById('swap').checked, start: document.getElementById('nstart').value, end: document.getElementById('nend').value});
+                  swap: document.getElementById('swap').checked, use_suggested: document.getElementById('sugg').checked, start: document.getElementById('nstart').value, end: document.getElementById('nend').value});
     };
     document.getElementById('pvu').onclick = function() { runPreview({undo: true}); };
     document.getElementById('pvru').onclick = function() { runPreview({undo_rename: true}); };
@@ -970,6 +971,12 @@ class Handler(BaseHTTPRequestHandler):
                 out[str(pid)] = "%s->%s" % (sensors[a["sensor"]].get("site_code"), sensors[b["sensor"]].get("site_code"))
         return out
 
+    def _suggested_nodes(self, snap):
+        """{path id: {start, end}} nearest-node suggestions that are clear enough to apply, from the live snapshot."""
+        import bt_wiring
+        feed, sensors = self.server.wiring_inputs()
+        return bt_wiring.usable_suggestions(bt_wiring.analyse(snap, feed, sensors)["paths"])
+
     def _edit(self, action):
         """Bulk edit of OMNIA paths: 'plan' previews (reads OMNIA live, sends nothing), 'apply' writes."""
         import omnia_edit
@@ -996,8 +1003,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif body.get("undo"):
                     plan = omnia_edit.undo_items(srv.edit_log, snap)
                 else:
+                    suggested = self._suggested_nodes(snap) if body.get("use_suggested") else None
                     plan = omnia_edit.plan_edits(snap, body.get("ids") or [], body.get("speed_min"), body.get("speed_max"),
-                                                 bool(body.get("swap")), body.get("start"), body.get("end"))
+                                                 bool(body.get("swap")), body.get("start"), body.get("end"), suggested)
                 kind = "delete" if body.get("delete") else "rename" if (body.get("rename") or body.get("undo_rename")) else "edit"
                 token = None
                 if plan["items"]:

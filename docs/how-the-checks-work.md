@@ -159,6 +159,14 @@ configured node is measured (the real data: median 40 m, 80% within 100 m).
 | Speed range missing or not min < max | Only for paths that have nodes. |
 | Drawn path not found in OMNIA / OMNIA path not in the API feed | The path exists on one side only. |
 
+**Missing nodes: the nearest node is suggested.** For a path with no start or end node, the finding also names the
+node closest to the drawn end, with the distance: up to 150 m and a node that stands for a sensor is "likely", 150 to
+500 m is "check by hand", and beyond 500 m nothing is suggested. It is also "check by hand" when a second node is just
+as close (within 150 m of the end and within 60 m of the first node), or when the path's own `A->B` name gives another
+site code than the nearest node's sensor. Only the clear suggestions can be applied: in Bulk edit, tick "fill missing
+nodes with the nearest one". It fills only missing or unknown nodes, never replaces a node that is set, never uses the
+same node for both ends, and still needs a speed range if the path has none.
+
 The page also lists the nodes that need attention and the API sensors no node stands for. OMNIA is only read; the
 **Fetch from OMNIA** button needs the internal network and keeps a snapshot, so the check also works offline.
 

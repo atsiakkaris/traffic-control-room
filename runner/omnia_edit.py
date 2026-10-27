@@ -51,15 +51,17 @@ def current_values(path):
             "start": path.get("start") or None, "end": path.get("end") or None}
 
 
-def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=None, end=None):
+def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=None, end=None, suggested=None):
     """What a bulk change would do. Returns {items, refused}.
 
     items:   [{id, name, before, after, start_name, end_name}] - only paths that really change
     refused: [{id, reason}]  - paths that cannot be changed, with the reason
     Blank speed/node values mean "leave as is". `swap` exchanges start and end node.
+    `suggested` ({path id: {'start': node id, 'end': node id}}, from bt_wiring.usable_suggestions) fills the start
+    and/or end node of a path that has none (or an unknown one); it never replaces a node that is set and known.
     """
     speed_min, speed_max, start, end = _int(speed_min), _int(speed_max), _int(start), _int(end)
-    if speed_min is None and speed_max is None and not swap and start is None and end is None:
+    if speed_min is None and speed_max is None and not swap and start is None and end is None and suggested is None:
         raise ValueError("Nothing to change: set a speed, a node, or swap.")
     ids = [str(i).strip() for i in dict.fromkeys(ids) if str(i).strip()]
     if not ids:
@@ -76,6 +78,14 @@ def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=
             continue
         before = current_values(p)
         after = dict(before)
+        if suggested is not None:
+            pick = suggested.get(pid) or {}
+            for side in ("start", "end"):
+                if after[side] not in nodes and pick.get(side) in nodes:
+                    after[side] = pick[side]
+            if after == before and not (swap or start or end or speed_min or speed_max):
+                refused.append({"id": pid, "reason": "no clear nearest node to suggest (see the finding on the path)"})
+                continue
         if swap:
             after["start"], after["end"] = before["end"], before["start"]
         for key, val in (("speed_min", speed_min), ("speed_max", speed_max), ("start", start), ("end", end)):

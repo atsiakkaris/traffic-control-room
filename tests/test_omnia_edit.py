@@ -46,6 +46,18 @@ def test_a_path_without_nodes_needs_both_nodes_and_a_speed_range_before_it_can_c
     assert ok["items"][0]["after"] == {"speed_min": 10, "speed_max": 50, "start": 3, "end": 4}
 
 
+def test_suggested_nodes_fill_only_missing_ones_and_still_need_a_speed_range():
+    sug = {"12": {"start": 3, "end": 4}, "10": {"start": 4, "end": 3}}
+    no_speed = oe.plan_edits(snap(), ["12"], suggested=sug)
+    assert no_speed["items"] == [] and "speed min, speed max" in no_speed["refused"][0]["reason"]
+    ok = oe.plan_edits(snap(), ["12", "10"], speed_min="10", speed_max="50", suggested=sug)
+    by_id = {i["id"]: i for i in ok["items"]}
+    assert by_id["12"]["after"] == {"speed_min": 10, "speed_max": 50, "start": 3, "end": 4}
+    assert by_id["10"]["after"]["start"] == 1 and by_id["10"]["after"]["end"] == 2          # nodes already set stay
+    none = oe.plan_edits(snap(), ["12"], suggested={})
+    assert none["items"] == [] and "no clear nearest node" in none["refused"][0]["reason"]
+
+
 def test_bad_values_are_refused_not_sent():
     s = snap()
     assert "0 < min < max" in oe.plan_edits(s, ["10"], speed_min="80")["refused"][0]["reason"]

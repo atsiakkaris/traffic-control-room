@@ -132,6 +132,63 @@ def close_neighbours(sensors):
     return out
 
 
+def nearest_nodes(point, matches, limit=3, sensors=None, want=None):
+    """Nodes within END_FAR_M of a drawn path end, nearest first: [{id, name, distance_m, level, ambiguous, ...}].
+
+    level: 'likely' within END_OK_M of a node that stands for a sensor, otherwise 'check'. The first entry is flagged
+    ambiguous when a second node is also within END_OK_M of the end and within CLOSE_PAIR_M of the first one.
+    `want` is the site code the path's own name gives for this end (numeric `A->B` names only): a node whose sensor has
+    another site code is only a 'check' and carries `name_says` / `sensor_code`.
+    """
+    ranked = sorted((_dist(point, (m["lat"], m["lon"])), nid) for nid, m in matches.items() if m.get("lat") is not None)
+    out = []
+    for d, nid in ranked[:limit]:
+        if d > END_FAR_M:
+            break
+        m = matches[nid]
+        item = {"id": nid, "name": m["name"], "distance_m": round(d), "sensor_name": m["sensor_name"],
+                "level": "likely" if d <= END_OK_M and m["sensor"] is not None else "check", "ambiguous": False}
+        code = _site(sensors, m["sensor"]) if sensors and m["sensor"] is not None else None
+        if want is not None and code != want:
+            item.update(level="check", name_says=want, sensor_code=code)
+        out.append(item)
+    if len(out) > 1 and out[1]["distance_m"] <= END_OK_M:
+        a, b = matches[out[0]["id"]], matches[out[1]["id"]]
+        if _dist((a["lat"], a["lon"]), (b["lat"], b["lon"])) <= CLOSE_PAIR_M:
+            out[0]["ambiguous"] = True
+    return out
+
+
+def _suggestion_text(label, found):
+    if not found:
+        return "; no node within %d m of the drawn %s" % (END_FAR_M, label)
+    first = found[0]
+    text = "; nearest node to the drawn %s: '%s' (id %s), %d m" % (label, first["name"], first["id"], first["distance_m"])
+    if first["ambiguous"]:
+        text += ", but '%s' (id %s) is just as close: check by hand" % (found[1]["name"], found[1]["id"])
+    elif "name_says" in first:
+        text += ", but the path name says %s and this node's sensor is %s: check by hand" % (first["name_says"], first["sensor_code"] or "unknown")
+    elif first["level"] == "check":
+        text += ", check by hand"
+    return text
+
+
+def usable_suggestions(paths):
+    """{path id: {'start': node id, 'end': node id}} for the clear suggestions only: a 'likely' node that has no
+    close rival, and not the same node for both ends of one path."""
+    out = {}
+    for pid, p in paths.items():
+        pick = {}
+        for side, found in (p.get("suggest") or {}).items():
+            if found and found[0]["level"] == "likely" and not found[0]["ambiguous"]:
+                pick[side] = found[0]["id"]
+        if pick.get("start") is not None and pick.get("start") == pick.get("end"):
+            pick = {}
+        if pick:
+            out[str(pid)] = pick
+    return out
+
+
 def check_paths(omnia_paths, matches, feed_paths, sensors):
     """{path id: {..., findings: [{code, severity, text}], severity}} joining OMNIA paths to drawn paths by id."""
     close = close_neighbours(sensors)
@@ -148,6 +205,8 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
             findings.append({"code": code, "severity": FINDINGS[code][0], "text": text})
 
         ends = []
+        suggest = {}
+        named = _NAME_RE.match(p.get("name") or "")       # numeric A->B names say which sensors the path should use
         for label, nid, point in (("start", p.get("start"), coords[0] if coords else None),
                                   ("end", p.get("end"), coords[-1] if coords else None)):
             node = matches.get(nid) if nid else None
@@ -156,8 +215,19 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
                 if label == "end" and not p.get("start") and not nid:
                     continue            # both missing: reported once, at the start
                 both = label == "start" and not nid and not p.get("end")
-                add("no_node", "Start and end node are not set" if both else
-                    "%s node %s" % (label.capitalize(), "is not set" if not nid else "%s is not a known node" % nid))
+                text = "Start and end node are not set" if both else \
+                    "%s node %s" % (label.capitalize(), "is not set" if not nid else "%s is not a known node" % nid)
+                if both:        # the end is not visited again, so look for both ends here
+                    for side, pt, k in (("start", coords[0] if coords else None, 1), ("end", coords[-1] if coords else None, 2)):
+                        if pt:
+                            suggest[side] = nearest_nodes(pt, matches, sensors=sensors, want=named.group(k) if named else None)
+                    if suggest:
+                        text += "".join(_suggestion_text(s, suggest[s]) for s in ("start", "end") if s in suggest)
+                elif point:
+                    suggest[label] = nearest_nodes(point, matches, sensors=sensors,
+                                                   want=named.group(1 if label == "start" else 2) if named else None)
+                    text += _suggestion_text(label, suggest[label])
+                add("no_node", text)
             elif node["sensor"] is None:
                 hint = " (differs only by capitals/spaces from: %s)" % ", ".join(node["similar"]) if node["similar"] else ""
                 add("node_without_sensor", "%s node '%s' has no matching sensor%s" % (label.capitalize(), node["name"], hint))
@@ -206,7 +276,7 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
                     "start_name": sn["name"] if sn else None, "end_name": en["name"] if en else None,
                     "start_sensor": sn["sensor"] if sn else None, "end_sensor": en["sensor"] if en else None,
                     "speed_min": p.get("speed_min"), "speed_max": p.get("speed_max"),
-                    "findings": findings,
+                    "suggest": suggest, "findings": findings,
                     "severity": max((f["severity"] for f in findings), key=SEVERITY.get, default="ok")}
     for pid, feed in feed_paths.items():
         if str(pid) not in seen:

@@ -74,7 +74,7 @@ minute) and keeps `results/omnia_snapshot.json`, which is git-ignored. The OMNIA
 Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md).
 
 **Changing many OMNIA paths at once (Wiring tab -> Bulk edit).** Tick paths (or a whole filter, up to 50), then set a
-speed range, swap start and end node, or set the nodes, and press *Preview changes*: OMNIA is read live and every path is
+speed range, swap start and end node, set the nodes (or fill missing ones with the nearest node to the drawn end, clear matches only), and press *Preview changes*: OMNIA is read live and every path is
 shown old value -> new value, nothing is sent. OMNIA needs all of
 speed min, speed max, start and end node for every call, so a path with no nodes only changes once both nodes are given;
 each path's current name is always sent back so nothing is renamed. Every change is logged with its old values in

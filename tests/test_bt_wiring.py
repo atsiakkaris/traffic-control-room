@@ -128,6 +128,61 @@ def test_a_path_ending_at_a_sensor_with_a_close_neighbour_is_flagged_for_a_hand_
     assert set(bw.close_neighbours(sensors)) == {"1", "5"}
 
 
+def test_a_path_without_nodes_gets_the_nearest_node_to_each_drawn_end():
+    # drawn ends ~45 m (0.0004 deg) from Alpha and Beta
+    feed = {"10": {"name": "x", "coords": [[35.0004, 33.0], [35.0096, 33.0]]}}
+    r = run([opath(10, "x", None, None, None, None)], feed)
+    p = r["paths"]["10"]
+    assert p["suggest"]["start"][0]["id"] == 1 and p["suggest"]["end"][0]["id"] == 2
+    assert p["suggest"]["start"][0]["level"] == "likely" and p["suggest"]["start"][0]["distance_m"] < 60
+    assert "'Alpha' (id 1)" in p["findings"][0]["text"] and "'Beta' (id 2)" in p["findings"][0]["text"]
+    assert bw.usable_suggestions(r["paths"]) == {"10": {"start": 1, "end": 2}}
+
+
+def test_one_missing_end_is_suggested_and_a_known_end_is_left_alone():
+    feed = {"10": {"name": "x", "coords": [[35.00, 33.0], [35.0096, 33.0]]}}
+    r = run([opath(10, "x", 1, None, None, None)], feed)
+    p = r["paths"]["10"]
+    assert list(p["suggest"]) == ["end"] and bw.usable_suggestions(r["paths"]) == {"10": {"end": 2}}
+    assert "End node is not set; nearest node to the drawn end: 'Beta' (id 2)" in p["findings"][0]["text"]
+
+
+def test_far_ends_get_a_check_level_or_nothing():
+    feed = {"10": {"name": "x", "coords": [[35.025, 33.0], [36.5, 33.0]]}}          # ~555 m from Gamma and Delta
+    r = run([opath(10, "x", None, None, None, None)], feed)
+    assert r["paths"]["10"]["suggest"]["start"] == []
+    assert "no node within 500 m of the drawn start" in r["paths"]["10"]["findings"][0]["text"]
+    mid = run([opath(10, "x", None, None, None, None)], {"10": {"name": "x", "coords": [[35.0115, 33.0], [35.0004, 33.0]]}})
+    s = mid["paths"]["10"]["suggest"]["start"][0]
+    assert s["level"] == "check" and "check by hand" in mid["paths"]["10"]["findings"][0]["text"]
+    assert bw.usable_suggestions(mid["paths"]) == {"10": {"end": 1}}                  # only the clear end
+
+
+def test_two_nodes_close_together_make_the_suggestion_ambiguous_and_unusable():
+    sensors = dict(SENSORS, **{"5": S("Alpha twin", 35.0003, "1005")})
+    nodes = NODES + [node(5, "Alpha twin", 35.0003)]
+    feed = {"10": {"name": "x", "coords": [[35.0001, 33.0], [35.0096, 33.0]]}}
+    r = run([opath(10, "x", None, None, None, None)], feed, nodes=nodes, sensors=sensors)
+    first = r["paths"]["10"]["suggest"]["start"][0]
+    assert first["ambiguous"] and "just as close" in r["paths"]["10"]["findings"][0]["text"]
+    assert bw.usable_suggestions(r["paths"]) == {"10": {"end": 2}}
+
+
+def test_the_same_node_is_never_suggested_for_both_ends():
+    feed = {"10": {"name": "x", "coords": [[35.0004, 33.0], [35.0002, 33.0]]}}
+    r = run([opath(10, "x", None, None, None, None)], feed)
+    assert bw.usable_suggestions(r["paths"]) == {}
+
+
+def test_a_numeric_name_that_disagrees_with_the_nearest_node_makes_it_a_hand_check():
+    feed = {"10": {"name": "x", "coords": [[35.0004, 33.0], [35.0096, 33.0]]}}
+    r = run([opath(10, "1001->1004", None, None, None, None)], feed)       # the name wants Delta at the end; Beta is nearest
+    p = r["paths"]["10"]
+    assert p["suggest"]["start"][0]["level"] == "likely" and p["suggest"]["end"][0]["name_says"] == "1004"
+    assert "the path name says 1004 and this node's sensor is 1002" in p["findings"][0]["text"]
+    assert bw.usable_suggestions(r["paths"]) == {"10": {"start": 1}}
+
+
 def test_descriptive_path_names_are_not_compared_with_site_codes():
     r = run([opath(10, "Alpha - Beta", 1, 2)], {"10": drawn("1", "2")})
     assert codes(r, "10") == []
