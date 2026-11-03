@@ -236,7 +236,7 @@ def test_plan_deletes_lists_what_would_go_and_refuses_unknown_ids():
     with pytest.raises(ValueError):
         oe.plan_deletes(snap(), [])
     with pytest.raises(ValueError):
-        oe.plan_deletes(snap(), [str(i) for i in range(oe.MAX_BATCH + 1)])
+        oe.plan_deletes(snap(), [str(i) for i in range(oe.MAX_DELETE + 1)])
 
 
 class DelResp:

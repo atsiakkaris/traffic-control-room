@@ -20,7 +20,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-MAX_BATCH = 50          # paths per batch
+MAX_BATCH = 100         # paths per edit or rename batch (they are sent to OMNIA one at a time)
+MAX_DELETE = 50         # deleting is permanent, so its batches stay smaller
 DELAY_S = 0.3           # pause between requests: OMNIA struggles with concurrent calls
 SPEED_LIMIT = 250       # sanity limit for km/h
 FIELDS = ("speed_min", "speed_max", "start", "end")
@@ -115,8 +116,8 @@ def plan_deletes(snapshot, ids):
     ids = [str(i).strip() for i in dict.fromkeys(ids) if str(i).strip()]
     if not ids:
         raise ValueError("No paths selected.")
-    if len(ids) > MAX_BATCH:
-        raise ValueError("At most %d paths per batch (you selected %d)." % (MAX_BATCH, len(ids)))
+    if len(ids) > MAX_DELETE:
+        raise ValueError("At most %d paths per batch (you selected %d)." % (MAX_DELETE, len(ids)))
     paths = {str(p["id"]): p for p in snapshot["paths"]}
     nodes = {n["id"]: n["name"] for n in snapshot["nodes"]}
     items, refused = [], []

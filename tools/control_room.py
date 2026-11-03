@@ -405,6 +405,8 @@ h2{font-size:15px;margin:22px 0 8px}
 .edit label{display:inline-flex;gap:5px;align-items:center}
 .pv td.ch{font-family:Consolas,monospace}
 .del{color:var(--high)}.add{color:#27ae60}
+.selbar{position:sticky;bottom:0;margin:10px -20px -40px;padding:9px 20px;background:var(--card);border-top:1px solid var(--line);font-weight:bold;z-index:5}
+.selbar.over{background:var(--high);color:#fff}
 </style></head><body>
 <header><h1>Wiring check</h1><div class="sub" id="sub"></div></header>
 <main>
@@ -477,11 +479,20 @@ h2{font-size:15px;margin:22px 0 8px}
   body.innerHTML = '<div class="edit" id="edit"></div><div class="bar"><input id="q" placeholder="Search path, name or node...">'
     + '<label>Sort by <select id="sk">' + SORTS.map(function(s) { return '<option value="' + s[0] + '">' + s[1] + '</option>'; }).join('') + '</select></label>'
     + '<button class="sec" id="sd" title="Reverse the order"></button></div><div class="chips" id="chips"></div>'
-    + '<table><thead><tr><th><input type="checkbox" id="all" title="Select all shown"></th><th>Path ID</th><th>Path name</th><th>Start node</th><th>End node</th><th>Speed</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
+    + '<table id="pt"><thead><tr><th><input type="checkbox" id="all" title="Select all shown"></th><th>Path ID</th><th>Path name</th><th>Start node</th><th>End node</th><th>Speed</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
     + '<h2>Nodes that need attention (' + D.nodes.length + ')</h2><table><thead><tr><th>Node</th><th>Status</th><th>Detail</th></tr></thead><tbody id="nodes"></tbody></table>'
-    + '<h2>API sensors no node stands for (' + D.sensors_without_node.length + ')</h2><div class="note" id="swn"></div>';
+    + '<h2>API sensors no node stands for (' + D.sensors_without_node.length + ')</h2><div class="note" id="swn"></div>'
+    + '<div class="selbar" id="selbar"></div>';
 
   function countSelected() { return Object.keys(selected).length; }
+  var lastList = [], lastIdx = null;
+  function updateCounter() {
+    var n = countSelected(), bar = document.getElementById('selbar');
+    if (!bar) return;
+    bar.className = 'selbar' + (n > D.max_batch ? ' over' : '');
+    bar.textContent = n + ' of ' + D.max_batch + ' paths selected' + (n > D.max_batch ? ' - ' + (n - D.max_batch) + ' too many, untick some before previewing' : '')
+      + ' (deleting: max ' + D.max_delete + (n > D.max_delete ? ', too many to delete' : '') + ')';
+  }
   function shown() {
     return D.paths.filter(function(p) {
       if (code === '__all') { /* every path */ }
@@ -506,12 +517,13 @@ h2{font-size:15px;margin:22px 0 8px}
     cs.appendChild(chip('All paths', '__all', D.paths.length));
     var rows = document.getElementById('rows'); rows.innerHTML = '';
     var list = shown().sort(cmp);
+    lastList = list;
     document.getElementById('sd').textContent = sortDesc ? 'Descending (Z-A, high-low)' : 'Ascending (A-Z, low-high)';
     list.forEach(function(p) {
-      var tr = document.createElement('tr');
+      var tr = document.createElement('tr'); tr.setAttribute('data-row', p.id);
       var speed = p.speed_min == null ? '-' : p.speed_min + '-' + p.speed_max;
       tr.innerHTML = '<td><input type="checkbox" data-sel="' + esc(p.id) + '"' + (selected[p.id] ? ' checked' : '') + '></td><td><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + esc(p.start_node || '-') + '<br>' + esc(p.start_name || '') + '</td><td>'
-        + esc(p.end_node || '-') + '<br>' + esc(p.end_name || '') + '</td><td>' + esc(speed) + '</td><td>'
+        + esc(p.end_node || '-') + '<br>' + esc(p.end_name || '') + '</td><td>' + esc(speed) + '</td><td class="fd">'
         + p.findings.map(function(f) { return '<span class="f ' + esc(f.severity) + '">' + esc(f.text) + '</span>'; }).join('')
         + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '">show on map</a>' : '') + '</td>';
       rows.appendChild(tr);
@@ -519,6 +531,7 @@ h2{font-size:15px;margin:22px 0 8px}
     if (!rows.children.length) rows.innerHTML = '<tr><td colspan="8" class="note">Nothing matches.</td></tr>';
     document.getElementById('all').checked = list.length > 0 && list.every(function(p) { return selected[p.id]; });
     drawEdit();
+    updateCounter();
   }
   document.getElementById('q').oninput = function() { q = this.value.toLowerCase(); draw(); };
   document.getElementById('sk').onchange = function() { sortKey = this.value; sortDesc = false; draw(); };
@@ -532,9 +545,39 @@ h2{font-size:15px;margin:22px 0 8px}
     var a = e.target.closest && e.target.closest('[data-p]');
     if (a && shell) shell.crShow('paths', {path: a.getAttribute('data-p')});
   });
+  // Like a file list: plain click = only this row, shift+click = the range from the last click (replaces the selection),
+  // ctrl+click = add or remove this row and keep the rest. The checkbox still toggles its own row on a plain click.
+  document.addEventListener('click', function(e) {
+    var t = e.target, onBox = t.getAttribute && t.getAttribute('data-sel');
+    var row = t.closest && t.closest('tr[data-row]');
+    if (!row) {                                            // a click on the empty page clears the selection
+      if (t.closest && !t.closest('#pt, #edit, #selbar, .bar, .chips, a, button, input, select, label') && countSelected()) { selected = {}; preview = null; lastIdx = null; draw(); }
+      return;
+    }
+    if (t.closest('td.fd') || (!onBox && t.closest('a, button, input, select, label'))) return;      // the findings text stays free for copying
+    var c = row.getAttribute('data-row'), idx = -1;
+    lastList.forEach(function(p, i) { if (String(p.id) === c) idx = i; });
+    if (idx < 0) return;
+    var multi = e.ctrlKey || e.metaKey;
+    if (e.shiftKey) {
+      selected = {};
+      var from = Math.min(lastIdx === null ? idx : lastIdx, idx), to = Math.max(lastIdx === null ? idx : lastIdx, idx);
+      for (var i = from; i <= to; i++) selected[lastList[i].id] = true;
+    } else if (multi) {
+      if (selected[c]) delete selected[c]; else selected[c] = true;
+    } else if (onBox) {
+      lastIdx = idx; return;                               // the checkbox's own change handler does the rest
+    } else {
+      if (selected[c]) delete selected[c];                 // a second click on a selected row deselects it
+      else { selected = {}; selected[c] = true; }
+    }
+    window.getSelection && window.getSelection().removeAllRanges();
+    if (!e.shiftKey) lastIdx = idx;
+    draw();
+  });
   document.addEventListener('change', function(e) {
     var c = e.target.getAttribute && e.target.getAttribute('data-sel');
-    if (c) { if (e.target.checked) selected[c] = true; else delete selected[c]; drawEdit(); }
+    if (c) { if (e.target.checked) selected[c] = true; else delete selected[c]; drawEdit(); updateCounter(); }
   });
 
   // ---- bulk edit ------------------------------------------------------------
@@ -544,7 +587,7 @@ h2{font-size:15px;margin:22px 0 8px}
     var el = document.getElementById('edit');
     var keep = {};
     ['smin', 'smax', 'nstart', 'nend', 'swap', 'sugg', 'yes', 'rfind', 'rrep', 'rpre', 'rsuf', 'rnew', 'rstd'].forEach(function(id) { var x = document.getElementById(id); if (x) keep[id] = x.type === 'checkbox' ? x.checked : x.value; });
-    var h = '<b>Bulk edit in OMNIA</b> <span class="note">' + countSelected() + ' path(s) selected (up to 50 per batch)</span>';
+    var h = '<b>Bulk edit in OMNIA</b> <span class="note">' + countSelected() + ' path(s) selected (up to ' + D.max_batch + ' per batch)</span>';
     h += '<div class="row"><label>Speed min <input type="number" id="smin" min="1" step="1"></label><label>Speed max <input type="number" id="smax" min="1" step="1"></label>'
       + '<label><input type="checkbox" id="swap"> swap start and end node</label>'
       + '<label title="For a missing or unknown node, and for a node on a different sensor than the one the path is drawn to (the drawing is trusted). Only when one node is clearly the nearest to the drawn end (within 150 m, no close rival). Needs a speed range if the path has none."><input type="checkbox" id="sugg"> fill missing or wrong nodes with the nearest one</label>'
@@ -628,19 +671,27 @@ h2{font-size:15px;margin:22px 0 8px}
     }
     var word = isDel ? 'DELETE' : 'YES';
     if (preview.items.length && preview.token && preview.allowed) {
-      h += '<div class="row"><b>' + preview.items.length + (isDel ? ' path(s) will be PERMANENTLY DELETED from OMNIA (this cannot be undone).' : preview.kind === 'rename' ? ' path(s) will be renamed in OMNIA.' : ' path(s) will be changed in OMNIA.') + '</b> Type ' + word
-        + ': <input id="yes" size="8" autocomplete="off"> <button class="danger" id="apply" disabled>' + (isDel ? 'Delete from OMNIA' : 'Apply to OMNIA') + '</button></div>';
+      h += '<div class="row"><b>' + preview.items.length + (isDel ? ' path(s) will be PERMANENTLY DELETED from OMNIA (this cannot be undone).' : preview.kind === 'rename' ? ' path(s) will be renamed in OMNIA.' : ' path(s) will be changed in OMNIA.') + '</b>'
+        + (isDel ? ' Type ' + word + ': <input id="yes" size="8" autocomplete="off"> ' : ' ') + '<button class="danger" id="apply"' + (isDel ? ' disabled' : '') + '>' + (isDel ? 'Delete from OMNIA' : 'Apply to OMNIA') + '</button></div>';
     } else if (preview.items.length) {
       h += '<div class="note">' + (isDel ? 'Deleting' : 'Editing') + ' is switched off on this PC, so this is a preview only.</div>';
     }
     h += '<div id="res"></div>';
     box.innerHTML = h;
     var yes = document.getElementById('yes'), ap = document.getElementById('apply');
-    if (yes) {
-      yes.oninput = function() { ap.disabled = yes.value !== word; };
+    if (ap) {
+      if (yes) yes.oninput = function() { ap.disabled = yes.value.trim().toLowerCase() !== word.toLowerCase(); };
       ap.onclick = function() {
         if (isDel && !confirm('Permanently delete ' + preview.items.length + ' path(s) from OMNIA?\n\nThis cannot be undone.')) return;
-        ap.disabled = true; yes.disabled = true;
+        if (!isDel && !ap.getAttribute('data-armed')) {          // first click: the button itself asks, right where you clicked
+          var label = ap.textContent, ask = document.createElement('b'), no = document.createElement('button');
+          ask.textContent = 'Are you sure? '; no.className = 'sec'; no.textContent = 'Cancel';
+          ap.parentNode.insertBefore(ask, ap); ap.parentNode.insertBefore(no, ap.nextSibling);
+          ap.setAttribute('data-armed', '1'); ap.textContent = 'Yes, apply to OMNIA';
+          no.onclick = function() { ask.remove(); no.remove(); ap.removeAttribute('data-armed'); ap.textContent = label; };
+          return;
+        }
+        ap.disabled = true; if (yes) yes.disabled = true;
         document.getElementById('res').innerHTML = '<div class="note">Sending to OMNIA one path at a time...</div>';
         post('/api/edit/apply', {token: preview.token, confirm: word}).then(function(r) {
           var res = document.getElementById('res');
@@ -674,7 +725,8 @@ h2{font-size:15px;margin:22px 0 8px}
 def build_wiring_page(result, snapshot, can_fetch, can_edit=False, can_delete=False):
     """The Wiring tab: configured OMNIA nodes versus the API sensors and the drawn paths."""
     import bt_wiring as bw
-    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "can_edit": bool(can_edit), "can_delete": bool(can_delete), "labels": bw.FINDINGS,
+    import omnia_edit
+    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "can_edit": bool(can_edit), "can_delete": bool(can_delete), "labels": bw.FINDINGS, "max_batch": omnia_edit.MAX_BATCH, "max_delete": omnia_edit.MAX_DELETE,
             "node_names": {n["id"]: n["name"] for n in (snapshot or {}).get("nodes", [])},
             "fetched_at": (snapshot or {}).get("fetched_at", ""), "meta": {}, "paths": [], "nodes": [],
             "sensors_without_node": [], "csv": []}
