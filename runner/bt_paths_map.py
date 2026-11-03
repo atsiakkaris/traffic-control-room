@@ -339,6 +339,20 @@ REVERSED_CHECK_CLEAR_M    = 300  # metres — the *other* pairing's combined dis
 _REVERSED_NAME_RE = re.compile(r'^\s*(\S+)\s*->\s*(\S+)\s*$')
 
 
+def _group_shares_road(paths, ids):
+    """True if at least two paths of a same-name group trace the same road.
+    False means the shared name is the only thing they have in common: the
+    name was probably typed wrongly on one of them (a human slip to catch)."""
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            ca, cb = paths[a].get('coords') or [], paths[b].get('coords') or []
+            if len(ca) > 1 and len(cb) > 1 and min(
+                    _overlap_fraction(ca, cb, DUPLICATE_OVERLAP_M),
+                    _overlap_fraction(cb, ca, DUPLICATE_OVERLAP_M)) >= 0.3:
+                return True
+    return False
+
+
 def find_reversed_direction_pairs(paths):
     """Check every named "A->B" / "B->A" path pair for whether the saved
     coordinates are actually reversed, or just a copy in the same order.
@@ -1649,11 +1663,16 @@ FEATURES.forEach(function(f) {{
   var dup = DUPLICATE_BY_ID[f.id];
   if (dup) {{
     var otherIds = dup.ids.filter(function(id) {{ return id !== f.id; }});
-    detailHtml += '<br><span style="color:#c0392b;font-weight:bold">⚠ Duplicate registration</span>' +
-                 '<br>Also registered as: ID ' + otherIds.join(', ID ') +
-                 '<br>Status match: ' + Math.round(dup.match_pct * 100) + '%';
-    if (!dup.confirmed) {{
-      detailHtml += '<br><span style="color:#e67e22">Not a clean duplicate — needs manual check</span>';
+    if (!dup.confirmed && dup.same_road === false) {{
+      detailHtml += '<br><span style="color:#e67e22;font-weight:bold">&#9888; Same name as ID ' + otherIds.join(', ID ') + ', but drawn on a different road</span>' +
+                   '<br>Not a duplicate. The name was probably typed wrongly on one of them: check which road this name belongs to.';
+    }} else {{
+      detailHtml += '<br><span style="color:#c0392b;font-weight:bold">⚠ Duplicate registration</span>' +
+                   '<br>Also registered as: ID ' + otherIds.join(', ID ') +
+                   '<br>Status match: ' + Math.round(dup.match_pct * 100) + '%';
+      if (!dup.confirmed) {{
+        detailHtml += '<br><span style="color:#e67e22">Not a clean duplicate — needs manual check</span>';
+      }}
     }}
   }}
   var rc = f.reversed_check;
@@ -2522,7 +2541,8 @@ def analyse_paths(paths):
     for name, kept, dropped, pct in collapsed:
         duplicate_groups[name] = {"ids": [kept] + dropped, "match_pct": pct, "confirmed": True}
     for name, ids, pct in ambiguous:
-        duplicate_groups[name] = {"ids": ids, "match_pct": pct, "confirmed": False}
+        duplicate_groups[name] = {"ids": ids, "match_pct": pct, "confirmed": False,
+                                  "same_road": _group_shares_road(paths, ids)}
     reversed_by_id, reversed_groups = find_reversed_direction_pairs(paths)
     direction_by_id, direction_pairs = find_direction_pairs(paths)
     return dict(duplicate_groups=duplicate_groups,
