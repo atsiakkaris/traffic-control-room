@@ -268,3 +268,12 @@ def test_nodes_map_page_carries_nodes_sensors_statuses_and_is_script_safe():
     assert st == {1: "ok", 2: "name_only", 3: "no_sensor"} and len(data["sensors"]) == 2
     assert data["counts"]["name_only"] == 1 and [s["nodes"] for s in data["sensors"]] == [["1 Alpha"], ["2 Moved"]]
     assert page.count("</script>") == page.count("<script")      # the node named "</script>" is escaped, so no extra close tag
+
+
+def test_a_node_on_the_wrong_sensor_is_replaced_by_the_node_nearest_the_drawn_end():
+    # drawn end at Gamma (~45 m), but the path is wired to Delta: the drawing is trusted
+    feed = {"10": {"name": "x", "coords": [[35.00, 33.0], [35.0204, 33.0]]}}
+    r = run([opath(10, "x", 1, 4)], feed)
+    p = r["paths"]["10"]
+    assert [f["code"] for f in p["findings"]] == ["wrong_node"] and "'Gamma' (id 3)" in p["findings"][0]["text"]
+    assert bw.usable_suggestions(r["paths"]) == {"10": {"end": 3, "end_replace": True}}

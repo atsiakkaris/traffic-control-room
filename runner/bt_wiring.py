@@ -175,13 +175,16 @@ def _suggestion_text(label, found):
 
 def usable_suggestions(paths):
     """{path id: {'start': node id, 'end': node id}} for the clear suggestions only: a 'likely' node that has no
-    close rival, and not the same node for both ends of one path."""
+    close rival, and not the same node for both ends of one path. A side that already has a (wrong) node also gets
+    '<side>_replace': True, so the edit knows it may swap that node."""
     out = {}
     for pid, p in paths.items():
         pick = {}
         for side, found in (p.get("suggest") or {}).items():
             if found and found[0]["level"] == "likely" and not found[0]["ambiguous"]:
                 pick[side] = found[0]["id"]
+                if found[0].get("replaces"):
+                    pick[side + "_replace"] = True
         if pick.get("start") is not None and pick.get("start") == pick.get("end"):
             pick = {}
         if pick:
@@ -252,8 +255,14 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
                         continue
                     near, _how = bs.resolve_endpoint(point, sensors)
                     if near is not None and node["sensor"] is not None and near != node["sensor"]:
-                        add("wrong_node", "Drawn %s is at '%s' but its node is '%s' (%d m away)"
-                            % (label, sensors[near]["name"], node["name"], d))
+                        # the drawing is trusted here: the node nearest the drawn end is offered as the replacement
+                        found = [f for f in nearest_nodes(point, matches, sensors=sensors) if f["id"] != nid]
+                        if found:
+                            found[0]["replaces"] = True
+                            suggest[label] = found
+                        add("wrong_node", "Drawn %s is at '%s' but its node is '%s' (%d m away)%s"
+                            % (label, sensors[near]["name"], node["name"], d,
+                               _suggestion_text(label, found) if found else ""))
                     elif d > END_FAR_M:
                         add("end_far", "Drawn %s is %d m from its node '%s'" % (label, d, node["name"]))
                     else:

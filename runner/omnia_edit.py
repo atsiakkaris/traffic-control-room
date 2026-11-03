@@ -58,7 +58,7 @@ def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=
     refused: [{id, reason}]  - paths that cannot be changed, with the reason
     Blank speed/node values mean "leave as is". `swap` exchanges start and end node.
     `suggested` ({path id: {'start': node id, 'end': node id}}, from bt_wiring.usable_suggestions) fills the start
-    and/or end node of a path that has none (or an unknown one); it never replaces a node that is set and known.
+    and/or end node of a path that has none (or an unknown one); it replaces a node that is set and known only when the suggestion says so (a 'wired to a different sensor' finding).
     """
     speed_min, speed_max, start, end = _int(speed_min), _int(speed_max), _int(start), _int(end)
     if speed_min is None and speed_max is None and not swap and start is None and end is None and suggested is None:
@@ -81,7 +81,7 @@ def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=
         if suggested is not None:
             pick = suggested.get(pid) or {}
             for side in ("start", "end"):
-                if after[side] not in nodes and pick.get(side) in nodes:
+                if pick.get(side) in nodes and (after[side] not in nodes or pick.get(side + "_replace")):
                     after[side] = pick[side]
             if after == before and not (swap or start or end or speed_min or speed_max):
                 refused.append({"id": pid, "reason": "no clear nearest node to suggest (see the finding on the path)"})

@@ -356,3 +356,13 @@ def test_standard_name_comes_from_the_site_codes_of_the_nodes_sensors(tmp_path):
         assert code == 200 and [(i["id"], i["new_name"]) for i in plan["items"]] == [("10", "1001->1002"), ("11", "1002->1001")]
     finally:
         srv.shutdown()
+
+
+def test_a_replace_suggestion_swaps_a_wrong_known_node_but_a_plain_one_never_does():
+    s = snap()
+    path = s["paths"][0]
+    pid, other = str(path["id"]), 3          # path 10 runs 1 -> 2; node 3 is free
+    keep = oe.plan_edits(s, [pid], suggested={pid: {"end": other}})
+    assert keep["items"] == [] and "no clear nearest node" in keep["refused"][0]["reason"]
+    swap = oe.plan_edits(s, [pid], suggested={pid: {"end": other, "end_replace": True}})
+    assert swap["items"] and swap["items"][0]["after"]["end"] == other
