@@ -732,12 +732,44 @@ window.crFocusLoc = function(lat, lon) { map.setView([lat, lon], 17); };
 """
 
 
+def _last_run_at():
+    """UTC ISO time of the newest monitor run in the database, or None."""
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT MAX(run_at) FROM runs").fetchone()
+        finally:
+            conn.close()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
+def _data_stamp_html(generated):
+    """Header text saying how fresh the data is: the last monitor run and its age, like the dashboard.
+    (When the page was built says nothing about the data: opening the Control Room rebuilds it.)"""
+    last = _last_run_at()
+    if not last:
+        return "Generated %s" % generated
+    iso = datetime.fromisoformat(last.replace("Z", "+00:00"))
+    if iso.tzinfo is None:
+        iso = iso.replace(tzinfo=timezone.utc)
+    return ('Data from %s Cyprus time <span id="dataAge" data-run="%s"></span>'
+            '<script>(function(){var el=document.getElementById("dataAge");'
+            'function age(){var m=Math.round((Date.now()-new Date(el.getAttribute("data-run")).getTime())/60000);'
+            'if(m<1)return"(moments ago)";if(m<60)return"("+m+" min ago)";var h=Math.floor(m/60);'
+            'if(h<24)return"("+h+" hr "+(m%%60)+" min ago)";var d=Math.floor(h/24);return"("+d+(d===1?" day":" days")+" ago)"}'
+            'function tick(){el.textContent=age()}tick();setInterval(tick,60000)})()</script>'
+            % (to_cyprus(last), iso.isoformat()))
+
+
 def build_html(paths, sensors, ref_sensors, duplicate_groups=None,
                 dropped_ids=None, show_dropped_by_default=False, include_live_data=True,
                 reversed_by_id=None, reversed_groups=None,
                 direction_by_id=None, direction_pairs=None, data_quality_by_id=None,
                 live_geometry_at=None, server_mode=False, allow_delete=True):
     now =datetime.now(CYPRUS_TZ).strftime("%Y-%m-%d %H:%M")
+    data_stamp = _data_stamp_html(now)
     # Same feed_state row the dashboard banner reads — shown here too so
     # anyone on the map (including the published copy) sees the live feed is
     # frozen, not just people looking at the main dashboard. feed_since gets
@@ -1168,7 +1200,7 @@ body.dark .leaflet-control-attribution a{{color:var(--muted)}}
 <header>
   <div>
     <h1>Bluetooth Paths — Map</h1>
-    <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
+    <p>{data_stamp}&nbsp;&nbsp;|&nbsp;&nbsp;{active_count} active paths&nbsp;&nbsp;|&nbsp;&nbsp;
        {len(sensor_list)} API sensors{f'&nbsp;&nbsp;|&nbsp;&nbsp;{len(ref_list)} spreadsheet sensors' if include_live_data else ''}</p>
     {f'<p style="opacity:1;color:#7dd3fc;font-weight:bold;margin-top:6px"><i class="ti ti-cloud-download" style="font-size:12px" aria-hidden="true"></i>&nbsp; Preview: path geometry fetched live from the API at {live_geometry_at} — not saved to the database</p>' if live_geometry_at else ''}
     {f'<p style="opacity:1;color:#ffc978;font-weight:bold;margin-top:6px"><i class="ti ti-alert-triangle" style="font-size:12px" aria-hidden="true"></i>&nbsp; Live feed frozen since {to_cyprus(feed_since)} (ongoing {feed_stale_duration})</p>' if feed_stale_duration else ''}

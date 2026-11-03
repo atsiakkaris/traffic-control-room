@@ -550,3 +550,48 @@ def test_omnia_addresses_come_only_from_the_environment_or_env_file(tmp_path):
     env_file.write_text("CONTROL_ROOM_OMNIA_NODES_URL=http://x.test/a\nCONTROL_ROOM_OMNIA_EDIT_URL=http://x.test/c\n")
     got = cr.omnia_urls_setting(env={"CONTROL_ROOM_OMNIA_PATHS_URL": "http://y.test/b"}, env_file=env_file)
     assert got == {"nodes": "http://x.test/a", "paths": "http://y.test/b", "edit": "http://x.test/c", "rename": None}
+
+
+def test_refresh_runs_the_monitor_then_reads_omnia_and_reports_progress(tmp_path):
+    import time as _t
+    calls = []
+    srv, base = _wiring_server(tmp_path)
+    srv.run_monitor = lambda: (calls.append("monitor") or (True, "passed=3 failed=1 errored=0 total=4"))
+    srv.page_cache["map"] = (0, "old")
+    try:
+        assert _req(base + "/api/refresh-data", "POST", {}, {"Origin": "http://evil.example"})[0] == 403
+        assert _req(base + "/api/refresh-data")[1]["state"] == "idle"
+        assert _req(base + "/api/refresh-data", "POST", {})[0] == 200
+        for _ in range(100):
+            out = _req(base + "/api/refresh-data")[1]
+            if out["state"] != "running":
+                break
+            _t.sleep(0.05)
+        assert out["state"] == "done" and calls == ["monitor"]
+        assert "passed=3" in out["message"] and "OMNIA data updated" in out["message"]
+        assert (tmp_path / "snap.json").exists() and not srv.page_cache
+    finally:
+        srv.shutdown()
+
+
+def test_refresh_stops_with_a_readable_message_when_the_monitor_cannot_run(tmp_path):
+    import time as _t
+    srv, base = _wiring_server(tmp_path)
+    srv.run_monitor = lambda: (False, "BASE_URL and SWARCO are not set in the .env file, so the live feed cannot be read.")
+    try:
+        _req(base + "/api/refresh-data", "POST", {})
+        for _ in range(100):
+            out = _req(base + "/api/refresh-data")[1]
+            if out["state"] != "running":
+                break
+            _t.sleep(0.05)
+        assert out["state"] == "error" and "BASE_URL" in out["message"]
+        assert not (tmp_path / "snap.json").exists()
+    finally:
+        srv.shutdown()
+
+
+def test_read_env_file_skips_comments(tmp_path):
+    f = tmp_path / ".env"
+    f.write_text('# note\nBASE_URL=https://x.test/\nSWARCO="swarco/"\n', encoding="utf-8")
+    assert cr.read_env_file(f) == {"BASE_URL": "https://x.test/", "SWARCO": "swarco/"}

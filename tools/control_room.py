@@ -416,11 +416,18 @@ h2{font-size:15px;margin:22px 0 8px}
   var D = __DATA__;
   var shell = (window.parent !== window && window.parent.crShow) ? window.parent : null;
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function localTime(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    var mins = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+    var age = mins < 1 ? 'just now' : mins < 60 ? mins + ' min ago' : mins < 2880 ? Math.round(mins / 60) + ' h ago' : Math.round(mins / 1440) + ' days ago';
+    return d.toLocaleString('en-GB', {day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'}) + ' (' + age + ')';
+  }
   var status = document.getElementById('status'), body = document.getElementById('body');
   var fetchBtn = document.getElementById('fetch'), exBtn = document.getElementById('ex');
   var withFindings = D.paths.filter(function(p) { return p.findings.length; }).length;
   document.getElementById('sub').textContent = D.has_snapshot
-    ? 'OMNIA data fetched ' + D.fetched_at + ' - ' + D.meta.paths + ' paths, ' + withFindings + ' with findings'
+    ? 'OMNIA data fetched ' + localTime(D.fetched_at) + ' - ' + D.meta.paths + ' paths, ' + withFindings + ' with findings'
     : 'No OMNIA data yet';
   if (!D.can_fetch) { fetchBtn.disabled = true; fetchBtn.title = 'Set the OMNIA addresses in .env'; }
   function post(url, data) {
@@ -540,7 +547,7 @@ h2{font-size:15px;margin:22px 0 8px}
     var h = '<b>Bulk edit in OMNIA</b> <span class="note">' + countSelected() + ' path(s) selected (up to 50 per batch)</span>';
     h += '<div class="row"><label>Speed min <input type="number" id="smin" min="1" step="1"></label><label>Speed max <input type="number" id="smax" min="1" step="1"></label>'
       + '<label><input type="checkbox" id="swap"> swap start and end node</label>'
-      + '<label title="Only for a missing or unknown node, and only when one node is clearly the nearest to the drawn end (within 150 m, no close rival). Needs a speed range if the path has none."><input type="checkbox" id="sugg"> fill missing nodes with the nearest one</label>'
+      + '<label title="For a missing or unknown node, and for a node on a different sensor than the one the path is drawn to (the drawing is trusted). Only when one node is clearly the nearest to the drawn end (within 150 m, no close rival). Needs a speed range if the path has none."><input type="checkbox" id="sugg"> fill missing or wrong nodes with the nearest one</label>'
       + '<label>Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label>End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
       + '<div class="row"><b>Rename:</b><label>Find <input id="rfind" size="9"></label><label>Replace with <input id="rrep" size="9"></label><label>Prefix <input id="rpre" size="6"></label><label>Suffix <input id="rsuf" size="6"></label>'
       + '<label>New name (one path) <input id="rnew" size="14"></label><label><input type="checkbox" id="rstd"> name from its nodes (site codes)</label></div>'
@@ -594,7 +601,7 @@ h2{font-size:15px;margin:22px 0 8px}
   function chg(a, b) { return a === b ? esc(a == null ? '-' : a) : '<span class="del">' + esc(a == null ? '-' : a) + '</span> &rarr; <span class="add">' + esc(b == null ? '-' : b) + '</span>'; }
   function drawPreview() {
     var box = document.getElementById('pvbox'); if (!box) return;
-    var h = '<div class="note">Read from OMNIA at ' + esc(preview.fetched_at) + '. Nothing has been changed yet.</div>';
+    var h = '<div class="note">Read from OMNIA at ' + esc(localTime(preview.fetched_at)) + '. Nothing has been changed yet.</div>';
     var isDel = preview.kind === 'delete';
     if (preview.kind === 'rename' && preview.items.length) {
       h += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name (old to new)</th></tr></thead><tbody>';
@@ -761,7 +768,7 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #stage iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;visibility:hidden}
 #stage iframe.on{visibility:visible}
 </style></head><body>
-<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rf" title="Rebuild the open tab from the latest data">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
 <div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
@@ -795,13 +802,24 @@ Array.prototype.forEach.call(document.querySelectorAll('#bar a[data-t]'), functi
   a.onclick = function() { window.crShow(a.getAttribute('data-t')); };
 });
 document.getElementById('rf').onclick = function() {
-  var btn = this, f = frame(cur);
-  var base = cur === 'paths' ? '/map' : cur === 'wiring' ? '/wiring' : '/sensors/' + cur;
+  var btn = this;
+  if (btn.getAttribute('data-busy')) return;
+  btn.setAttribute('data-busy', '1');
+  function reloadAll() {
+    Array.prototype.forEach.call(document.querySelectorAll('#stage iframe'), function(f) {
+      if (f.getAttribute('src')) f.contentWindow.location.reload();
+    });
+  }
+  function finish(text) { btn.textContent = 'Refresh'; btn.removeAttribute('data-busy'); if (text) alert(text); }
+  function poll() {
+    fetch('/api/refresh-data').then(function(r) { return r.json(); }).then(function(j) {
+      if (j.state === 'running') { btn.textContent = 'Refreshing ' + (j.seconds || 0) + 's...'; btn.title = j.step || ''; setTimeout(poll, 2000); }
+      else if (j.state === 'done') { reloadAll(); finish('Data refreshed. ' + (j.message || '')); }
+      else { finish('Could not refresh: ' + (j.message || 'unknown error')); }
+    }).catch(function() { finish('Lost contact with the Control Room.'); });
+  }
   btn.textContent = 'Refreshing...';
-  fetch(base + '?refresh=1').then(function() {
-    f.contentWindow.location.reload();
-    btn.textContent = 'Refresh';
-  });
+  fetch('/api/refresh-data', {method: 'POST'}).then(function() { poll(); }).catch(function() { finish('Could not start the refresh.'); });
 };
 document.getElementById('qt').onclick = function() {
   if (!confirm('Stop the Control Room? Flags are already saved.')) return;
@@ -894,6 +912,11 @@ class Handler(BaseHTTPRequestHandler):
         path, force = parts.path, "refresh" in parse_qs(parts.query)
         if path == "/api/review":
             return self._send(200, load_review(self.server.review_file))
+        if path == "/api/refresh-data":
+            job = dict(self.server.refresh)
+            if job.get("started"):
+                job["seconds"] = int(time.time() - job["started"])
+            return self._send(200, job)
         if path in ("/", "/index.html"):
             qs = parse_qs(parts.query).get("path")
             query = "?path=" + qs[0] if qs and qs[0].isdigit() else ""
@@ -1068,6 +1091,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ("/api/edit/plan", "/api/edit/apply") and self._same_origin():
             return self._edit(self.path.rsplit("/", 1)[1])
+        if self.path == "/api/refresh-data" and self._same_origin():
+            return self._send(200, dict(start_refresh(self.server)))
         if self.path == "/api/wiring/fetch" and self._same_origin():
             import omnia_fetch
             try:
@@ -1128,6 +1153,81 @@ class Handler(BaseHTTPRequestHandler):
         log_deletes(results, {pid: paths[pid]["name"] for pid in ok if pid in paths}, self.server.delete_log)
         self.server.page_cache.clear()
         self._send(200, {"results": results, "error": error})
+
+
+def read_env_file(env_file=ROOT / ".env"):
+    """{NAME: value} from the .env file, read the way run.bat does (lines starting with # are skipped)."""
+    out = {}
+    try:
+        for line in Path(env_file).read_text(encoding="utf-8-sig").splitlines():
+            key, sep, val = line.partition("=")
+            if sep and key.strip() and not key.lstrip().startswith("#"):
+                out[key.strip()] = val.strip().strip('"')
+    except OSError:
+        pass
+    return out
+
+
+MONITOR_TIMEOUT_S = 900
+
+
+def run_monitor(env_file=ROOT / ".env"):
+    """What run.bat does: one monitor run against the live feed (runner/run_tests.py, with the .env settings).
+
+    Returns (ok, message). The runner exits 1 when some tests failed, which is normal data, not an error here."""
+    env = dict(os.environ, **read_env_file(env_file))
+    if not env.get("BASE_URL") or not env.get("SWARCO"):
+        return False, "BASE_URL and SWARCO are not set in the .env file, so the live feed cannot be read."
+    try:
+        r = subprocess.run([sys.executable, str(ROOT / "runner" / "run_tests.py")], cwd=str(ROOT), env=env,
+                           capture_output=True, timeout=MONITOR_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return False, "The monitor run took more than %d minutes and was stopped." % (MONITOR_TIMEOUT_S // 60)
+    out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    summary = [ln.split("SUMMARY", 1)[1].strip() for ln in out.splitlines() if "SUMMARY" in ln]
+    if r.returncode in (0, 1) and summary:
+        return True, summary[-1]
+    last = [ln for ln in out.splitlines() if ln.strip()][-1:] or ["no output"]
+    return False, "The monitor run did not finish: " + last[0].strip()[:200]
+
+
+def _refresh_job(srv):
+    """Background job behind the Refresh button: new monitor run, new OMNIA snapshot, then rebuild every page."""
+    import omnia_fetch
+    job = srv.refresh
+    notes = []
+    try:
+        job["step"] = "Reading the live feed (a full monitor run, this can take a few minutes)..."
+        ok, msg = srv.run_monitor()
+        if not ok:
+            job.update(state="error", message=msg)
+            return
+        notes.append("Live feed read (%s)." % msg)
+        if _can_fetch(srv.omnia):
+            job["step"] = "Reading OMNIA..."
+            try:
+                snap = (srv.fetch_omnia or omnia_fetch.fetch_snapshot)(srv.omnia)
+                omnia_fetch.save_snapshot(snap, srv.snapshot_file)
+                notes.append("OMNIA data updated.")
+            except omnia_fetch.OmniaError as exc:
+                notes.append("OMNIA was not updated: %s" % exc)
+            except Exception as exc:
+                notes.append("OMNIA was not updated (%s)." % type(exc).__name__)
+        srv.page_cache.clear()
+        job.update(state="done", message=" ".join(notes))
+    except Exception as exc:
+        job.update(state="error", message="Refresh failed: " + type(exc).__name__)
+
+
+def start_refresh(srv):
+    """Start the refresh job unless one is already running; returns the job state."""
+    job = srv.refresh
+    if job.get("state") == "running":
+        return job
+    job.clear()
+    job.update(state="running", step="Starting...", started=time.time(), message="")
+    threading.Thread(target=_refresh_job, args=(srv,), daemon=True).start()
+    return job
 
 
 def _can_fetch(omnia):
@@ -1288,6 +1388,8 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LO
     srv.omnia = dict({"nodes": None, "paths": None, "edit": None, "rename": None}, **(omnia_urls_setting() if omnia_urls is None else omnia_urls))
     srv.fetch_omnia = fetch_omnia      # None = the real OMNIA fetch; tests pass a fake
     srv.wiring_inputs = wiring_inputs or (lambda: (srv.paths_provider(), current_sensors()))
+    srv.run_monitor = run_monitor       # tests pass a fake (the real one takes minutes)
+    srv.refresh = {"state": "idle"}
     srv.tokens = {}
     srv.downloads_dir = downloads_dir
     srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake
