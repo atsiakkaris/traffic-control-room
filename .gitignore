@@ -19,6 +19,7 @@ runner/results/
 *.xlsx
 ~$*.xlsx
 results/path_review.json
+results/sensor_notes.json
 results/delete_log.csv
 results/control_room.log
 results/omnia_snapshot.json

@@ -52,6 +52,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 REVIEW_FILE = ROOT / "results" / "path_review.json"
 DELETE_LOG = ROOT / "results" / "delete_log.csv"
+SENSOR_NOTES_FILE = ROOT / "results" / "sensor_notes.json"
+MAX_NOTE = 2000
 DEFAULT_PORT = 8765
 DELAY_S = 0.3
 VALID_STATUS = ("flag", "ok", "")
@@ -135,6 +137,111 @@ def flagged_ids(review):
     return {pid for pid, e in review.items() if e.get("status") == "flag"}
 
 
+# ── sensor notes ─────────────────────────────────────────────────────────────
+
+def load_sensor_notes(path=SENSOR_NOTES_FILE):
+    """{"<group slug>:<sensor id>": {"note": text, "at": ISO time}} - well-formed entries only."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for key, e in (data.items() if isinstance(data, dict) else []):
+        if isinstance(e, dict) and isinstance(e.get("note"), str) and e["note"].strip():
+            out[str(key)] = {"note": e["note"][:MAX_NOTE], "at": str(e.get("at", ""))}
+    return out
+
+
+def set_sensor_note(group, sensor_id, note, groups, path=SENSOR_NOTES_FILE):
+    """Save (or, when the text is empty, remove) the note of one sensor. Returns the entry or None."""
+    sensor_id = str(sensor_id)
+    if group not in groups or not re.fullmatch(r"[\w.\-]{1,40}", sensor_id):
+        raise ValueError("unknown sensor group or id")
+    if not isinstance(note, str) or len(note) > MAX_NOTE:
+        raise ValueError("a note can be at most %d characters" % MAX_NOTE)
+    notes = load_sensor_notes(path)
+    key = "%s:%s" % (group, sensor_id)
+    if note.strip():
+        notes[key] = {"note": note, "at": datetime.now().isoformat(timespec="seconds")}
+    else:
+        notes.pop(key, None)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(notes, indent=1, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return notes.get(key)
+
+
+def notes_for_group(group, notes):
+    return {k.split(":", 1)[1]: v for k, v in notes.items() if k.startswith(group + ":")}
+
+
+NOTES_JS = """<style>
+.crnote{margin-top:8px;padding-top:8px;border-top:1px dashed #999;min-width:230px}
+.crnote textarea{width:100%;box-sizing:border-box;min-height:62px;resize:vertical;font:13px Arial,sans-serif;padding:5px;border:1px solid #bbb;border-radius:5px}
+.crnote small{color:#777}
+</style>
+<script>
+(function() {
+  var G = '__GROUP__', notes = {}, ring = L.layerGroup().addTo(map);
+  var pts = typeof apiMarkers !== 'undefined' ? apiMarkers : (typeof SENSORS !== 'undefined' ? SENSORS : []);
+  var BADGE = '<div style="background:#f39c12;color:#fff;border:1px solid #fff;border-radius:3px;width:16px;height:16px;font:bold 11px Arial;text-align:center;line-height:15px;box-shadow:0 0 3px rgba(0,0,0,.5)">N</div>';
+  function rings() {
+    ring.clearLayers();
+    var k = 0;
+    pts.forEach(function(s) {
+      if (notes[String(s.id)] && s.lat != null) {
+        k++;
+        L.marker([s.lat, s.lon], {icon: L.divIcon({className: '', html: BADGE, iconSize: [16, 16], iconAnchor: [-5, 21]}), interactive: false, keyboard: false}).addTo(ring);
+      }
+    });
+    if (window.mfAddExtra && k) window.mfAddExtra({id: 'notes', sw: '<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#f39c12;color:#fff;font:bold 10px Arial;text-align:center;line-height:14px;flex-shrink:0">N</span>', text: 'Orange N badge: you wrote a note on this sensor (' + k + ')'});
+  }
+  fetch('/api/sensor-notes?group=' + encodeURIComponent(G)).then(function(r) { return r.json(); })
+    .then(function(j) { notes = j.notes || {}; rings(); }).catch(function() {});
+  function attach(popup) {
+    var el = popup.getElement(), c = el && el.querySelector('.leaflet-popup-content');
+    if (!c || c.querySelector('.crnote')) return;
+    var m = /ID:\\s*([\\w.\\-]+)(?=<|\\s|$)/.exec(c.innerHTML);   // innerHTML: as text the ID runs into the next line ("7Health")
+    if (!m) return;
+    var id = m[1], box = document.createElement('div'), ta = document.createElement('textarea'), st = document.createElement('small'), timer = null;
+    box.className = 'crnote';
+    box.innerHTML = '<b>Note</b> ';
+    ta.value = (notes[id] || {}).note || ''; ta.maxLength = 2000; ta.placeholder = 'Write a note about this sensor...';
+    st.textContent = notes[id] ? 'Saved ' + notes[id].at.replace('T', ' ') : '';
+    box.appendChild(st); box.appendChild(ta);
+    ['keydown', 'keyup', 'keypress', 'mousedown', 'dblclick'].forEach(function(ev) { ta.addEventListener(ev, function(e) { e.stopPropagation(); }); });
+    function save() {
+      clearTimeout(timer); timer = null; st.textContent = 'Saving...';
+      fetch('/api/sensor-notes', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({group: G, id: id, note: ta.value})})
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.error) { st.textContent = 'Not saved: ' + j.error; return; }
+          if (j.entry) { notes[id] = j.entry; st.textContent = 'Saved ' + j.entry.at.replace('T', ' '); } else { delete notes[id]; st.textContent = ''; }
+          rings();
+        }).catch(function() { st.textContent = 'Not saved (no contact with the Control Room)'; });
+    }
+    ta.addEventListener('input', function() { st.textContent = 'Typing...'; clearTimeout(timer); timer = setTimeout(save, 700); });
+    ta.addEventListener('blur', function() { if (timer) save(); });
+    c.appendChild(box);
+  }
+  map.on('popupopen', function(e) {
+    attach(e.popup);
+    var c = e.popup.getElement() && e.popup.getElement().querySelector('.leaflet-popup-content');
+    if (c) { var o = new MutationObserver(function() { attach(e.popup); }); o.observe(c, {childList: true}); e.popup._crObs = o; }
+  });
+  map.on('popupclose', function(e) { if (e.popup._crObs) { e.popup._crObs.disconnect(); e.popup._crObs = null; } });
+})();
+</script>"""
+
+
+def with_notes(page, group):
+    """Add the sensor-note box (popups) and the yellow rings to a generated map page."""
+    js = NOTES_JS.replace("__GROUP__", group)
+    return page.replace("</body>", js + "</body>", 1) if "</body>" in page else page + js
+
+
 # ── delete ───────────────────────────────────────────────────────────────────
 
 def plan_delete(ids, review, known_ids):
@@ -192,7 +299,8 @@ def build_page(allow_delete=True):
     sensors = m.fetch_sensor_coords().get("Bluetooth", {})
     ref_sensors = m.load_reference_sensors()
     kwargs = m.analyse_paths(paths)
-    return m.build_html(paths, sensors, ref_sensors, server_mode=True, allow_delete=allow_delete, **kwargs), paths
+    html = m.build_html(paths, sensors, ref_sensors, server_mode=True, allow_delete=allow_delete, **kwargs)
+    return with_notes(html, "bluetooth"), paths
 
 
 # ── triangulation panel (Bluetooth sensors tab) ──────────────────────────────
@@ -279,6 +387,14 @@ TRIANGULATION_JS = """<style>
   var btn = document.getElementById('triBtn'), panel = document.getElementById('triPanel');
   var nSusp = D.sensors.filter(function(s) { return s.verdict !== 'path_problem'; }).length;
   btn.textContent = 'Triangulation: ' + nSusp + ' suspect' + (nSusp === 1 ? '' : 's');
+  if (window.mfAddExtra) ['faulty_high', 'faulty_likely', 'path_problem'].forEach(function(v) {
+    var k = D.sensors.filter(function(s) { return s.verdict === v; }).length;
+    var why = {faulty_high: 'no path through it works and 2 or more failing paths lead to sensors that are alive',
+               faulty_likely: 'no path through it works, but the proof is thinner',
+               path_problem: 'it works, but some of its paths fail: look at the paths (hidden until ticked in the Triangulation panel)'}[v];
+    window.mfAddExtra({id: 'tri_' + v, sw: '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:3px solid ' + COLORS[v] + ';box-sizing:border-box;flex-shrink:0"></span>',
+                       text: 'Big ' + {faulty_high: 'red', faulty_likely: 'orange', path_problem: 'purple'}[v] + ' ring: ' + D.labels[v] + ' (' + k + '), ' + why});
+  });
   btn.onclick = function() { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; };
   document.getElementById('triSum').innerHTML = D.summary;
   var opts = document.getElementById('triOpts');
@@ -820,7 +936,7 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #stage iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;visibility:hidden}
 #stage iframe.on{visibility:visible}
 </style></head><body>
-<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
 <div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
@@ -873,6 +989,17 @@ document.getElementById('rf').onclick = function() {
   btn.textContent = 'Refreshing...';
   fetch('/api/refresh-data', {method: 'POST'}).then(function() { poll(); }).catch(function() { finish('Could not start the refresh.'); });
 };
+document.getElementById('rl').onclick = function() {
+  var btn = this;
+  if (btn.getAttribute('data-busy')) return;
+  btn.setAttribute('data-busy', '1'); btn.textContent = 'Reloading...';
+  function back(tries) {
+    fetch('/api/review').then(function(r) { if (r.ok) location.reload(); else throw 0; })
+      .catch(function() { if (tries > 0) setTimeout(function() { back(tries - 1); }, 700); else { btn.textContent = 'Reload app'; btn.removeAttribute('data-busy'); alert('The Control Room did not come back. Start it again with control_room.bat.'); } });
+  }
+  fetch('/api/restart', {method: 'POST'}).then(function() { setTimeout(function() { back(50); }, 1500); })
+    .catch(function() { btn.textContent = 'Reload app'; btn.removeAttribute('data-busy'); });
+};
 document.getElementById('qt').onclick = function() {
   if (!confirm('Stop the Control Room? Flags are already saved.')) return;
   fetch('/api/quit', {method: 'POST'}).then(function() {
@@ -920,6 +1047,7 @@ def build_sensor_page(slug, views=None):
         import bt_sensor_suspects
         tri = triangulation_html(bt_sensor_suspects.analyse())
         page = page.replace("</body>", tri + "</body>", 1) if "</body>" in page else page + tri
+    page = with_notes(page, slug)
     page = page.replace("</head>", TALL_MAP_CSS + "</head>", 1)
     return add_nav(page, slug, views)
 
@@ -964,6 +1092,9 @@ class Handler(BaseHTTPRequestHandler):
         path, force = parts.path, "refresh" in parse_qs(parts.query)
         if path == "/api/review":
             return self._send(200, load_review(self.server.review_file))
+        if path == "/api/sensor-notes":
+            group = (parse_qs(parts.query).get("group") or [""])[0]
+            return self._send(200, {"notes": notes_for_group(group, load_sensor_notes(self.server.notes_file))})
         if path == "/api/refresh-data":
             job = dict(self.server.refresh)
             if job.get("started"):
@@ -1021,6 +1152,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         self._drain()
+        if self.path == "/api/sensor-notes" and self._same_origin():
+            try:
+                body = self._body()
+                groups = set(self.server.views) | {"bluetooth"}
+                entry = set_sensor_note(body.get("group"), body.get("id"), body.get("note"), groups, self.server.notes_file)
+            except (ValueError, AttributeError) as exc:
+                return self._send(400, {"error": str(exc)})
+            return self._send(200, {"entry": entry})
         if self.path != "/api/review" or not self._same_origin():
             return self._send(403, {"error": "forbidden"})
         try:
@@ -1143,6 +1282,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ("/api/edit/plan", "/api/edit/apply") and self._same_origin():
             return self._edit(self.path.rsplit("/", 1)[1])
+        if self.path == "/api/restart" and self._same_origin():
+            self._send(200, {"restarting": True})
+            def go():
+                try:
+                    self.server.spawn(restart_argv())
+                except Exception:
+                    return                     # could not start the new copy: keep this one running
+                self.server.shutdown()
+                if self.server.on_quit:
+                    self.server.on_quit()
+            threading.Thread(target=go, daemon=True).start()
+            return
         if self.path == "/api/refresh-data" and self._same_origin():
             return self._send(200, dict(start_refresh(self.server)))
         if self.path == "/api/wiring/fetch" and self._same_origin():
@@ -1282,6 +1433,21 @@ def start_refresh(srv):
     return job
 
 
+def restart_argv(argv=None):
+    """The command that starts a fresh copy of this app with the same options. --restarted makes the new copy wait
+    for the old one to free the port and not open another browser tab."""
+    rest = [a for a in (sys.argv[1:] if argv is None else argv) if a != "--restarted"]
+    return [sys.executable, str(Path(__file__).resolve())] + rest + ["--restarted"]
+
+
+def spawn_detached(argv):
+    flags = 0
+    if os.name == "nt":
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0x8) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+    subprocess.Popen(argv, cwd=str(ROOT), creationflags=flags, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+
+
 def _can_fetch(omnia):
     return bool(omnia.get("nodes") and omnia.get("paths"))
 
@@ -1414,7 +1580,7 @@ class Server(ThreadingHTTPServer):
                 pass  # surfaced when the page is requested
 
 
-def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LOG,
+def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, delete_log=DELETE_LOG,
                 page_builder=None, paths_provider=None, post=None,
                 sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path):
@@ -1423,6 +1589,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LO
     srv.page_cache = {}
     srv.build_lock = threading.Lock()
     srv.review_file = review_file
+    srv.notes_file = notes_file or SENSOR_NOTES_FILE
     srv.delete_log = delete_log
     srv.allow_delete = allow_delete_setting() if allow_delete is None else allow_delete
     srv.delete_url = delete_url_setting() if delete_url is None else delete_url
@@ -1440,6 +1607,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, delete_log=DELETE_LO
     srv.omnia = dict({"nodes": None, "paths": None, "edit": None, "rename": None}, **(omnia_urls_setting() if omnia_urls is None else omnia_urls))
     srv.fetch_omnia = fetch_omnia      # None = the real OMNIA fetch; tests pass a fake
     srv.wiring_inputs = wiring_inputs or (lambda: (srv.paths_provider(), current_sensors()))
+    srv.spawn = spawn_detached          # tests pass a fake
     srv.run_monitor = run_monitor       # tests pass a fake (the real one takes minutes)
     srv.refresh = {"state": "idle"}
     srv.tokens = {}
@@ -1476,10 +1644,19 @@ def main():
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--browser", action="store_true", help="open in your browser instead of the app window")
     ap.add_argument("--no-browser", action="store_true", help="start the server only (implies --browser)")
+    ap.add_argument("--restarted", action="store_true", help="started by the Reload button: wait for the old copy to free the port, open no new browser tab")
     args = ap.parse_args()
     if sys.stdout is None or sys.stderr is None:   # pythonw: no console, so keep a log instead
         sys.stdout = sys.stderr = open(ROOT / "results" / "control_room.log", "a", encoding="utf-8", buffering=1)
-    srv = make_server(args.port)
+    end = time.time() + (25 if args.restarted else 0)
+    while True:
+        try:
+            srv = make_server(args.port)
+            break
+        except OSError:                     # the old copy still holds the port
+            if time.time() >= end:
+                raise
+            time.sleep(0.4)
     url = f"http://127.0.0.1:{args.port}/"
     threading.Thread(target=srv.warm, daemon=True).start()
 
@@ -1493,7 +1670,7 @@ def main():
     if not (args.browser or args.no_browser):
         print("(Install the app window with: pip install pywebview - opening in your browser for now.)")
     print(f"Control Room running at {url}  (Ctrl+C to stop)")
-    if not args.no_browser:
+    if not (args.no_browser or args.restarted):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()

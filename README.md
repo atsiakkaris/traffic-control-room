@@ -59,6 +59,12 @@ it the page opens in your browser instead, with a console that must stay open). 
 window or press **Quit** in the tab bar to stop it; errors, if any, go to
 `results/control_room.log`.
 
+**Reload app (top bar).** Restarts the Control Room with the latest code and the local database, for when files changed or you copied in a newer `history.db`; nothing is fetched from the live feed or OMNIA (that is *Refresh*). The window closes and reopens within a few seconds; flags and notes are already saved.
+
+**Notes on sensors.** Click a sensor on the Traffic Detection, Bluetooth or VMS tab (or a Bluetooth sensor on the Paths
+tab) and write in the *Note* box of its popup; it saves by itself and the sensor gets an orange N badge on the map. Notes are kept in
+`results/sensor_notes.json` on this PC only (git-ignored, so they never reach the public repo). Emptying the box removes the note.
+
 **Which Bluetooth sensor is faulty? (Bluetooth tab → *Triangulation*).** A path only reports data when both
 of its sensors work, so a path that works proves both ends are alive. A sensor with no working path, whose failing
 paths lead to sensors that work elsewhere, is the likely culprit; a sensor with both working and failing paths is

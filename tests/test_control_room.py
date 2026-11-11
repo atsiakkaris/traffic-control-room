@@ -595,3 +595,54 @@ def test_read_env_file_skips_comments(tmp_path):
     f = tmp_path / ".env"
     f.write_text('# note\nBASE_URL=https://x.test/\nSWARCO="swarco/"\n', encoding="utf-8")
     assert cr.read_env_file(f) == {"BASE_URL": "https://x.test/", "SWARCO": "swarco/"}
+
+
+def test_sensor_notes_are_saved_per_group_and_an_empty_note_removes_it(tmp_path):
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv", notes_file=tmp_path / "n.json",
+                         page_builder=lambda: ("", {}), paths_provider=lambda: {}, views={"vms": ("VMS", "x", 100)},
+                         db_file=tmp_path / "none.db", choose_path=None, downloads_dir=tmp_path / "dl")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        assert _req(base + "/api/sensor-notes", "PUT", {"group": "vms", "id": "7", "note": "x"}, {"Origin": "http://evil.example"})[0] == 403
+        code, out = _req(base + "/api/sensor-notes", "PUT", {"group": "vms", "id": "7", "note": "Cabinet door broken"})
+        assert code == 200 and out["entry"]["note"] == "Cabinet door broken"
+        _req(base + "/api/sensor-notes", "PUT", {"group": "bluetooth", "id": "7", "note": "other group, same id"})
+        assert _req(base + "/api/sensor-notes?group=vms")[1]["notes"]["7"]["note"] == "Cabinet door broken"
+        assert _req(base + "/api/sensor-notes?group=bluetooth")[1]["notes"]["7"]["note"] == "other group, same id"
+        assert _req(base + "/api/sensor-notes", "PUT", {"group": "nope", "id": "7", "note": "x"})[0] == 400
+        assert _req(base + "/api/sensor-notes", "PUT", {"group": "vms", "id": "../x", "note": "x"})[0] == 400
+        assert _req(base + "/api/sensor-notes", "PUT", {"group": "vms", "id": "7", "note": "y" * (cr.MAX_NOTE + 1)})[0] == 400
+        assert _req(base + "/api/sensor-notes", "PUT", {"group": "vms", "id": "7", "note": "  "})[1]["entry"] is None
+        assert _req(base + "/api/sensor-notes?group=vms")[1]["notes"] == {}
+    finally:
+        srv.shutdown()
+
+
+def test_sensor_pages_get_the_note_box_and_the_published_map_does_not():
+    assert "crnote" in cr.with_notes("<body></body>", "vms") and "'vms'" in cr.with_notes("<body></body>", "vms")
+    import bt_paths_map as m
+    assert "crnote" not in m.build_html({}, {}, [], server_mode=False)
+
+
+def test_reload_starts_a_fresh_copy_with_the_same_options_and_refuses_other_origins(tmp_path):
+    import time as _t
+    started = []
+    srv, base = _wiring_server(tmp_path)
+    srv.spawn = started.append
+    try:
+        assert _req(base + "/api/restart", "POST", {}, {"Origin": "http://evil.example"})[0] == 403
+        assert started == []
+        assert _req(base + "/api/restart", "POST", {}) == (200, {"restarting": True})
+        for _ in range(100):
+            if started:
+                break
+            _t.sleep(0.05)
+        assert started and started[0][-1] == "--restarted" and started[0][0] == sys.executable
+    finally:
+        srv.shutdown()
+
+
+def test_restart_argv_keeps_the_options_and_does_not_double_the_flag():
+    argv = cr.restart_argv(["--port", "8800", "--browser", "--restarted"])
+    assert argv[2:] == ["--port", "8800", "--browser", "--restarted"]
