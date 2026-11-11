@@ -546,7 +546,7 @@ def sensor_details(page):
     m = re.search(r"const apiMarkers = (\[.*?\]);\n", page, re.S)
     for s in (json.loads(m.group(1)) if m else []):
         out[str(s["id"])] = {k: s.get(k) for k in ("name", "site_code", "active", "health", "project", "accountability",
-                                                  "ref_name", "ref_source", "ref_dist")}
+                                                  "ref_name", "ref_source", "ref_dist", "status", "tone")}
     m = re.search(r"var D = (\{.*?\});\n", page, re.S)
     if m:
         data = json.loads(m.group(1))
@@ -1163,7 +1163,21 @@ def visit_params(query, views):
     return pick("kinds", sv.KINDS), pick("groups", views), per_day, (q.get("done") or ["0"])[0] == "1"
 
 
-def visit_plan(inputs, notes, visits, kinds, groups, per_day, show_done=False):
+def visit_start_setting(env=None, env_file=ROOT / ".env"):
+    """(lat, lon, name) where every site-visit day starts, from CONTROL_ROOM_VISIT_START="name|lat,lon" in the git-ignored
+    .env (the office address is kept out of the public code); None if unset or malformed, then a day starts at its area centre."""
+    val = _setting("CONTROL_ROOM_VISIT_START", env, env_file)
+    if not val or "|" not in val:
+        return None
+    name, _, pos = val.rpartition("|")
+    try:
+        lat, lon = (float(x) for x in pos.split(","))
+    except ValueError:
+        return None
+    return (lat, lon, name.strip()) if name.strip() and 34 <= lat <= 36 and 32 <= lon <= 35 else None
+
+
+def visit_plan(inputs, notes, visits, kinds, groups, per_day, show_done=False, start=None):
     """(items shown, days, number of visited items) for the chosen filters. Notes and findings are read fresh each
     time (they change while you work); visited items leave the plan unless show_done."""
     import site_visits as sv
@@ -1175,7 +1189,7 @@ def visit_plan(inputs, notes, visits, kinds, groups, per_day, show_done=False):
                                           "action": sv.finding_action(e)[1] if (e.get("found") or e.get("right")) else ""}
     n_done = sum(1 for it in items if it["visit"] and it["visit"]["done"])
     shown = [it for it in items if show_done or not (it["visit"] and it["visit"]["done"])]
-    return shown, sv.plan(shown, per_day, kinds, groups), n_done
+    return shown, sv.plan(shown, per_day, kinds, groups, start=start), n_done
 
 
 VISITS_PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Site visits</title>
@@ -1240,7 +1254,7 @@ details.find table{margin:0 0 6px}
   D.days.forEach(function(d) { nStops += d.stops.length; d.stops.forEach(function(s) { nItems += s.items.length; }); });
   document.getElementById('sub').textContent = (D.days.length
     ? nItems + ' things to check at ' + nStops + ' stops over ' + D.days.length + ' day' + (D.days.length === 1 ? '' : 's') +
-      '. Stops are in driving order from the area centre (straight-line distance; the roads may add more).'
+      '. Stops are in driving order from ' + (D.start ? 'every day\'s start, ' + D.start : 'the area centre') + ' (straight-line distance; the roads may add more).'
     : 'Nothing to visit for the ticked options.') +
     (D.n_done ? ' ' + D.n_done + ' already visited ' + (D.sel.done ? '(shown).' : '(left out).') : '');
 
@@ -1286,6 +1300,7 @@ details.find table{margin:0 0 6px}
       }).catch(function(e) { saved.textContent = 'Could not save: ' + e; });
   }
   button('Save field sheet (Excel)', '', function() { save('xlsx'); }, 'One sheet per day, stops in driving order, yellow columns to fill in on site, drop-down lists and navigate links');
+  button('Save for phone (web page)', 'go', function() { save('mobile'); }, 'One file to send to your phone: big Navigate buttons, answer buttons, works without internet. Its results file goes into Import findings');
   button('Save for Google My Maps (KML)', '', function() { save('kml'); }, 'Import into Google My Maps to see the days on your phone; every stop has navigate links');
   button('Print', '', function() { window.print(); }, 'Print the day lists (the map and these buttons are left out; folded days print open)');
   function foldAll(closed) { Array.prototype.forEach.call(document.querySelectorAll('.day'), function(d) { d.classList.toggle('closed', closed); }); }
@@ -1435,10 +1450,10 @@ details.find table{margin:0 0 6px}
 </script></body></html>"""
 
 
-def build_visits_page(items, days, kinds, groups, per_day, views, message="", visits=None, n_done=0, show_done=False):
+def build_visits_page(items, days, kinds, groups, per_day, views, message="", visits=None, n_done=0, show_done=False, start=""):
     import site_visits as sv
     kind_counts, group_counts = sv.counts(items)
-    data = {"days": days, "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
+    data = {"days": days, "start": start, "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
             "group_counts": group_counts, "message": message, "n_done": n_done, "findings": sv.findings_list(visits or {}),
             "sel": {"kinds": kinds, "groups": groups, "per_day": per_day, "done": show_done}}
     return VISITS_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
@@ -1535,9 +1550,11 @@ class Handler(BaseHTTPRequestHandler):
                 kinds, groups, per_day, show_done = visit_params(parts.query, self.server.views)
                 inputs = self.server.visits(force)
                 visits = load_visits(self.server.visits_file)
-                items, days, n_done = visit_plan(inputs, load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done)
+                items, days, n_done = visit_plan(inputs, load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done,
+                                                 self.server.visit_start)
                 msg = "" if inputs else "QA Locations.xlsx was not found in the repo folder, so there is nothing to compare."
-                page = build_visits_page(items, days, kinds, groups, per_day, self.server.views, msg, visits, n_done, show_done)
+                page = build_visits_page(items, days, kinds, groups, per_day, self.server.views, msg, visits, n_done, show_done,
+                                         self.server.visit_start[2] if self.server.visit_start else "")
             except Exception as exc:
                 return self._send(500, f"Could not build the page: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
@@ -1681,8 +1698,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._body()
             fmt = body.get("format")
-            if fmt not in ("xlsx", "kml", "corrections"):
-                raise ValueError("format must be xlsx, kml or corrections")
+            if fmt not in ("xlsx", "kml", "mobile", "corrections"):
+                raise ValueError("format must be xlsx, kml, mobile or corrections")
             visits = load_visits(self.server.visits_file)
             if fmt == "corrections":
                 days = sv.findings_list(visits)
@@ -1693,12 +1710,13 @@ class Handler(BaseHTTPRequestHandler):
                                                               ",".join(map(str, body.get("groups") or [])), body.get("per_day"),
                                                               1 if body.get("done") else 0)
                 kinds, groups, per_day, show_done = visit_params(q, self.server.views)
-                _items, days, _n = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done)
+                _items, days, _n = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done,
+                                              self.server.visit_start)
                 if not days:
                     return self._send(400, {"error": "nothing to visit for the ticked options"})
             folder = Path(self.server.downloads_dir or DOWNLOADS)
-            ext = "csv" if fmt == "corrections" else fmt
-            name = f"{'site_visit_corrections' if fmt == 'corrections' else 'site_visits'}_{datetime.now():%Y%m%d_%H%M%S}.{ext}"
+            ext = {"corrections": "csv", "mobile": "html"}.get(fmt, fmt)
+            name = f"{'site_visit_corrections' if fmt == 'corrections' else 'site_visits_phone' if fmt == 'mobile' else 'site_visits'}_{datetime.now():%Y%m%d_%H%M%S}.{ext}"
             dest, fallback = None, False
             if self.server.choose_path:
                 try:
@@ -1718,6 +1736,8 @@ class Handler(BaseHTTPRequestHandler):
                 out.write_bytes(buf.getvalue().encode("utf-8-sig"))
             elif fmt == "xlsx":
                 sv.write_field_sheet(days, out)
+            elif fmt == "mobile":
+                out.write_text(sv.mobile_html(days), encoding="utf-8")
             else:
                 out.write_text(sv.to_kml(days), encoding="utf-8")
         except (ValueError, AttributeError, TypeError) as exc:
@@ -2018,7 +2038,7 @@ _SAVE_DIALOG = r"""
 import os, sys, tkinter as tk
 from tkinter import filedialog
 ext = os.path.splitext(sys.argv[2])[1] or ".csv"
-kind = {".kml": "KML files (Google My Maps)", ".xlsx": "Excel files"}.get(ext.lower(), "CSV files")
+kind = {".kml": "KML files (Google My Maps)", ".xlsx": "Excel files", ".html": "Web page for the phone"}.get(ext.lower(), "CSV files")
 root = tk.Tk()
 root.withdraw()
 root.attributes("-topmost", True)
@@ -2163,7 +2183,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
                 page_builder=None, paths_provider=None, post=None,
                 sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path,
-                visit_inputs=None, visits_file=None, choose_open=choose_open_path):
+                visit_inputs=None, visits_file=None, choose_open=choose_open_path, visit_start="env"):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
@@ -2196,6 +2216,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.on_quit = None   # set by the app-window launcher to close the window
     srv.visit_inputs = visit_inputs or (lambda: globals()["visit_inputs"](srv.views))   # tests pass a fake
     srv.visits_file = visits_file or SITE_VISITS_FILE
+    srv.visit_start = visit_start_setting() if visit_start == "env" else visit_start      # (lat, lon, name) or None
     srv.visits_lock = threading.Lock()
     srv.visit_import = {}
     srv.choose_open = choose_open                # the Open dialog; tests pass a fake or None

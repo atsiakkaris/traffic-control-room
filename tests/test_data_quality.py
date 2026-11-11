@@ -344,6 +344,22 @@ def test_bluetooth_dots_carry_the_triangulation_verdict_only_when_given(tmp_path
     assert "const HAS_VERDICTS = false;" in html
 
 
+def test_popups_lead_with_the_status_sentence_and_keep_the_id_line(tmp_path):
+    import json
+    import re
+    import qa
+    api = [{"id": "7", "name": "Loop 7", "lat": 35.0, "lon": 33.0, "active": True, "health_pct": 62.0, "total_runs": 40,
+            "last_seen": None, "first_seen": None, "state": "Down 12d", "down_days": 12, "last_status": "malfunctioning",
+            "fault_since": "2026-10-30", "never_worked": False, "recent_good": 0, "recent_total": 20, "is_fault": True,
+            "tier": "Unstable", "project": "Contract A", "accountability": "supported", "commissioning": "active"}]
+    matches = [{"type": "api_only", "ref": None, "api": api[0]}]
+    html = qa.generate_html("Traffic Detection", api, [], matches, tmp_path / "t.html").read_text(encoding="utf-8")
+    m = json.loads(re.search(r"const apiMarkers = (\[.*?\]);\n", html, re.S).group(1))[0]
+    assert m["tone"] == "bad" and m["status"].startswith("Down for 12 days") and m["state"] == "Down 12d" and m["tier"] == "Unstable"
+    assert "Uptime (lifetime)" in html and "Now: <b>" in html and "ID: ${s.id}" in html
+    assert html.index("${banner}") < html.index("API sensor: ") if "${banner}" in html else html.index("banner +") < html.index("API sensor: ")
+
+
 def test_qa_ref_only_status_is_the_4th_column(tmp_path):
     import re
     import qa

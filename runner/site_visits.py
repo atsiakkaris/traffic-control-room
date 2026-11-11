@@ -228,26 +228,31 @@ def order_route(stops, start):
     return route
 
 
-def plan(items, per_day=PER_DAY, kinds=None, groups=None, merge_m=MERGE_M, areas=AREAS):
-    """[{area, day, stops, km}] - one entry per day, areas in AREAS order, stops numbered in driving order."""
+def plan(items, per_day=PER_DAY, kinds=None, groups=None, merge_m=MERGE_M, areas=AREAS, start=None):
+    """[{area, day, stops, km, links, start}] - one entry per day, areas in AREAS order, stops numbered in driving order.
+
+    start = (lat, lon, name): every day begins there (the office), so each day's route is ordered from it and the leg
+    from it is counted. Without it a day begins at the centre of its area. Stops are still grouped by area; what is left
+    of an area after a day is ordered again from the start for the next day."""
     per_day = max(1, int(per_day))
     chosen = [it for it in items
               if (kinds is None or set(it["kinds"]) & set(kinds)) and (groups is None or it["slug"] in groups)]
     stops = group_stops(chosen, merge_m)
     days, n = [], 0
     for area in areas:
-        mine = [s for s in stops if s["area"] == area]
-        if not mine:
-            continue
-        route = order_route(mine, areas[area])
-        for k in range(0, len(route), per_day):
+        left = [s for s in stops if s["area"] == area]
+        origin = (start[0], start[1]) if start else areas[area]
+        while left:
+            route = order_route(left, origin)
+            part, left = route[:per_day], route[per_day:]
             n += 1
-            part = route[k:k + per_day]
             for i, s in enumerate(part, 1):
                 s["code"] = "D%d-%02d" % (n, i)
-            days.append({"day": n, "area": area, "stops": part,
-                         "km": round(route_length((part[0]["lat"], part[0]["lon"]), part) / 1000, 1),
-                         "links": route_urls([(s["lat"], s["lon"]) for s in part])})
+            pts = [(s["lat"], s["lon"]) for s in part]
+            days.append({"day": n, "area": area, "stops": part, "start": start[2] if start else None,
+                         "origin": list(origin) if start else None,
+                         "km": round(route_length(origin if start else pts[0], part) / 1000, 1),
+                         "links": route_urls(([origin] if start else []) + pts)})
     return days
 
 
@@ -340,7 +345,8 @@ def write_field_sheet(days, path):
     for day in days:
         ws = wb.create_sheet(_sheet_name(day))
         nrows = sum(len(st["items"]) for st in day["stops"])
-        ws["A1"] = "Day %d - %s: %d stops, about %s km in straight lines" % (day["day"], day["area"], len(day["stops"]), day["km"])
+        ws["A1"] = "Day %d - %s: %d stops, about %s km in straight lines%s" % (
+            day["day"], day["area"], len(day["stops"]), day["km"], (", starting at " + day["start"]) if day.get("start") else "")
         ws["A1"].font = Font(bold=True, size=14)
         ws["A2"] = "Fill in the yellow columns on site. Do not delete the hidden columns."
         ws["A2"].font = Font(italic=True, color="555555")
@@ -398,6 +404,211 @@ def write_field_sheet(days, path):
         ws.print_title_rows = "3:3"
         ws.print_options.gridLines = False
     wb.save(path)
+
+
+# ── 4b. the phone page ───────────────────────────────────────────────────────
+
+MOBILE_HEAD = ["Key", "Group", "ID", "Name", "Kinds", "Found?", "Right position", "GPS lat", "GPS lon", "Label on site",
+               "Remarks", "API lat", "API lon", "Sheet lat", "Sheet lon", "Day", "Stop"]
+
+MOBILE_PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Site visits</title>
+<style>
+:root{--bg:#f2f4f7;--card:#fff;--ink:#1d2733;--mute:#5d6b7a;--line:#d5dbe3;--blue:#1f6fb2;--green:#1e7a3c;--gbg:#dff3e5;--wbg:#fdebd0;--rbg:#f9d6d5;--yel:#fff4c2}
+@media (prefers-color-scheme:dark){:root{--bg:#10161d;--card:#1a232d;--ink:#e6ebf0;--mute:#9aa8b6;--line:#2f3b48;--blue:#5aa9e6;--green:#58c77a;--gbg:#173824;--wbg:#4a3513;--rbg:#4a1f1d;--yel:#3d3510}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,Segoe UI,Roboto,Arial,sans-serif;padding-bottom:90px}
+header{position:sticky;top:0;z-index:5;background:#1f4e79;color:#fff;padding:10px 14px calc(10px)}
+header h1{margin:0;font-size:17px}header .sub{font-size:12px;opacity:.85}
+select{width:100%;margin-top:8px;font-size:16px;padding:10px;border-radius:8px;border:0}
+#next{background:var(--card);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;gap:10px;align-items:center}
+#next .t{flex:1;min-width:0}#next small{color:var(--mute)}
+a.btn,button.btn{display:inline-block;text-align:center;text-decoration:none;border:0;border-radius:10px;padding:12px 16px;min-height:46px;font-size:16px;font-weight:600;background:var(--blue);color:#fff;cursor:pointer}
+a.btn.alt,button.btn.alt{background:transparent;color:var(--blue);border:2px solid var(--blue)}
+.links{padding:8px 14px;display:flex;flex-wrap:wrap;gap:8px}
+.links .btn{padding:8px 12px;min-height:40px;font-size:14px}
+.stop{margin:12px;background:var(--card);border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.15);overflow:hidden}
+.stop.done{opacity:.72}
+.sh{display:flex;gap:10px;align-items:center;padding:12px 14px;background:rgba(31,78,121,.08);cursor:pointer}
+.stop.done .sh{background:var(--gbg)}
+.sh .c{font-weight:700;white-space:nowrap}.sh .n{flex:1;min-width:0}.sh small{color:var(--mute);display:block}
+.chev{font-size:18px;color:var(--mute)}
+.body{padding:4px 14px 14px}.stop.closed .body{display:none}
+.item{border-top:1px dashed var(--line);padding:12px 0}.item:first-child{border-top:0}
+.k{display:inline-block;background:rgba(31,78,121,.12);border-radius:6px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px}
+.chk{margin:6px 0;color:var(--ink)}.note{color:#a35a00;margin:4px 0}
+.nav{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.lbl{font-weight:600;margin:10px 0 4px;font-size:14px;color:var(--mute)}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{flex:1;min-width:84px;min-height:46px;border:2px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font-size:15px}
+.seg button.on{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:700}
+.seg button.on.no{background:#b03a2e;border-color:#b03a2e}
+input[type=text],textarea{width:100%;font-size:16px;font-family:inherit;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--yel);color:var(--ink)}
+textarea{min-height:64px}.row{display:flex;gap:8px}.row input{flex:1}
+.res{font-size:13px;color:var(--green);margin-top:4px}
+footer{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px}
+footer .btn{flex:1}
+#out{display:none;margin:12px;width:calc(100% - 24px);min-height:140px;font:12px monospace}
+.empty{padding:30px 16px;color:var(--mute)}
+</style></head><body>
+<header><h1>Site visits</h1><div class="sub" id="sub"></div><select id="day" aria-label="Day"></select></header>
+<div id="next"></div>
+<div class="links" id="links"></div>
+<main id="main"></main>
+<textarea id="out" readonly></textarea>
+<footer><button class="btn" id="share">Share / save results</button><button class="btn alt" id="copy">Copy</button></footer>
+<script>
+(function() {
+  var D = __DATA__;
+  var KEY = 'sv_' + D.id, DAYKEY = 'svday_' + D.id;
+  var st = {}, warned = false, cur = 0;
+  try { st = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; cur = +(localStorage.getItem(DAYKEY) || 0) || 0; } catch (e) { st = {}; }
+  if (cur >= D.days.length) cur = 0;
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(st)); localStorage.setItem(DAYKEY, String(cur)); }
+    catch (e) { if (!warned) { warned = true; alert('This browser cannot keep your answers between visits. Use "Share / save results" before you close the page.'); } }
+  }
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function ans(k) { return st[k] || (st[k] = {}); }
+  function isDone(it) { var a = st[it.key]; return !!a && (a.found === 'Yes' || a.found === 'No'); }
+  function pt(it, label) { for (var i = 0; i < it.points.length; i++) if (it.points[i].label === label) return it.points[i]; return null; }
+  function nav(p) { return 'https://www.google.com/maps/dir/?api=1&destination=' + p.lat.toFixed(6) + ',' + p.lon.toFixed(6) + '&travelmode=driving'; }
+  function stopDone(s) { return s.items.every(isDone); }
+
+  document.getElementById('sub').textContent = 'Plan made ' + D.generated + (D.days[0] && D.days[0].start ? ' · every day starts at ' + D.days[0].start : '');
+  var sel = document.getElementById('day');
+  D.days.forEach(function(d, i) {
+    var o = document.createElement('option'); o.value = i;
+    o.textContent = 'Day ' + d.day + ' – ' + d.area + ' (' + d.stops.length + ' stops, ~' + d.km + ' km)';
+    sel.appendChild(o);
+  });
+  sel.value = cur;
+  sel.onchange = function() { cur = +sel.value; save(); render(); window.scrollTo(0, 0); };
+
+  function render() {
+    var y = window.scrollY, d = D.days[cur], main = document.getElementById('main');
+    main.innerHTML = '';
+    if (!d) { main.innerHTML = '<div class="empty">Nothing to visit.</div>'; return; }
+    var total = 0, done = 0, next = null;
+    d.stops.forEach(function(s) { s.items.forEach(function(it) { total++; if (isDone(it)) done++; }); if (!next && !stopDone(s)) next = s; });
+    var nx = document.getElementById('next');
+    nx.innerHTML = next
+      ? '<div class="t"><small>' + done + ' of ' + total + ' done · next stop</small><br><b>' + esc(next.code) + '</b> ' + esc(next.items[0].name || next.items[0].ref_name) + '</div><a class="btn" href="' + esc(nav(next)) + '">Navigate</a>'
+      : '<div class="t"><b>All ' + total + ' done.</b><br><small>Press "Share / save results" below.</small></div>';
+    document.getElementById('links').innerHTML = d.links.map(function(u, i) {
+      return '<a class="btn alt" href="' + esc(u) + '">Whole day in Maps' + (d.links.length > 1 ? ' (' + (i + 1) + '/' + d.links.length + ')' : '') + '</a>';
+    }).join('');
+    d.stops.forEach(function(s) {
+      var sec = document.createElement('section'), fin = stopDone(s);
+      sec.className = 'stop' + (fin ? ' done closed' : '');
+      var h = '<div class="sh" data-toggle="1"><span class="c">' + esc(s.code) + '</span><span class="n"><b>' + esc(s.items[0].name || s.items[0].ref_name) + '</b>' +
+              '<small>' + (fin ? '✓ done' : s.items.length + ' to check') + '</small></span><span class="chev">' + (fin ? '▸' : '▾') + '</span></div><div class="body">';
+      s.items.forEach(function(it) {
+        var a = st[it.key] || {};
+        h += '<div class="item"><b>' + esc(it.group) + (it.id ? ' ' + esc(it.id) : '') + (it.site_code ? ' (site ' + esc(it.site_code) + ')' : '') + '</b>';
+        if (it.project) h += ' <span class="k">' + esc(it.project) + '</span>';
+        h += '<br>' + it.kinds.map(function(k) { return '<span class="k">' + esc(D.kinds[k] || k) + '</span>'; }).join('');
+        h += '<div class="chk">' + it.checks.map(esc).join('<br>') + '</div>';
+        if (it.note) h += '<div class="note">Your note: ' + esc(it.note) + '</div>';
+        h += '<div class="nav">' + it.points.map(function(p, i) { return '<a class="btn' + (i ? ' alt' : '') + '" href="' + esc(nav(p)) + '">' + (it.points.length > 1 ? 'Go to ' + esc(p.label.toLowerCase()) + ' position' : 'Navigate') + '</a>'; }).join('') + '</div>';
+        h += '<div class="lbl">Found?</div><div class="seg">' + ['Yes', 'No', 'Not sure'].map(function(v) {
+          return '<button data-k="' + esc(it.key) + '" data-f="found" data-v="' + v + '" class="' + (a.found === v ? 'on' : '') + (v === 'No' ? ' no' : '') + '">' + v + '</button>'; }).join('') + '</div>';
+        if (it.points.length > 1) h += '<div class="lbl">Which position is right?</div><div class="seg">' + ['API position', 'Spreadsheet position', 'Neither'].map(function(v) {
+          return '<button data-k="' + esc(it.key) + '" data-f="right" data-v="' + v + '" class="' + (a.right === v ? 'on' : '') + '">' + v + '</button>'; }).join('') + '</div>';
+        h += '<div class="lbl">GPS where the sensor really is (only if neither position is right)</div><div class="row"><input type="text" inputmode="decimal" placeholder="35.123456, 33.123456" data-k="' + esc(it.key) + '" data-f="gps" value="' + esc(a.gps || '') + '">' +
+             '<button class="btn alt" data-gps="' + esc(it.key) + '">Use my location</button></div><div class="res" id="r-' + esc(it.key) + '"></div>';
+        h += '<div class="lbl">Label on site</div><input type="text" data-k="' + esc(it.key) + '" data-f="label" value="' + esc(a.label || '') + '">';
+        h += '<div class="lbl">Remarks</div><textarea data-k="' + esc(it.key) + '" data-f="remarks">' + esc(a.remarks || '') + '</textarea></div>';
+      });
+      sec.innerHTML = h + '</div>';
+      main.appendChild(sec);
+    });
+    window.scrollTo(0, y);
+  }
+
+  document.getElementById('main').addEventListener('click', function(e) {
+    var b = e.target.closest('button[data-f]');
+    if (b) { var a = ans(b.getAttribute('data-k')), f = b.getAttribute('data-f'), v = b.getAttribute('data-v'); a[f] = a[f] === v ? '' : v; save(); render(); return; }
+    var g = e.target.closest('button[data-gps]');
+    if (g) {
+      var key = g.getAttribute('data-gps'), box = document.getElementById('r-' + key);
+      if (!navigator.geolocation) { box.textContent = 'This browser has no location. Copy the coordinates from your map app instead.'; return; }
+      box.textContent = 'Getting your location...';
+      navigator.geolocation.getCurrentPosition(function(p) {
+        var txt = p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6);
+        ans(key).gps = txt; save();
+        var inp = document.querySelector('input[data-f="gps"][data-k="' + key.replace(/"/g, '\\"') + '"]'); if (inp) inp.value = txt;
+        box.textContent = 'Saved (accuracy about ' + Math.round(p.coords.accuracy) + ' m).';
+      }, function() { box.textContent = 'No location (not allowed, or this page is opened in a way that blocks it). Copy the coordinates from your map app instead.'; },
+      {enableHighAccuracy: true, timeout: 20000, maximumAge: 0});
+      return;
+    }
+    var t = e.target.closest('[data-toggle]');
+    if (t) t.parentNode.classList.toggle('closed');
+  });
+  document.getElementById('main').addEventListener('input', function(e) {
+    var el = e.target, k = el.getAttribute && el.getAttribute('data-k');
+    if (k && el.getAttribute('data-f')) { ans(k)[el.getAttribute('data-f')] = el.value; save(); }
+  });
+
+  function csvCell(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
+  function rows() {
+    var out = [D.head];
+    D.days.forEach(function(d) { d.stops.forEach(function(s) { s.items.forEach(function(it) {
+      var a = st[it.key];
+      if (!a || !(a.found || a.right || a.gps || a.label || a.remarks)) return;
+      var api = pt(it, 'API'), sh = pt(it, 'Spreadsheet');
+      // GPS goes into "GPS lat" as typed: the import splits 'lat, lon' by itself
+      out.push([it.key, it.group, it.id || '', it.name || it.ref_name || '', it.kinds.join(','), a.found || '', a.right || '', a.gps || '', '', a.label || '', a.remarks || '',
+                api ? api.lat : '', api ? api.lon : '', sh ? sh.lat : '', sh ? sh.lon : '', d.day, s.code]);
+    }); }); });
+    return out;
+  }
+  function csv() { return '﻿' + rows().map(function(r) { return r.map(csvCell).join(','); }).join('\r\n'); }
+  function stamp() { var n = new Date(), p = function(x) { return (x < 10 ? '0' : '') + x; }; return n.getFullYear() + p(n.getMonth() + 1) + p(n.getDate()) + '_' + p(n.getHours()) + p(n.getMinutes()); }
+  function showText(text) { var o = document.getElementById('out'); o.style.display = 'block'; o.value = text; o.focus(); o.select(); o.scrollIntoView(); }
+  document.getElementById('share').onclick = function() {
+    if (rows().length < 2) { alert('No answers yet.'); return; }
+    var name = 'site_visit_findings_' + stamp() + '.csv', text = csv(), file = null;
+    try { file = new File([text], name, {type: 'text/csv'}); } catch (e) {}
+    if (file && navigator.canShare && navigator.canShare({files: [file]})) {
+      navigator.share({files: [file], title: name}).catch(function() {});
+      return;
+    }
+    try {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], {type: 'text/csv'})); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) { showText(text); }
+  };
+  document.getElementById('copy').onclick = function() {
+    if (rows().length < 2) { alert('No answers yet.'); return; }
+    var text = csv();
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function() { alert('Copied. Paste it into an e-mail or note to yourself.'); }, function() { showText(text); });
+    else showText(text);
+  };
+  render();
+})();
+</script></body></html>"""
+
+
+def mobile_html(days, generated=None):
+    """The phone page: one self-contained HTML file (no internet needed once it is on the phone) with the days as big,
+    tappable cards: Navigate buttons (Google Maps), Found? / Right position buttons, GPS, label, remarks. Answers are kept in
+    the phone's browser; "Share / save results" makes a CSV with the same columns as the field sheet, which the import reads."""
+    import hashlib
+    import json
+    keys = sorted(it["key"] for d in days for s in d["stops"] for it in s["items"])
+    data = {
+        "id": hashlib.sha1("\n".join(keys).encode("utf-8")).hexdigest()[:10],      # same stops = same saved answers
+        "generated": (generated or datetime.now()).strftime("%d/%m/%Y %H:%M"), "kinds": KINDS, "head": MOBILE_HEAD,
+        "days": [{"day": d["day"], "area": d["area"], "km": d["km"], "start": d.get("start"), "links": d["links"],
+                  "stops": [{"code": s["code"], "lat": s["lat"], "lon": s["lon"],
+                             "items": [{k: it[k] for k in ("key", "group", "id", "site_code", "name", "ref_name", "kinds", "checks",
+                                                           "note", "project", "points", "dist")} for it in s["items"]]}
+                            for s in d["stops"]]} for d in days]}
+    return MOBILE_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/").replace("<!--", "<\\!--"))
 
 
 # ── 5. findings: read the filled-in sheet back, say what each finding means ───
@@ -491,7 +702,11 @@ def read_findings(path):
         lat, lon, bad = _gps(d.get(H_LAT), d.get(H_LON))
         if bad:
             warnings.append("%s: %s: GPS ignored" % (where, bad))
-        num = lambda a, b: [float(d[a]), float(d[b])] if isinstance(d.get(a), (int, float)) and isinstance(d.get(b), (int, float)) else None
+        def num(a, b):          # Excel gives numbers, a CSV (from the phone page) gives text
+            try:
+                return [float(str(d[a]).strip()), float(str(d[b]).strip())]
+            except (KeyError, ValueError):
+                return None
         rows.append({"key": str(d[H_KEY]).strip(), "where": where, "group": str(d.get("Group") or ""), "id": str(d.get("ID") or ""),
                      "name": str(d.get("Name") or ""), "kinds": [k for k in str(d.get(H_KINDS) or "").split(",") if k in KINDS],
                      "found": found, "right": right, "lat": lat, "lon": lon,
@@ -648,8 +863,12 @@ def to_kml(days, title="Site visits"):
                         out.append("<Placemark><name>%s (%s position)</name><styleUrl>#other</styleUrl>"
                                    "<Point><coordinates>%.6f,%.6f,0</coordinates></Point></Placemark>"
                                    % (escape(st["code"]), escape(p["label"].lower()), p["lon"], p["lat"]))
-        if len(day["stops"]) > 1:
-            coords = " ".join("%.6f,%.6f,0" % (s["lon"], s["lat"]) for s in day["stops"])
+        if day.get("origin"):
+            out.append("<Placemark><name>Start: %s</name><styleUrl>%s</styleUrl><Point><coordinates>%.6f,%.6f,0</coordinates></Point></Placemark>"
+                       % (escape(day.get("start") or "start"), sid, day["origin"][1], day["origin"][0]))
+        if len(day["stops"]) > 1 or day.get("origin"):
+            coords = " ".join("%.6f,%.6f,0" % (lon, lat) for lat, lon in
+                              ([day["origin"]] if day.get("origin") else []) + [(s["lat"], s["lon"]) for s in day["stops"]])
             out.append("<Placemark><name>Day %d route (straight lines, in visiting order)</name><styleUrl>%s</styleUrl>"
                        "<LineString><coordinates>%s</coordinates></LineString></Placemark>" % (day["day"], sid, coords))
         out.append("</Folder>")

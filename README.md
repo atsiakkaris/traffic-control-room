@@ -61,6 +61,15 @@ window or press **Quit** in the tab bar to stop it; errors, if any, go to
 
 **Reading the sensor maps.** Above each map (Traffic Detection, Bluetooth, VMS) a summary line counts the dots - under 90% uptime, contract ended, retired or no history - and its buttons show only that group. Under it, the key lists every dot style with its count; click a style to show only that style (click it again to show all, ctrl+click adds or removes one). A dot's colour is lifetime uptime, except on the Bluetooth tab: Bluetooth sensors have no uptime of their own, so there the colour is the triangulation verdict (green working, orange works but some paths fail, red faulty, dashed grey not enough evidence). The key also explains the marks on top of the dots (gold halo = confirmed match, number = sensors at one spot, orange N = your note, big rings on Bluetooth = triangulation verdicts); a short distance line is marked by a dashed ring when you filter to it.
 
+**Popups lead with a sentence.** Clicking a sensor on any sensor tab (and a Bluetooth sensor on the Paths tab) opens a popup whose
+first line is one plain sentence in a coloured band: green *Working now*, orange *Working now, but it failed 6 of its last 20
+runs* or *Failing in the latest check*, red *Down for 12 days (since 30 Oct): Speed = -1 (sensor fault)* or *Never worked since it
+was first seen*, grey *Retired*, *Awaiting power*, *Decommissioned* or *No monitor history yet*. Lifetime uptime and the current
+state now sit side by side (*Uptime (lifetime): 62% (Unstable) · Now: Down 12d*), because they answer different questions. A
+sensor whose contract is active and that failed 80% of its last 20 runs also gets *A persistent fault for <project>*; one with
+no contract on record says so; one whose contract ended says a failure is expected. Bluetooth sensors get their triangulation
+verdict as the sentence. Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md#9-the-popup-sentence).
+
 **Reload app (top bar).** Restarts the Control Room with the latest code and the local database, for when files changed or you copied in a newer `history.db`; nothing is fetched from the live feed or OMNIA (that is *Refresh*). The window closes and reopens within a few seconds; flags and notes are already saved.
 
 **Notes on sensors.** Click a sensor on the Traffic Detection, Bluetooth or VMS tab (or a Bluetooth sensor on the Paths
@@ -78,7 +87,18 @@ print-ready pages; *Save for Google My Maps (KML)* can be imported into Google M
 prints the day lists. Click a day's heading to fold or unfold it (*Fold all days* / *Unfold all days* do all at once; folded days still print open). Each day also has *Open in Google Maps* links that drive through its stops. The order uses straight-line
 distance and nothing is sent anywhere until you open a Google link.
 
-**After the visit.** *Import findings...* reads the filled-in Excel file back (a preview first; nothing changes until you press
+**Where each day starts.** Every day begins at your office, so each day's stops are ordered from it, the drive from it is counted
+and the Google Maps links start there. It is set in the git-ignored `.env` (the repo is public, so the address is not in the
+code): `CONTROL_ROOM_VISIT_START=Name shown|lat,lon`. Without it a day starts at the centre of its area. Coming back is not counted.
+
+**On your phone.** *Save for phone (web page)* writes one self-contained HTML file with the days as big cards: a *Navigate* button
+per position (opens Google Maps), *Found?* and *Which position is right?* buttons, a GPS box with *Use my location*, label and
+remarks, a "next stop" bar and a done counter. Send the file to your phone (e-mail, cloud drive, USB) and open it in the phone's
+browser; it needs no internet except for Google Maps itself. Answers are kept in the phone's browser (the same stops keep the same
+answers if you save the plan again). *Share / save results* makes a CSV with the same columns as the field sheet; send it back to
+this PC and use *Import findings...*. The Control Room only listens on this PC, so the page is a file, not a link.
+
+**After the visit.** *Import findings...* reads the filled-in Excel file (or the phone's results CSV) back (a preview first; nothing changes until you press
 Apply). Items with a Yes or No answer count as *visited* and leave the plan (*Show visited* brings them back), and every finding
 is translated into what you have to do: correct the spreadsheet, ask SWARCO to correct the API position, add a missing row,
 installed but not reported by the API, not found on site, and so on. These appear in *What the visits found* and can be saved
@@ -277,6 +297,7 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   ├── labels.py               ← Shared human-readable sensor names (report + digest)
 │   ├── qa.py                   ← Reference-sheet ↔ API coordinate matching (ownership + commissioning)
 │   ├── update_projects.py      ← Refresh sensor→project + commissioning in the DB after editing the workbook
+│   ├── sensor_status.py        ← The one-sentence status that leads every sensor popup (current state, fault age, lifetime uptime)
 │   ├── site_visits.py          ← Site visits tab: what to check on site, stops, driving order, days, CSV/KML exports
 │   ├── digest.py               ← Weekly digest email builder and sender
 │   └── bt_paths_map.py         ← Standalone BT path review map (duplicate/overlap detection, flag/note, CSV export)

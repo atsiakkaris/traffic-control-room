@@ -97,6 +97,69 @@ def test_plan_cuts_days_filters_and_numbers_stops():
     assert sv.plan(items, groups=["vms"]) == []
 
 
+OFFICE = (35.150000, 33.350000, "Office, Strovolos")
+
+
+def test_every_day_can_start_at_the_office():
+    matches = [{"type": "api_only", "api": api(i, 34.70 + i / 200, 33.03), "ref": None} for i in range(7)]     # Limassol
+    matches += [{"type": "api_only", "api": api(50 + i, 35.17 + i / 100, 33.36), "ref": None} for i in range(2)]    # Nicosia
+    items = sv.collect_items([group(matches, [])])
+    days = sv.plan(items, per_day=4, start=OFFICE)
+    assert [d["area"] for d in days] == ["Nicosia", "Limassol", "Limassol"]
+    assert all(d["start"] == "Office, Strovolos" and d["origin"] == [OFFICE[0], OFFICE[1]] for d in days)
+    # the first stop of each day is the one nearest the office, and the drive from the office is counted
+    lim = days[1]
+    nearest = min(lim["stops"], key=lambda s: sv.haversine_m(OFFICE[0], OFFICE[1], s["lat"], s["lon"]))
+    assert lim["stops"][0] is nearest
+    assert lim["km"] > sv.route_length((lim["stops"][0]["lat"], lim["stops"][0]["lon"]), lim["stops"]) / 1000 + 50
+    assert "origin=35.150000,33.350000" in lim["links"][0]
+    # what is left of an area is ordered again from the office for the next day
+    assert days[2]["stops"][0] is min(days[2]["stops"], key=lambda s: sv.haversine_m(OFFICE[0], OFFICE[1], s["lat"], s["lon"]))
+    # without a start a day begins at its area centre, as before
+    assert all(d["start"] is None and d["origin"] is None for d in sv.plan(items, per_day=4))
+
+
+def test_start_is_shown_in_the_exports(tmp_path):
+    from openpyxl import load_workbook
+    a = api(1, 34.70, 33.03)
+    days = sv.plan(sv.collect_items([group([{"type": "api_only", "api": a, "ref": None}], [a])]), start=OFFICE)
+    assert "Start: Office, Strovolos" in sv.to_kml(days)
+    ET.fromstring(sv.to_kml(days))
+    sv.write_field_sheet(days, tmp_path / "s.xlsx")
+    ws = load_workbook(tmp_path / "s.xlsx")[sv._sheet_name(days[0])]
+    assert "starting at Office, Strovolos" in ws["A1"].value
+
+
+def test_phone_page_is_self_contained_and_its_script_is_valid(tmp_path):
+    import shutil
+    import subprocess
+    days, items = _days()
+    page = sv.mobile_html(days)
+    assert 'name="viewport"' in page and "Share / save results" in page and "navigator.geolocation" in page
+    assert "<script src" not in page and "<link" not in page and "http://" not in page.replace("http://www.w3.org", "")   # works offline
+    assert items[0]["key"] in page and "google.com/maps/dir" in page
+    assert sv.mobile_html(days) .split('"id": "')[1][:10] == page.split('"id": "')[1][:10]            # same stops, same saved answers
+    node = shutil.which("node")
+    if node:
+        js = page.split("<script>", 1)[1].rsplit("</script>", 1)[0]
+        (tmp_path / "m.js").write_text(js, encoding="utf-8")
+        r = subprocess.run([node, "--check", str(tmp_path / "m.js")], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+
+def test_what_the_phone_exports_is_what_the_import_reads(tmp_path):
+    """The phone page writes MOBILE_HEAD columns; the import must understand a CSV in exactly that shape."""
+    f = tmp_path / "phone.csv"
+    head = sv.MOBILE_HEAD
+    row = ["td|api|1", "Traffic Detection", "1", "A", "far_apart", "Yes", "API position", "35.123456, 33.654321", "", "L-1", "pole",
+           35.0, 33.0, 35.003, 33.0, 1, "D1-01"]
+    f.write_text("﻿" + ",".join('"%s"' % c for c in head) + "\r\n" + ",".join('"%s"' % c for c in row) + "\r\n", encoding="utf-8")
+    rows, warnings = sv.read_findings(f)
+    r = rows[0]
+    assert warnings == [] and (r["found"], r["right"], r["lat"], r["lon"], r["label"], r["remarks"]) == ("yes", "api", 35.123456, 33.654321, "L-1", "pole")
+    assert r["api"] == [35.0, 33.0] and r["sheet"] == [35.003, 33.0] and r["kinds"] == ["far_apart"]
+
+
 def test_google_links_stay_within_the_waypoint_limit():
     pts = [(35 + i / 100, 33.0) for i in range(12)]
     urls = sv.route_urls(pts)

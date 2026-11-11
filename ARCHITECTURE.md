@@ -477,10 +477,22 @@ address and log: `plan_renames` / `apply_renames` / `undo_renames` send only the
 OMNIA afterwards because the answer text of that call is not relied on. In `tools/control_room.py`:
 `POST /api/edit/plan` (reads OMNIA live, sends nothing, returns a single-use token) and `POST /api/edit/apply` (needs
 `CONTROL_ROOM_ALLOW_EDIT`, the typed YES, the token, and re-reads OMNIA to refuse paths edited since the preview).
+**Popup sentence** (`runner/sensor_status.py`, pure): `qa.load_api_sensors` now also reads each sensor's run history and merges
+`history_fields()` (current state, fault age, last status, 20-run window, lifetime tier, all taken from `stability.py`) into the
+sensor dict; `generate_html` turns each sensor into `status_sentence()` -> `status` + `tone` in `apiMarkers`, and the popup
+leads with it. `Server.sensor_details` passes `status`/`tone` to the Paths map's sensor popups. Sentences never contain the
+text `ID:` (the note box finds the sensor id by it).
+
 **Site visits** (`/visits`, `runner/site_visits.py`, pure): `visit_inputs()` in the app runs the same matching as the sensor tabs for
 every group (plus the Bluetooth verdicts), cached on the `history.db` and `QA Locations.xlsx` mtimes; the notes are read per request.
 `collect_items` turns that into things to check, `group_stops` merges what is within 150 m, `plan` assigns stops to the nearest area
 centre, orders them (nearest neighbour then 2-opt, straight-line, open route from the area centre) and cuts them into days;
+`plan(..., start=(lat, lon, name))` makes every day begin at the office: ordering, the km and the Google links start from it, and
+what is left of an area is ordered again from it for the next day; `visit_start_setting` reads `CONTROL_ROOM_VISIT_START` from the
+git-ignored `.env`. `mobile_html` is the phone page: one self-contained file (no external scripts, styles or tiles), a fixed JSON
+payload plus plain JS, answers in the phone's `localStorage` keyed by a hash of the stop keys, results as a CSV in the field
+sheet's columns (`MOBILE_HEAD`; the 'lat, lon' typed into GPS lat is split by the import). The server never listens beyond
+127.0.0.1, which is why the phone page is a saved file and not a link.
 `write_field_sheet` (openpyxl: a sheet per day, drop-downs, hyperlinks, hidden `Key`/position columns) and `to_kml` are the exports,
 written by `POST /api/visits/save` (the server builds the file; the page only names the filters). Google Maps links carry at most
 10 points each, their waypoint limit. Findings: each item has a stable key (`<group slug>|api|<sensor id>` or

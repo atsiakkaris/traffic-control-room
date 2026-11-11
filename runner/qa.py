@@ -39,6 +39,7 @@ if _env_path.exists():
         if _line and not _line.startswith('#') and '=' in _line:
             _k, _, _v = _line.partition('=')
             os.environ.setdefault(_k.strip(), _v.strip())
+import sensor_status
 from db import get_connection, upsert_sensor_projects
 from stability import HEALTH_GOOD_PCT, HEALTH_WARNING_PCT
 
@@ -397,6 +398,10 @@ def load_api_sensors(group_name):
         WHERE group_name=?
         GROUP BY sensor_id
     """, (group_name,)).fetchall()
+    runs = {}
+    for r in conn.execute("SELECT sensor_id, run_at, status FROM sensor_results WHERE group_name=? ORDER BY sensor_id, run_at",
+                          (group_name,)):
+        runs.setdefault(r['sensor_id'], []).append({'run_at': r['run_at'], 'status': r['status']})
     conn.close()
 
     health = {r['sensor_id']: dict(r) for r in stability}
@@ -407,7 +412,7 @@ def load_api_sensors(group_name):
         total = h.get('total_runs', 0)
         good  = h.get('good_runs', 0)
         pct   = round(good / total * 100, 1) if total > 0 else None
-        sensors.append({
+        sensors.append({**sensor_status.history_fields(runs.get(sid, [])),
             'id':         sid,
             'name':       r['name'] or sid,
             'lat':        r['lat'],
@@ -884,6 +889,10 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
         return {'ref_name': m['ref']['name'], 'ref_source': m['ref']['source'],
                 'ref_dist': round(m['distance_m'], 1) if m['distance_m'] else 0}
 
+    def _status_fields(s):
+        text, tone = sensor_status.status_sentence(s, verdicts.get(str(s['id'])), group)
+        return {'status': text, 'tone': tone, 'state': s.get('state'), 'tier': s.get('tier')}
+
     api_map = [{'id': s['id'], 'name': s['name'], 'lat': s['lat'], 'lon': s['lon'],
                 'active': s['active'], 'health': s['health_pct'],
                 'site_code': s.get('site_code'),
@@ -891,6 +900,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 'project': s.get('project'),
                 'project_source': s.get('project_source'),
                 'verdict': verdicts.get(str(s['id'])),
+                **_status_fields(s),
                 **_ref_match_fields(s)} for s in api_sensors]
 
     ref_map = [{'name': s['name'], 'lat': s['lat'], 'lon': s['lon'], 'source': s['source'],
@@ -1227,6 +1237,8 @@ const apiMarkers = {json.dumps(api_map)};
 const refMarkers = {json.dumps(ref_map)};
 const linkLines  = {json.dumps(link_map)};
 const WARN_M = {COORD_WARN_M}, ALERT_M = {COORD_ALERT_M};
+// popup banner: one plain sentence about the sensor leads every popup
+const TONE = {{good: ['#d5f0dd', '#1e6b34'], warn: ['#fdebd0', '#8a4b08'], bad: ['#f9d6d5', '#8a1f1b'], neutral: ['#e8ebee', '#444']}};
 
 const map = L.map('map');
 // Same base map as the other maps: OpenFreeMap (vector tiles via MapLibre). Added once the
@@ -1335,8 +1347,15 @@ Object.values(apiGroups).forEach(group => {{
         + (s.ref_dist ? ` <span style="color:#aaa">${{s.ref_dist}} m</span>` : '')
       : '';
     const siteLine = s.site_code ? `<br>Site #: ${{s.site_code}}` : '';
-    return `<b>API sensor: ${{s.name}}</b><br>ID: ${{s.id}}` + siteLine + `<br>`+
-      `Health: ${{s.health != null ? s.health+'%' : 'No data'}}<br>`+
+    const tone = TONE[s.tone] || TONE.neutral;
+    const banner = s.status
+      ? `<div style="background:${{tone[0]}};color:${{tone[1]}};padding:6px 8px;border-radius:5px;margin-bottom:6px;font-weight:bold;max-width:300px">${{s.status}}</div>` : '';
+    // lifetime uptime and what the sensor is doing now are different questions: show both side by side
+    const uptimeLine = GROUP_IS_BT ? ''
+      : `Uptime (lifetime): ${{s.health != null ? s.health+'%' + (s.tier ? ' ('+s.tier+')' : '') : 'No data'}}`
+        + (s.state ? ` &middot; Now: <b>${{s.state}}</b>` : '') + `<br>`;
+    return banner + `<b>API sensor: ${{s.name}}</b><br>ID: ${{s.id}}` + siteLine + `<br>`+
+      uptimeLine +
       `Active: ${{s.active ? 'Yes' : 'No'}}` + projectLine + acct + refLine;
   }}).join('<hr style="margin:6px 0">');
 

@@ -204,10 +204,12 @@ One sensor can be on the list for several reasons; they are shown together. Co-l
 matched one, usually the other direction) are not listed: they share their twin's row.
 
 **Stops and days.** Things within **150 m** of each other are one stop (`MERGE_M`). Each stop belongs to the nearest area centre
-(Nicosia, Limassol, Larnaca, Paphos, Famagusta; `AREAS`). Within an area the stops are ordered from the centre: always the nearest
+(Nicosia, Limassol, Larnaca, Paphos, Famagusta; `AREAS`). Within an area the stops are ordered from where the day starts (your
+office, when `CONTROL_ROOM_VISIT_START` is set in `.env`, otherwise the area centre): always the nearest
 unvisited stop next, then any two legs that cross are untangled (2-opt) until no change shortens the route. The order uses
 straight-line distance, so the real drive can be longer; it is meant to avoid doubling back, not to time the day. An area with more
-stops than *Stops per day* (15 by default) is cut into several days along that order.
+stops than *Stops per day* (15 by default) is cut into several days along that order; what is left is ordered again from the start
+for the next day. The kilometres shown include the drive from the start to the first stop, not the way back.
 
 **Visited, and what a finding means.** After a visit the filled-in field sheet is imported. *Found?* Yes or No makes the item
 *visited* (it leaves the plan); Not sure keeps it on the plan. A GPS fix is only accepted inside Cyprus (a swapped lat and lon is
@@ -224,3 +226,25 @@ refused), and 'lat, lon' pasted into one cell is split. What it means for you:
 | No | | Not on site: if the API still lists it ask the contractor or SWARCO; if the spreadsheet lists it as active, mark it decommissioned. |
 
 The importer only reads; it never changes the spreadsheet, the API or OMNIA. The corrections are a list for you to act on.
+
+## 9. The popup sentence
+
+The first line of a sensor popup (`runner/sensor_status.py`) is chosen in this order; the first that applies wins:
+
+| Sentence starts with | When | Band |
+|---|---|---|
+| **Retired** | The sensor's ID is missing from the latest API data. | grey |
+| **Awaiting power / Decommissioned** | The spreadsheet status says so; left out of all statistics. | grey |
+| *(Bluetooth)* the verdict | Triangulation verdict of section 5 (no uptime is claimed: Bluetooth sensors have none of their own). | green / orange / red / grey |
+| **No monitor history yet** | The sensor has no recorded runs. | grey |
+| **Working now** | Its latest run was good. Orange, "but it failed N of its last 20 runs", when 20% or more of those 20 runs were bad. | green / orange |
+| **Reporting zero traffic since ...** | The latest status is "no traffic" (speed 0): normal at night, so orange for the first 3 days, red after. | orange / red |
+| **Never worked since it was first seen** | No good run ever recorded. | red |
+| **Failing in the latest check** | Bad now, for under a day (the current unbroken bad streak). | orange |
+| **Down for N days (since date)** | Bad now, for a day or more, with the reason from the latest status. | red |
+
+Down sentences end with the lifetime uptime and tier ("Lifetime uptime 62% (Unstable)"), then, in this order: *a persistent
+fault for <project>* (contract active and 80% or more of the last 20 runs bad), or *No maintenance contract is on record*, and
+*Contract ended, so a failure is expected* when the project is out of support. Current state, fault age and the 20-run window come
+from `stability.py`, the same code as the dashboard and the weekly digest, so the popup cannot disagree with them. If the whole feed
+is down, every sensor in it reads as down: the sentence is about that sensor's own record, not a judgement of the cause.

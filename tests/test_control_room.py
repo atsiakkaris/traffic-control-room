@@ -207,13 +207,14 @@ def test_site_visits_page_and_saves(tmp_path):
                          paths_provider=dict, views={"traffic-detection": ("Traffic Detection", "TD", 300)},
                          db_file=tmp_path / "none.db", choose_path=None, downloads_dir=tmp_path / "dl",
                          visit_inputs=lambda: calls.append(1) or inputs, visits_file=tmp_path / "v.json",
-                         choose_open=lambda folder: picked[0])
+                         choose_open=lambda folder: picked[0], visit_start=(35.150000, 33.350000, "Office, Strovolos"))
     picked = [None]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     try:
         html = urllib.request.urlopen(base + "/visits").read().decode("utf-8")
         assert "Site visits" in html and "D1-01" in html and "333 m apart" in html
+        assert '"start": "Office, Strovolos"' in html and "origin=35.150000,33.350000" in html
         empty = urllib.request.urlopen(base + "/visits?kinds=&groups=traffic-detection&per_day=5").read().decode("utf-8")
         assert '"days": []' in empty                                # nothing ticked means nothing, not everything
         assert len(calls) == 1                                      # inputs cached until the DB or the workbook changes
@@ -223,6 +224,9 @@ def test_site_visits_page_and_saves(tmp_path):
         sheet = Path(out["path"])
         code, out = _req(base + "/api/visits/save", "POST", dict(want, format="kml"))
         assert code == 200 and Path(out["path"]).read_text(encoding="utf-8").startswith("<?xml")
+        code, out = _req(base + "/api/visits/save", "POST", dict(want, format="mobile"))
+        phone = Path(out["path"]).read_text(encoding="utf-8")
+        assert code == 200 and out["path"].endswith(".html") and "Share / save results" in phone and "Office, Strovolos" in phone
         assert _req(base + "/api/visits/save", "POST", {"format": "exe"})[0] == 400
         assert _req(base + "/api/visits/save", "POST", {"format": "xlsx", "kinds": []})[0] == 400       # nothing to visit
         assert _req(base + "/api/visits/save", "POST", {"format": "corrections"})[0] == 400              # no findings yet
@@ -262,6 +266,16 @@ def test_site_visits_page_and_saves(tmp_path):
         assert "traffic-detection|api|9" not in cr.load_visits(tmp_path / "v.json")      # a bare mark disappears
     finally:
         srv.shutdown()
+
+
+def test_visit_start_comes_from_the_env_file_and_bad_values_are_ignored(tmp_path):
+    env = tmp_path / ".env"
+    ok = lambda v: (env.write_text("OTHER=1\nCONTROL_ROOM_VISIT_START=%s\n" % v, encoding="utf-8"), cr.visit_start_setting(env={}, env_file=env))[1]
+    assert ok("Office, Strovolos|35.150000,33.350000") == (35.150000, 33.350000, "Office, Strovolos")
+    assert ok("No position here") is None and ok("X|abc,def") is None and ok("|35.1,33.3") is None
+    assert ok("Far away|51.5,-0.1") is None                      # not in Cyprus: a typo, not a start
+    assert cr.visit_start_setting(env={}, env_file=tmp_path / "missing.env") is None
+    assert cr.visit_start_setting(env={"CONTROL_ROOM_VISIT_START": "Home|35.0,33.0"}, env_file=env) == (35.0, 33.0, "Home")
 
 
 def test_real_sensor_page_builds_without_writing_to_the_db(monkeypatch):
