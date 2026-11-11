@@ -187,15 +187,41 @@ NOTES_JS = """<style>
   var G = '__GROUP__', notes = {}, ring = L.layerGroup().addTo(map);
   var pts = typeof apiMarkers !== 'undefined' ? apiMarkers : (typeof SENSORS !== 'undefined' ? SENSORS : []);
   var BADGE = '<div style="background:#f39c12;color:#fff;border:1px solid #fff;border-radius:3px;width:16px;height:16px;font:bold 11px Arial;text-align:center;line-height:15px;box-shadow:0 0 3px rgba(0,0,0,.5)">N</div>';
+  var badges = {}, idx = null, syncTimer = null;
+  // The badge belongs to its sensor's dot: it is on the map exactly while that dot is.
+  function markerFor(s) {
+    if (typeof sensorMarkersById !== 'undefined' && sensorMarkersById[s.id]) return sensorMarkersById[s.id];
+    if (typeof CAT_LAYERS !== 'undefined') {
+      if (!idx) {
+        idx = {};
+        ['g', 'o', 'r', 'n', 'x', 'ob', 'oo'].forEach(function(c) {
+          if (CAT_LAYERS[c]) CAT_LAYERS[c].eachLayer(function(m) { if (m.getLatLng) idx[m.getLatLng().lat.toFixed(5) + ',' + m.getLatLng().lng.toFixed(5)] = m; });
+        });
+      }
+      return idx[s.lat.toFixed(5) + ',' + s.lon.toFixed(5)] || null;
+    }
+    return null;
+  }
+  function sync() {
+    pts.forEach(function(s) {
+      var b = badges[s.id];
+      if (!b) return;
+      var m = markerFor(s), vis = !m || map.hasLayer(m);
+      if (vis && !ring.hasLayer(b)) ring.addLayer(b);
+      if (!vis && ring.hasLayer(b)) ring.removeLayer(b);
+    });
+  }
+  map.on('layeradd layerremove', function() { clearTimeout(syncTimer); syncTimer = setTimeout(sync, 0); });
   function rings() {
-    ring.clearLayers();
+    ring.clearLayers(); badges = {};
     var k = 0;
     pts.forEach(function(s) {
       if (notes[String(s.id)] && s.lat != null) {
         k++;
-        L.marker([s.lat, s.lon], {icon: L.divIcon({className: '', html: BADGE, iconSize: [16, 16], iconAnchor: [-5, 21]}), interactive: false, keyboard: false}).addTo(ring);
+        badges[s.id] = L.marker([s.lat, s.lon], {icon: L.divIcon({className: '', html: BADGE, iconSize: [16, 16], iconAnchor: [-5, 21]}), interactive: false, keyboard: false});
       }
     });
+    sync();
     if (window.mfAddExtra && k) window.mfAddExtra({id: 'notes', sw: '<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#f39c12;color:#fff;font:bold 10px Arial;text-align:center;line-height:14px;flex-shrink:0">N</span>', text: 'Orange N badge: you wrote a note on this sensor (' + k + ')'});
   }
   fetch('/api/sensor-notes?group=' + encodeURIComponent(G)).then(function(r) { return r.json(); })

@@ -505,6 +505,175 @@ def load_api_sensors_live(group_name):
 # Sensors further apart than this are treated as unmatched.
 COORD_MATCH_MAX_M = 500
 
+# ── Map summary + clickable key ──────────────────────────────────────────────
+# One control replaces the old colour-key strip and the corner legend: a one-line summary whose buttons
+# show only a group of dots, and a key whose chips (with counts) switch each dot style on and off.
+MAP_FILTER_CSS = """
+.mf{padding:6px 24px 8px;font-size:12px}
+.mfsum{margin-bottom:6px;line-height:2}
+.mfsum button{font:12px Arial,sans-serif;border:1px solid #1f4e79;background:#fff;color:#1f4e79;border-radius:12px;padding:2px 10px;margin:0 3px;cursor:pointer}
+.mfsum button:hover{background:#1f4e79;color:#fff}
+.mffold{margin-left:10px!important;border-style:dashed!important}
+.mfrow{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+.mfgrp{font-weight:bold;color:#555}
+.mfchip{display:inline-flex;gap:6px;align-items:center;cursor:pointer;padding:2px 8px;border-radius:12px;border:1px solid #ccd3da;background:#fff;user-select:none}
+.mfchip.off{opacity:.4}
+.mfchip.zero{color:#888}
+.mfd{color:#666;font-size:11px}
+.mfchip.off .mfd{color:#999}
+.mfchip .sw{display:inline-block;width:12px;height:12px;border-radius:50%;box-sizing:border-box;flex-shrink:0}
+.mfchip .ln{display:inline-block;width:22px;border-top:2.5px dashed}
+.mfinfo{display:inline-flex;gap:6px;align-items:center;color:#555}
+.mfinfo .sw{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0}
+"""
+
+MAP_FILTER_INIT_JS = """
+const GROUP_IS_BT = __BT__;
+// Every marker and line goes into the layer of its style, so the key can show and hide a style at once.
+const CAT_BY_COLOR = {'#27ae60':'g', '#e67e22':'o', '#c0392b':'r', '#aaa':'n', '#888':'x'};
+const CAT_LAYERS = {}, CAT_N = {};
+function catLayer(cat) {
+  if (!CAT_LAYERS[cat]) { CAT_LAYERS[cat] = L.layerGroup().addTo(map); CAT_N[cat] = 0; }
+  CAT_N[cat]++;
+  return CAT_LAYERS[cat];
+}
+"""
+
+MAP_FILTER_UI_JS = """
+(function() {
+  var host = document.getElementById('mapfilter');
+  if (!host) return;
+  var IS_BT = __BT__;
+  var STYLE = {
+    g:  ['#27ae60', false, 'Healthy', 'worked in 90% or more of all monitor runs'],
+    o:  ['#e67e22', false, 'Degraded', 'worked in 70 to 89% of runs'],
+    r:  ['#c0392b', false, 'Critical', 'worked in under 70% of runs (0% = never worked)'],
+    n:  ['#aaaaaa', false, IS_BT ? 'No sensor uptime' : 'No history yet', IS_BT ? 'Bluetooth sensors are judged by their paths: see the rings' : 'in the API, but no monitor run recorded yet', 'dashed'],
+    x:  ['#888888', false, 'Retired', 'its ID is missing from the latest API data (it returns by itself if it reappears)', 'cross'],
+    ob: ['#27ae60', true,  'Still reporting', 'contract ended, but 50% uptime or more (a bonus)'],
+    oo: ['#95a5a6', true,  'Offline', 'contract ended, under 50% uptime: a failure is expected'],
+    s:  ['#1f4e79', false, 'Location', 'in your spreadsheet, no API sensor matched to it'],
+    so: ['#1f4e79', true,  'Contract ended', 'spreadsheet location of an out-of-support project']
+  };
+  var LINES = [['lg', '#27ae60', 'under __WARN__ m'], ['lo', '#e67e22', '__WARN__ to __AMBER_HI__ m'], ['lr', '#c0392b', 'over __ALERT__ m'], ['lu', '#aaaaaa', 'distance unknown']];
+  var GROUPS = [
+    ['API sensors (colour = uptime over all runs so far)', ['g', 'o', 'r', 'n', 'x']],
+    ['API sensors whose contract ended (hollow dot)', ['ob', 'oo']],
+    ['Your spreadsheet (blue)', ['s', 'so']]
+  ];
+  var extras = [
+    {id: 'halo', sw: '<span class="sw" style="background:#27ae60;outline:3px solid #f1c40f;outline-offset:2px;margin:0 4px"></span>', text: 'Gold halo around a dot: confirmed match, spreadsheet and API sensor agree (under __WARN__ m, drawn as one dot)'},
+    {id: 'num', sw: '<span class="sw" style="background:#c0392b;color:#fff;font:bold 9px Arial;text-align:center;line-height:12px">2</span>', text: 'Number in a dot: that many sensors at the same spot (colour = the worst of them; hover to see each one)'}
+  ];
+  window.mfAddExtra = function(x) {
+    for (var i = 0; i < extras.length; i++) if (extras[i].id === x.id) { extras[i] = x; draw(); return; }
+    extras.push(x); draw();
+  };
+  var on = {}, LOC = L.layerGroup().addTo(map);
+  var keyOpen = true;
+  try { keyOpen = localStorage.getItem('mfKeyOpen') !== '0'; } catch (e) {}
+  function keys() { return Object.keys(STYLE).concat(LINES.map(function(l) { return l[0]; })); }
+  function n(c) { return CAT_N[c] || 0; }
+  function show(c, v) {
+    on[c] = v;
+    var l = CAT_LAYERS[c];
+    if (l) { if (v) map.addLayer(l); else map.removeLayer(l); }
+  }
+  function band(l) { return l.dist == null ? 'lu' : l.dist < WARN_M ? 'lg' : l.dist < ALERT_M ? 'lo' : 'lr'; }
+  function fit() {
+    var b = L.latLngBounds([]);
+    keys().forEach(function(c) {
+      if (on[c] === false || !CAT_LAYERS[c]) return;
+      CAT_LAYERS[c].eachLayer(function(m) { if (m.getLatLng) b.extend(m.getLatLng()); else if (m.getBounds) b.extend(m.getBounds()); });
+    });
+    if (b.isValid()) map.fitBounds(b.pad(0.15), {maxZoom: 16});
+  }
+  function only(list) { keys().forEach(function(c) { show(c, list.indexOf(c) >= 0); }); draw(); fit(); }
+  function all() { keys().forEach(function(c) { show(c, true); }); draw(); }
+  function chip(c, label, desc, sw, title) {
+    var el = document.createElement('span');
+    el.className = 'mfchip' + (on[c] === false ? ' off' : '') + (n(c) ? '' : ' zero');
+    el.title = title + ' Click to show only this; click again to show all; ctrl+click adds or removes one.';
+    el.innerHTML = sw + '<span>' + label + ' <b>' + n(c) + '</b>' + (desc ? ' <span class="mfd">' + desc + '</span>' : '') + '</span>';
+    el.onclick = function(e) {
+      var shown = keys().filter(function(k) { return on[k] !== false; });
+      if (e.ctrlKey || e.metaKey || e.shiftKey) { show(c, on[c] === false); draw(); }
+      else if (shown.length === 1 && shown[0] === c) all();
+      else only([c]);
+    };
+    return el;
+  }
+  function locators(everything) {
+    LOC.clearLayers();
+    if (everything) return;
+    linkLines.forEach(function(l) {
+      var b = band(l);
+      if (on[b] === false) return;
+      var col = {lg: '#27ae60', lo: '#e67e22', lr: '#c0392b', lu: '#aaaaaa'}[b];
+      L.circleMarker([(l.ref_lat + l.api_lat) / 2, (l.ref_lon + l.api_lon) / 2], {radius: 16, color: col, weight: 3, fill: false, dashArray: '3,4', interactive: false}).addTo(LOC);
+    });
+  }
+  function draw() {
+    host.innerHTML = '';
+    var everything = keys().every(function(k) { return on[k] !== false; });
+    locators(everything);
+    var total = ['g', 'o', 'r', 'n', 'x', 'ob', 'oo'].reduce(function(a, c) { return a + n(c); }, 0);
+    var sum = document.createElement('div'); sum.className = 'mfsum';
+    sum.appendChild(document.createTextNode(total + ' sensor dots on the map: '));
+    var PRESETS = IS_BT
+      ? [['Contract ended', ['ob', 'oo'], 'Out-of-support sensors'], ['Judged by their paths', ['n', 'x', 'g', 'o', 'r'], 'Bluetooth sensors have no uptime of their own: use the Triangulation panel']]
+      : [['Under 90% uptime', ['o', 'r'], 'Orange and red dots: in-support sensors that worked in less than 90% of all runs so far'],
+         ['Contract ended', ['ob', 'oo'], 'Out-of-support sensors: a failure is expected'],
+         ['Retired or no history', ['n', 'x'], 'No longer in the API, or no monitor run recorded yet'],
+         ['Healthy', ['g'], 'Worked in 90% or more of runs']];
+    PRESETS.forEach(function(g) {
+      var k = g[1].reduce(function(a, c) { return a + n(c); }, 0);
+      if (!k) return;
+      var b = document.createElement('button');
+      b.textContent = k + ' ' + g[0].toLowerCase(); b.title = g[2] + '. Click to show only these dots.';
+      b.onclick = function() { only(g[1]); };
+      sum.appendChild(b);
+    });
+    var all_b = document.createElement('button'); all_b.textContent = 'Show all'; all_b.onclick = all; sum.appendChild(all_b);
+    var fold = document.createElement('button'); fold.className = 'mffold';
+    fold.innerHTML = 'What do the symbols mean? ' + (keyOpen ? '&#9662;' : '&#9656;'); fold.title = 'Fold or unfold the key';
+    fold.onclick = function() { keyOpen = !keyOpen; try { localStorage.setItem('mfKeyOpen', keyOpen ? '1' : '0'); } catch (e) {} draw(); };
+    sum.appendChild(fold);
+    host.appendChild(sum);
+    var body = document.createElement('div'); body.className = 'mfbody'; if (!keyOpen) body.style.display = 'none';
+    host.appendChild(body);
+    GROUPS.forEach(function(g) {
+      var row = document.createElement('div'); row.className = 'mfrow';
+      var t = document.createElement('span'); t.className = 'mfgrp'; t.textContent = g[0] + ':'; row.appendChild(t);
+      g[1].forEach(function(c) {
+        var st = STYLE[c];
+        var sw = st[4] === 'dashed' ? '<span class="sw" style="background:#eee;border:2px dashed #888"></span>'
+               : st[4] === 'cross' ? '<span class="sw" style="background:#888;border:2px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.4);color:#fff;font:bold 12px/9px Arial;text-align:center">&#215;</span>'
+               : '<span class="sw" style="' + (st[1] ? 'background:#fff;border:3px solid ' + st[0] : 'background:' + st[0] + ';border:2px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.4)') + '"></span>';
+        row.appendChild(chip(c, st[2], st[3], sw, st[2] + ': ' + st[3] + '.'));
+      });
+      body.appendChild(row);
+    });
+    var lr = document.createElement('div'); lr.className = 'mfrow';
+    var lt = document.createElement('span'); lt.className = 'mfgrp'; lt.textContent = 'Lines from a spreadsheet location to its sensor (short, so a dashed ring marks each when filtered):'; lr.appendChild(lt);
+    LINES.forEach(function(l) {
+      if (l[0] === 'lo' && !__AMBER__) return;
+      if (l[0] === 'lr' && !__RED__) return;
+      if (l[0] === 'lu' && !n('lu')) return;
+      lr.appendChild(chip(l[0], l[2], '', '<span class="ln" style="border-color:' + l[1] + '"></span>', 'Distance between the spreadsheet location and the API sensor it was paired with: ' + l[2] + '.'));
+    });
+    body.appendChild(lr);
+    var ex = document.createElement('div'); ex.className = 'mfrow';
+    var et = document.createElement('span'); et.className = 'mfgrp'; et.textContent = 'Marks on top of the dots:'; ex.appendChild(et);
+    extras.forEach(function(x) {
+      var i = document.createElement('span'); i.className = 'mfinfo'; i.innerHTML = x.sw + '<span>' + x.text.replace(/__WARN__/g, WARN_M) + '</span>'; ex.appendChild(i);
+    });
+    body.appendChild(ex);
+  }
+  all();
+})();
+"""
+
 
 def match_sensors(ref_sensors, api_sensors, max_dist=None):
     """
@@ -661,25 +830,10 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
     _show_amber = match_max_m > COORD_WARN_M
     _show_red = match_max_m > COORD_ALERT_M
 
-    # Pre-built legend fragments for the two colour-key blocks below — kept as
-    # plain strings (not inline conditionals) so neither block can show a
-    # distance band this report's --max-dist makes physically unreachable.
-    _key_line_amber = (
-        f'<span><span style="display:inline-block;width:24px;border-top:2.5px dashed #e67e22;'
-        f'vertical-align:middle"></span> {COORD_WARN_M}–{_amber_hi} m</span>'
-    ) if _show_amber else ''
-    _key_line_red = (
-        f'<span><span style="display:inline-block;width:24px;border-top:2.5px dashed #c0392b;'
-        f'vertical-align:middle"></span> &gt;{COORD_ALERT_M} m</span>'
-    ) if _show_red else ''
-    _corner_line_amber = (
-        f'<span style="display:inline-block;width:22px;border-top:2.5px dashed #e67e22;'
-        f'vertical-align:middle;margin-right:6px"></span>Match {COORD_WARN_M}–{_amber_hi} m<br>'
-    ) if _show_amber else ''
-    _corner_line_red = (
-        f'<span style="display:inline-block;width:22px;border-top:2.5px dashed #c0392b;'
-        f'vertical-align:middle;margin-right:6px"></span>Match &gt;{COORD_ALERT_M} m'
-    ) if _show_red else ''
+    mf_init_js = MAP_FILTER_INIT_JS.replace('__BT__', 'true' if group == 'Bluetooth' else 'false')
+    mf_ui_js = (MAP_FILTER_UI_JS.replace('__WARN__', str(COORD_WARN_M)).replace('__ALERT__', str(COORD_ALERT_M))
+                .replace('__AMBER_HI__', str(_amber_hi)).replace('__AMBER__', 'true' if _show_amber else 'false')
+                .replace('__RED__', 'true' if _show_red else 'false').replace('__BT__', 'true' if group == 'Bluetooth' else 'false'))
 
     # ── Accountability breakdown ───────────────────────────────────────────────
     # Health % is computed over supported sensors only, so a dead out-of-support
@@ -898,10 +1052,6 @@ tr.clickable{{cursor:pointer}}
 tr.clickable:hover td{{background:#dceeff}}
 .fly-link{{cursor:pointer;color:#1f4e79;text-decoration:underline dotted}}
 .fly-link:hover{{color:#c0392b}}
-.colour-key{{display:flex;gap:16px;align-items:center;padding:8px 24px 12px;flex-wrap:wrap;font-size:12px}}
-.colour-key span{{display:flex;align-items:center;gap:6px}}
-.colour-key i{{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #fff;
-               box-shadow:0 0 3px rgba(0,0,0,.3);flex-shrink:0}}
 .search-bar{{margin:0 24px 12px;display:flex;gap:8px;align-items:center}}
 .search-bar input{{flex:1;padding:7px 12px;border:1px solid #ccc;border-radius:4px;font-size:13px}}
 .search-bar label{{font-size:12px;color:#555;white-space:nowrap}}
@@ -924,51 +1074,36 @@ tr.clickable:hover td{{background:#dceeff}}
 #ruler-clear{{padding:4px 10px;background:#8e44ad;color:#fff;border:none;border-radius:4px;
               cursor:pointer;font-size:12px}}
 #ruler-clear:hover{{background:#6c3483}}
-</style>
+{MAP_FILTER_CSS}</style>
 </head>
 <body>
 <header>
   <h1>QA Report — {group}</h1>
   <p>Generated {now}&nbsp;&nbsp;|&nbsp;&nbsp;
-     <b>{'&#x1F4F6; Live from API' if live else '&#x1F4BE; From local DB (cached)'}</b>&nbsp;&nbsp;|&nbsp;&nbsp;
+     <b>{'&#x1F4F6; Live from API' if live else '&#x1F4BE; From the local database'}</b>&nbsp;&nbsp;|&nbsp;&nbsp;
      {len(api_sensors)} sensors in API&nbsp;&nbsp;|&nbsp;&nbsp;
-     {len(ref_sensors)} sensors in reference files</p>
+     {len(ref_sensors)} locations in your spreadsheet</p>
 </header>
 
 <div class="summary">
   <div class="card blue"><div class="num">{len(api_sensors)}</div><div class="lbl">API sensors</div></div>
-  <div class="card blue"><div class="num">{len(ref_sensors)}</div><div class="lbl">Reference sensors</div></div>
+  <div class="card blue"><div class="num">{len(ref_sensors)}</div><div class="lbl">Spreadsheet locations</div></div>
   <div class="card green"><div class="num">{len(matched)}</div><div class="lbl">Matched by location</div></div>
-  <div class="card amber"><div class="num">{len(coord_issues)}</div><div class="lbl">Coord mismatches (&gt;{COORD_WARN_M}m)</div></div>
-  <div class="card red"><div class="num">{len(ref_only)}</div><div class="lbl">In ref, not in API</div></div>
-  <div class="card red"><div class="num">{len(api_only)}</div><div class="lbl">In API, not in ref</div></div>
-  {'<div class="card amber"><div class="num">'+str(len(colocated))+'</div><div class="lbl">Co-located pairs</div></div>' if colocated else ''}
-  {'<div class="card green"><div class="num">'+str(supported_uptime)+'%</div><div class="lbl">Supported uptime</div></div>' if supported_uptime is not None else ''}
-  {'<div class="card grey"><div class="num">'+str(oos_total)+'</div><div class="lbl">Out of support (★ '+str(oos_bonus)+' still reporting)</div></div>' if oos_total else ''}
+  <div class="card amber"><div class="num">{len(coord_issues)}</div><div class="lbl">Position differs (&gt;{COORD_WARN_M} m)</div></div>
+  <div class="card red"><div class="num">{len(ref_only)}</div><div class="lbl">In spreadsheet, not in API</div></div>
+  <div class="card red"><div class="num">{len(api_only)}</div><div class="lbl">In API, not in spreadsheet</div></div>
+  {'<div class="card amber"><div class="num">'+str(len(colocated))+'</div><div class="lbl">Second sensor at the same spot</div></div>' if colocated else ''}
+  {'<div class="card green"><div class="num">'+str(supported_uptime)+'%</div><div class="lbl">Uptime (contract active)</div></div>' if supported_uptime is not None else ''}
+  {'<div class="card grey"><div class="num">'+str(oos_total)+'</div><div class="lbl">Contract ended ('+str(oos_bonus)+' still reporting)</div></div>' if oos_total else ''}
   {'<div class="card grey"><div class="num">'+str(not_electrified)+'</div><div class="lbl">Awaiting power (excluded from stats)</div></div>' if not_electrified else ''}
 </div>
 
+<div class="mf" id="mapfilter"></div>
 <div class="map-wrap">
-<div class="colour-key">
-  <strong>Map dots:</strong>
-  <span><i style="background:#27ae60"></i> API — healthy (&ge;90% uptime)</span>
-  <span><i style="background:#e67e22"></i> API — degraded (70–89%)</span>
-  <span><i style="background:#c0392b"></i> API — critical (&lt;70%)</span>
-  <span><i style="background:#888"></i> API — retired or no history</span>
-  <span><i style="background:#fff;border:3px solid #27ae60;box-shadow:none"></i> Out of support — still reporting (bonus, &ge;{BONUS_HEALTH_PCT}% uptime)</span>
-  <span><i style="background:#fff;border:3px solid #95a5a6;box-shadow:none"></i> Out of support — offline / occasional (&lt;{BONUS_HEALTH_PCT}%)</span>
-  <span><i style="background:#1f4e79"></i> Your spreadsheet location</span>
-  <span><i style="background:#fff;border:3px solid #1f4e79;box-shadow:none"></i> Spreadsheet location — out of support</span>
-  <span><i style="background:#27ae60;outline:3px solid #f1c40f;outline-offset:2px"></i> Confirmed match — ref + API agree (&lt;{COORD_WARN_M} m, shown as one marker)</span>
-  <strong style="margin-left:8px">Lines:</strong>
-  <span><span style="display:inline-block;width:24px;border-top:2.5px dashed #27ae60;vertical-align:middle"></span> &lt;{COORD_WARN_M} m apart</span>
-  {_key_line_amber}
-  {_key_line_red}
-</div>
 <div style="padding:0 24px 10px;font-size:11px;color:#888">
-  <b>Note:</b> Out-of-support sensors belong to a project whose maintenance contract has ended — a failure is
-  expected, not actionable. They are excluded from the <b>Supported uptime</b> figure. One counts as
-  <b>bonus</b> (★) only if it still delivers <b>&ge;{BONUS_HEALTH_PCT}% uptime</b>; between 0 and {BONUS_HEALTH_PCT}% it is
+  <b>Note:</b> Sensors marked out of support belong to a project whose maintenance contract has ended — a failure is
+  expected, not actionable. They are excluded from the <b>Uptime (contract active)</b> figure. One counts as
+  <b>bonus</b> only if it still delivers <b>&ge;{BONUS_HEALTH_PCT}% uptime</b>; between 0 and {BONUS_HEALTH_PCT}% it is
   merely <i>occasionally reporting</i>, and at 0% it is offline (all expected).
 </div>
 
@@ -1014,8 +1149,8 @@ tr.clickable:hover td{{background:#dceeff}}
     <div class="tbl-scroll">
     <table>
       <thead><tr>
-        <th>Reference name</th><th>API description</th><th>API ID</th><th>Site #</th>
-        <th>Coord distance</th><th>Ref GPS (spreadsheet)</th><th>API GPS</th>
+        <th>Spreadsheet name</th><th>API name</th><th>API ID</th><th>Site #</th>
+        <th>Coord distance</th><th>Spreadsheet GPS</th><th>API GPS</th>
         <th>Health</th><th>Status</th><th>Source file</th><th>Notes</th>
       </tr></thead>
       <tbody>{tr_matched()}</tbody>
@@ -1025,9 +1160,9 @@ tr.clickable:hover td{{background:#dceeff}}
 </section>
 
 <section>
-  <h2>In reference — not found in API ({len(ref_only)})</h2>
+  <h2>In spreadsheet, not in API ({len(ref_only)})</h2>
   <details {'open' if ref_only else ''}>
-    <summary>Sensors in your spreadsheets with no API match — not installed, wrong ID, or data entry error</summary>
+    <summary>Spreadsheet locations with no API sensor matched to them: not installed, wrong ID, or a data entry error</summary>
     <div class="tbl-scroll">
     <table>
       <thead><tr><th>Name</th><th>Coordinates</th><th>Source file</th><th>Status</th><th>Notes</th><th>Reason</th></tr></thead>
@@ -1038,9 +1173,9 @@ tr.clickable:hover td{{background:#dceeff}}
 </section>
 
 <section>
-  <h2>In API — not in reference ({len(api_only)})</h2>
+  <h2>In API, not in spreadsheet ({len(api_only)})</h2>
   <details {'open' if api_only else ''}>
-    <summary>Sensors the API reports that are not in any spreadsheet — undocumented or recently added</summary>
+    <summary>Sensors the API reports that are not in any spreadsheet: undocumented or recently added</summary>
     <div class="tbl-scroll">
     <table>
       <thead><tr><th>API name</th><th>API ID</th><th>Site #</th><th>Coordinates</th><th>Health</th><th>Status</th></tr></thead>
@@ -1051,10 +1186,10 @@ tr.clickable:hover td{{background:#dceeff}}
 </section>
 
 {'<section>' if colocated else ''}
-{f'<h2>&#128101; Co-located Pairs ({len(colocated)})</h2>' if colocated else ''}
+{f'<h2>&#128101; Second sensor at the same spot ({len(colocated)})</h2>' if colocated else ''}
 {'<p class="dim">These API sensors share the same physical location as a matched sensor. They likely represent the opposite direction of travel. Add a second row in your spreadsheet for each one.</p>' if colocated else ''}
 {'''<details open>
-  <summary>API sensors co-located with a matched sensor (&le; 10 m apart) — not yet in any spreadsheet</summary>
+  <summary>API sensors at the same spot as a matched sensor (&le; 10 m apart), not yet in any spreadsheet</summary>
   <div class="tbl-scroll">
   <table>
     <thead><tr><th>API name</th><th>API ID</th><th>Site #</th><th>Coordinates</th><th>Health</th><th>Note</th></tr></thead>
@@ -1082,7 +1217,7 @@ map.whenReady(function() {{
   _tiles.getContainer().style.zIndex = 0;
 }});
 
-function dot(color, size=14, hollow=false, confirmed=false) {{
+function dot(color, size=14, hollow=false, confirmed=false, shape='') {{
   // hollow = out-of-support: transparent fill + thick coloured ring, so these
   // read as a different *class* of marker, not just a different health colour.
   // confirmed = reference and API agree on this spot — draw a gold halo so a
@@ -1091,13 +1226,17 @@ function dot(color, size=14, hollow=false, confirmed=false) {{
     ? `background:#fff;border:3px solid ${{color}};box-shadow:0 0 4px rgba(0,0,0,.35)`
     : `background:${{color}};border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.4)`;
   const halo = confirmed ? `outline:3px solid #f1c40f;outline-offset:2px;` : '';
+  // not only colour: a retired sensor carries a cross, a sensor with no history a dashed outline
+  const inner2 = shape === 'dashed' ? `background:#eee;border:2px dashed #888;box-shadow:0 0 4px rgba(0,0,0,.25)` : inner;
+  const glyph = shape === 'cross' ? `<span style="color:#fff;font:bold ${{size-3}}px/${{size-4}}px Arial">&#215;</span>` : '';
   return L.divIcon({{
     className:'',
-    html:`<div style="width:${{size}}px;height:${{size}}px;border-radius:50%;${{inner}};${{halo}}"></div>`,
+    html:`<div style="width:${{size}}px;height:${{size}}px;border-radius:50%;box-sizing:border-box;display:flex;align-items:center;justify-content:center;${{inner2}};${{halo}}">${{glyph}}</div>`,
     iconSize:[size,size], iconAnchor:[size/2,size/2]
   }});
 }}
 
+{mf_init_js}
 const bounds = [];
 
 // Group API markers by coordinate — sensors sharing a location form a cluster
@@ -1135,19 +1274,22 @@ Object.values(apiGroups).forEach(group => {{
   // Confirmed if any sensor in the group has a matched reference — the whole
   // cluster gets the gold halo since they share one map position.
   const confirmed = group.some(s => s.ref_name);
+  const cat = hollow ? (color === '#27ae60' ? 'ob' : 'oo') : CAT_BY_COLOR[color];
 
+  const shape = cat === 'x' ? 'cross' : cat === 'n' ? 'dashed' : '';
   const ringInner = hollow
     ? `background:#fff;border:3px solid ${{color}};color:${{color}}`
+    : cat === 'n' ? `background:#eee;border:2px dashed #888;color:#666`
     : `background:${{color}};border:2px solid #fff;color:#fff`;
   const halo = confirmed ? `outline:3px solid #f1c40f;outline-offset:2px;` : '';
   const icon = n === 1
-    ? dot(color, 16, hollow, confirmed)
+    ? dot(color, 16, hollow, confirmed, shape)
     : L.divIcon({{
         className: '',
-        html: `<div style="width:24px;height:24px;border-radius:50%;${{ringInner}};${{halo}}
+        html: `<div style="width:24px;height:24px;border-radius:50%;box-sizing:border-box;${{ringInner}};${{halo}}
                     box-shadow:0 0 4px rgba(0,0,0,.4);
                     display:flex;align-items:center;justify-content:center;
-                    font-size:11px;font-weight:bold">${{n}}</div>`,
+                    font-size:11px;font-weight:bold">${{n}}${{cat === 'x' ? '&#215;' : ''}}</div>`,
         iconSize: [24,24], iconAnchor: [12,12]
       }});
 
@@ -1158,10 +1300,10 @@ Object.values(apiGroups).forEach(group => {{
             ? ` <span style="color:#aaa">(inherited from co-located sensor)</span>` : '')
       : `<br><span style="color:#aaa">Project: not in reference</span>`;
     const oosNote = (s.health || 0) >= {BONUS_HEALTH_PCT}
-      ? ' — ★ still reporting (bonus)'
+      ? ' — still reporting (a bonus)'
       : ((s.health || 0) > 0 ? ' — occasionally reporting' : ' — offline (expected)');
     const acct = s.accountability === 'out_of_support'
-      ? `<br><span style="color:#7f8c8d">Out of support` + `${{oosNote}}</span>`
+      ? `<br><span style="color:#7f8c8d">Contract ended` + `${{oosNote}}</span>`
       : '';
     const refLine = s.ref_name
       ? `<br><span style="color:#b8860b">&#10003; Confirmed match: <b>${{s.ref_name}}</b></span>`
@@ -1169,12 +1311,19 @@ Object.values(apiGroups).forEach(group => {{
         + (s.ref_dist ? ` <span style="color:#aaa">${{s.ref_dist}} m</span>` : '')
       : '';
     const siteLine = s.site_code ? `<br>Site #: ${{s.site_code}}` : '';
-    return `<b>API: ${{s.name}}</b><br>ID: ${{s.id}}` + siteLine + `<br>`+
+    return `<b>API sensor: ${{s.name}}</b><br>ID: ${{s.id}}` + siteLine + `<br>`+
       `Health: ${{s.health != null ? s.health+'%' : 'No data'}}<br>`+
       `Active: ${{s.active ? 'Yes' : 'No'}}` + projectLine + acct + refLine;
   }}).join('<hr style="margin:6px 0">');
 
-  L.marker([lat, lon], {{icon}}).bindPopup(popup).addTo(map);
+  const tip = group.map(s => {{
+    const status = !s.active ? 'retired (no longer in the API)'
+      : GROUP_IS_BT ? 'uptime is not measured (judged by its paths)'
+      : s.health == null ? 'no history yet'
+      : s.health + '% uptime' + (s.accountability === 'out_of_support' ? ', contract ended' : '');
+    return '<b>' + String(s.name).replace(/\\s+/g, ' ').trim() + '</b>: ' + status;
+  }}).join('<br>');
+  L.marker([lat, lon], {{icon}}).bindPopup(popup).bindTooltip(tip, {{direction:'top', offset:[0,-10]}}).addTo(catLayer(cat));
   bounds.push([lat, lon]);
 }});
 
@@ -1184,10 +1333,10 @@ refMarkers.forEach(s => {{
     ? `<br>Project: <b>${{s.project}}</b>`
     : `<br><span style="color:#aaa">Project: none listed</span>`;
   const acctLine = oos
-    ? `<br><span style="color:#7f8c8d">Out of support — gap here is expected</span>` : '';
+    ? `<br><span style="color:#7f8c8d">Contract ended: a gap here is expected</span>` : '';
   L.marker([s.lat, s.lon], {{icon: dot('#1f4e79', 14, oos)}})
-   .bindPopup(`<b>REF: ${{s.name}}</b><br>Source: ${{s.source}}` + projectLine + acctLine)
-   .addTo(map);
+   .bindPopup(`<b>Spreadsheet: ${{s.name}}</b><br>Source: ${{s.source}}` + projectLine + acctLine)
+   .addTo(catLayer(oos ? 'so' : 's'));
   bounds.push([s.lat, s.lon]);
 }});
 
@@ -1203,26 +1352,10 @@ linkLines.forEach(l => {{
      `&#128205; Spreadsheet: ${{l.ref_coords}}<br>`+
      `&#x1F4F6; API: ${{l.api_coords}}<br>`+
      `Distance: ${{l.dist != null ? '<b>'+l.dist+' m</b>' : 'unknown'}}</span>`)
-   .addTo(map);
+   .addTo(catLayer(l.dist == null ? 'lu' : l.dist < WARN_M ? 'lg' : l.dist < ALERT_M ? 'lo' : 'lr'));
 }});
 
-const legend = L.control({{position:'bottomright'}});
-legend.onAdd = () => {{
-  const d = L.DomUtil.create('div','legend');
-  d.innerHTML =
-    '<b>Legend</b><br>'+
-    '<i style="background:#27ae60"></i>API healthy (&ge;90%)<br>'+
-    '<i style="background:#e67e22"></i>API degraded (70–90%)<br>'+
-    '<i style="background:#c0392b"></i>API critical (&lt;70%)<br>'+
-    '<i style="background:#888"></i>API retired / no data<br>'+
-    '<i style="background:#1f4e79"></i>Reference location<br>'+
-    '<i style="background:#27ae60;outline:3px solid #f1c40f;outline-offset:2px"></i>Confirmed match (ref + API agree, &lt;{COORD_WARN_M} m)<br>'+
-    '<span style="display:inline-block;width:22px;border-top:2.5px dashed #27ae60;vertical-align:middle;margin-right:6px"></span>Match &lt;{COORD_WARN_M} m<br>'+
-    '{_corner_line_amber}'+
-    '{_corner_line_red}';
-  return d;
-}};
-legend.addTo(map);
+{mf_ui_js}
 
 if (bounds.length) map.fitBounds(bounds, {{padding:[40,40]}});
 else map.setView([34.9,33.0],9);
@@ -1249,7 +1382,7 @@ function flyToBoth(refLat, refLon, apiLat, apiLon, label) {{
   const midLat = (refLat + apiLat) / 2, midLon = (refLon + apiLon) / 2;
   activePopup = L.popup()
     .setLatLng([midLat, midLon])
-    .setContent(`<b>${{label}}</b><br><span style="font-size:11px;color:#555">Blue dot = spreadsheet &nbsp;|&nbsp; Coloured dot = API</span>`)
+    .setContent(`<b>${{label}}</b><br><span style="font-size:11px;color:#555">Blue dot = spreadsheet &nbsp;|&nbsp; Coloured dot = API sensor</span>`)
     .openOn(map);
 }}
 

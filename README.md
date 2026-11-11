@@ -59,6 +59,8 @@ it the page opens in your browser instead, with a console that must stay open). 
 window or press **Quit** in the tab bar to stop it; errors, if any, go to
 `results/control_room.log`.
 
+**Reading the sensor maps.** Above each map (Traffic Detection, Bluetooth, VMS) a summary line counts the dots - under 90% uptime, contract ended, retired or no history - and its buttons show only that group. Under it, the key lists every dot style with its count; click a style to show only that style (click it again to show all, ctrl+click adds or removes one). A dot's colour is lifetime uptime. The key also explains the marks on top of the dots (gold halo = confirmed match, number = sensors at one spot, orange N = your note, big rings on Bluetooth = triangulation verdicts); a short distance line is marked by a dashed ring when you filter to it.
+
 **Reload app (top bar).** Restarts the Control Room with the latest code and the local database, for when files changed or you copied in a newer `history.db`; nothing is fetched from the live feed or OMNIA (that is *Refresh*). The window closes and reopens within a few seconds; flags and notes are already saved.
 
 **Notes on sensors.** Click a sensor on the Traffic Detection, Bluetooth or VMS tab (or a Bluetooth sensor on the Paths

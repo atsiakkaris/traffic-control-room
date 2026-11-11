@@ -332,10 +332,28 @@ def test_qa_ref_only_status_is_the_4th_column(tmp_path):
     out = qa.generate_html("Bluetooth", [], ref, matches, tmp_path / "qa.html")
     html = out.read_text(encoding="utf-8")
 
-    thead = re.search(r"<h2>In reference.*?<thead>(.*?)</thead>", html, re.S).group(1)
+    thead = re.search(r"<h2>In spreadsheet, not in API.*?<thead>(.*?)</thead>", html, re.S).group(1)
     headers = re.findall(r"<th>(.*?)</th>", thead)
     assert headers[3] == "Status", headers
 
     row = re.search(r'<tr class="clickable".*?</tr>', html, re.S).group(0)
     cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
     assert "Awaiting power" in cells[3], cells
+
+
+# ── map summary + clickable key ────────────────────────────────────────────────
+
+from pathlib import Path  # noqa: E402
+
+
+def test_sensor_page_has_the_summary_and_key_and_only_offers_distance_bands_it_can_reach(tmp_path):
+    import qa
+    apis = [dict(_api("a", 35.0, 33.0), health_pct=95.0, active=True, total_runs=10, site_code="1", last_seen="2026-11-11",
+                 first_seen="2026-10-01", last_run="2026-11-11")]
+    refs = [dict(_ref("Site", 35.0, 33.0), source="test.xlsx")]
+    matches = qa.match_sensors(refs, apis, max_dist=300)
+    out = qa.generate_html("Traffic Detection", apis, refs, matches, tmp_path / "q.html", max_dist=300)
+    page = Path(out).read_text(encoding="utf-8")
+    assert 'id="mapfilter"' in page and "catLayer(cat)" in page and "L.control" not in page.split("const bounds")[1].split("flyTo")[0]
+    assert "!true" in page and "!false" in page            # 300 m radius: the 100-300 band exists, the over-500 band does not
+    assert "__WARN__" not in page and "__AMBER" not in page and "__RED__" not in page and "__BT__" not in page
