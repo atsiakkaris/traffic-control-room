@@ -529,6 +529,11 @@ MAP_FILTER_CSS = """
 
 MAP_FILTER_INIT_JS = """
 const GROUP_IS_BT = __BT__;
+// Bluetooth sensors have no uptime of their own. When the Control Room hands over the triangulation
+// verdicts, the dots are coloured by verdict instead; without them they stay "no sensor uptime" grey.
+const HAS_VERDICTS = __HASV__;
+const VERDICT_LABELS = __VLABELS__;
+const VERDICT_COLOR = {faulty_high: '#c0392b', faulty_likely: '#c0392b', path_problem: '#e67e22', working: '#27ae60', explained: '#27ae60'};
 // Every marker and line goes into the layer of its style, so the key can show and hide a style at once.
 const CAT_BY_COLOR = {'#27ae60':'g', '#e67e22':'o', '#c0392b':'r', '#aaa':'n', '#888':'x'};
 const CAT_LAYERS = {}, CAT_N = {};
@@ -555,9 +560,18 @@ MAP_FILTER_UI_JS = """
     s:  ['#1f4e79', false, 'Location', 'in your spreadsheet, no API sensor matched to it'],
     so: ['#1f4e79', true,  'Contract ended', 'spreadsheet location of an out-of-support project']
   };
+  var BTV = IS_BT && HAS_VERDICTS;
+  if (BTV) {
+    STYLE.g  = ['#27ae60', false, 'Working', 'a path through it works (or its failing paths end at a faulty sensor)'];
+    STYLE.o  = ['#e67e22', false, 'Some paths fail', 'it works, but some of its paths fail: look at the paths, not the sensor'];
+    STYLE.r  = ['#c0392b', false, 'Faulty', 'no path through it works (big ring = high confidence); see the Triangulation panel'];
+    STYLE.n  = ['#aaaaaa', false, 'Not enough evidence', 'no usable path, or only unclear ones', 'dashed'];
+    STYLE.ob = ['#27ae60', true,  'Contract ended, working', 'contract ended, but a path through it works (a bonus)'];
+    STYLE.oo = ['#95a5a6', true,  'Contract ended, not working', 'contract ended, no working path: a failure is expected'];
+  }
   var LINES = [['lg', '#27ae60', 'under __WARN__ m'], ['lo', '#e67e22', '__WARN__ to __AMBER_HI__ m'], ['lr', '#c0392b', 'over __ALERT__ m'], ['lu', '#aaaaaa', 'distance unknown']];
   var GROUPS = [
-    ['API sensors (colour = uptime over all runs so far)', ['g', 'o', 'r', 'n', 'x']],
+    [IS_BT && HAS_VERDICTS ? 'API sensors (colour = triangulation verdict)' : 'API sensors (colour = uptime over all runs so far)', ['g', 'o', 'r', 'n', 'x']],
     ['API sensors whose contract ended (hollow dot)', ['ob', 'oo']],
     ['Your spreadsheet (blue)', ['s', 'so']]
   ];
@@ -620,7 +634,10 @@ MAP_FILTER_UI_JS = """
     var total = ['g', 'o', 'r', 'n', 'x', 'ob', 'oo'].reduce(function(a, c) { return a + n(c); }, 0);
     var sum = document.createElement('div'); sum.className = 'mfsum';
     sum.appendChild(document.createTextNode(total + ' sensor dots on the map: '));
-    var PRESETS = IS_BT
+    var PRESETS = BTV
+      ? [['Faulty', ['r'], 'Bluetooth sensors with no working path'], ['Some paths fail', ['o'], 'Working sensors with failing paths'],
+         ['Contract ended', ['ob', 'oo'], 'Out-of-support sensors'], ['Not enough evidence', ['n', 'x'], 'No usable path, or no longer in the API']]
+      : IS_BT
       ? [['Contract ended', ['ob', 'oo'], 'Out-of-support sensors'], ['Judged by their paths', ['n', 'x', 'g', 'o', 'r'], 'Bluetooth sensors have no uptime of their own: use the Triangulation panel']]
       : [['Under 90% uptime', ['o', 'r'], 'Orange and red dots: in-support sensors that worked in less than 90% of all runs so far'],
          ['Contract ended', ['ob', 'oo'], 'Out-of-support sensors: a failure is expected'],
@@ -808,7 +825,9 @@ def _badge_active(active):
     return '<span class="badge green">Active</span>' if active else '<span class="badge red">Retired</span>'
 
 
-def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False, not_electrified=0, max_dist=None):
+def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False, not_electrified=0, max_dist=None,
+                  verdicts=None, verdict_labels=None):
+    """verdicts = {sensor id: triangulation verdict} (Bluetooth only): colours the dots by verdict."""
     try:
         from zoneinfo import ZoneInfo
         _cy = ZoneInfo("Asia/Nicosia")
@@ -830,7 +849,10 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
     _show_amber = match_max_m > COORD_WARN_M
     _show_red = match_max_m > COORD_ALERT_M
 
-    mf_init_js = MAP_FILTER_INIT_JS.replace('__BT__', 'true' if group == 'Bluetooth' else 'false')
+    verdicts = {str(k): v for k, v in (verdicts or {}).items()} if group == 'Bluetooth' else {}
+    mf_init_js = (MAP_FILTER_INIT_JS.replace('__BT__', 'true' if group == 'Bluetooth' else 'false')
+                  .replace('__HASV__', 'true' if verdicts else 'false')
+                  .replace('__VLABELS__', json.dumps(verdict_labels or {}).replace('</', '<\\/')))
     mf_ui_js = (MAP_FILTER_UI_JS.replace('__WARN__', str(COORD_WARN_M)).replace('__ALERT__', str(COORD_ALERT_M))
                 .replace('__AMBER_HI__', str(_amber_hi)).replace('__AMBER__', 'true' if _show_amber else 'false')
                 .replace('__RED__', 'true' if _show_red else 'false').replace('__BT__', 'true' if group == 'Bluetooth' else 'false'))
@@ -868,6 +890,7 @@ def generate_html(group, api_sensors, ref_sensors, matches, out_path, live=False
                 'accountability': s.get('accountability', ACCT_SUPPORTED),
                 'project': s.get('project'),
                 'project_source': s.get('project_source'),
+                'verdict': verdicts.get(str(s['id'])),
                 **_ref_match_fields(s)} for s in api_sensors]
 
     ref_map = [{'name': s['name'], 'lat': s['lat'], 'lon': s['lon'], 'source': s['source'],
@@ -1254,6 +1277,7 @@ Object.values(apiGroups).forEach(group => {{
 
   // Colour driven by worst health in the group
   function sensorColor(s) {{
+    if (s.active && GROUP_IS_BT && HAS_VERDICTS) return VERDICT_COLOR[s.verdict] || '#aaa';
     return !s.active ? '#888' : s.health == null ? '#aaa'
          : s.health >= 90 ? '#27ae60' : s.health >= 70 ? '#e67e22' : '#c0392b';
   }}
@@ -1264,7 +1288,7 @@ Object.values(apiGroups).forEach(group => {{
   if (allOOS) {{
     hollow = true;
     // green ring if any is still reporting (bonus value), grey if all dark
-    color = group.some(s => (s.health || 0) >= {BONUS_HEALTH_PCT}) ? '#27ae60' : '#95a5a6';
+    color = group.some(s => (s.health || 0) >= {BONUS_HEALTH_PCT} || (HAS_VERDICTS && VERDICT_COLOR[s.verdict] === '#27ae60')) ? '#27ae60' : '#95a5a6';
   }} else {{
     const colors = group.map(sensorColor);
     const priority = ['#c0392b','#e67e22','#27ae60','#aaa','#888'];
@@ -1318,7 +1342,7 @@ Object.values(apiGroups).forEach(group => {{
 
   const tip = group.map(s => {{
     const status = !s.active ? 'retired (no longer in the API)'
-      : GROUP_IS_BT ? 'uptime is not measured (judged by its paths)'
+      : GROUP_IS_BT ? (HAS_VERDICTS && s.verdict ? (VERDICT_LABELS[s.verdict] || s.verdict) + (s.accountability === 'out_of_support' ? ', contract ended' : '') : 'uptime is not measured (judged by its paths)')
       : s.health == null ? 'no history yet'
       : s.health + '% uptime' + (s.accountability === 'out_of_support' ? ', contract ended' : '');
     return '<b>' + String(s.name).replace(/\\s+/g, ' ').trim() + '</b>: ' + status;

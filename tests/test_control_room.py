@@ -198,6 +198,34 @@ def test_sensor_route_serves_page_and_404s_unknown_group(tmp_path):
         srv.shutdown()
 
 
+def test_site_visits_page_and_saves(tmp_path):
+    a = {"id": "1", "name": "Loop 1", "lat": 35.17, "lon": 33.36, "active": True, "site_code": "1001"}
+    inputs = [{"group": "Traffic Detection", "slug": "traffic-detection", "api": [a], "verdicts": {},
+               "matches": [{"type": "match", "api": a, "ref": {"name": "Row", "lat": 35.173, "lon": 33.36}, "distance_m": 333}]}]
+    calls = []
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", notes_file=tmp_path / "n.json", page_builder=lambda: ("", {}),
+                         paths_provider=dict, views={"traffic-detection": ("Traffic Detection", "TD", 300)},
+                         db_file=tmp_path / "none.db", choose_path=None, downloads_dir=tmp_path / "dl",
+                         visit_inputs=lambda: calls.append(1) or inputs)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        html = urllib.request.urlopen(base + "/visits").read().decode("utf-8")
+        assert "Site visits" in html and "D1-01" in html and "333 m apart" in html
+        empty = urllib.request.urlopen(base + "/visits?kinds=&groups=traffic-detection&per_day=5").read().decode("utf-8")
+        assert '"days": []' in empty                                # nothing ticked means nothing, not everything
+        assert len(calls) == 1                                      # inputs cached until the DB or the workbook changes
+        code, out = _req(base + "/api/visits/save", "POST", {"format": "csv", "kinds": ["far_apart"], "groups": ["traffic-detection"], "per_day": 15})
+        assert code == 200 and out["path"].endswith(".csv") and "Loop 1" in Path(out["path"]).read_text(encoding="utf-8-sig")
+        code, out = _req(base + "/api/visits/save", "POST", {"format": "kml", "kinds": ["far_apart"], "groups": ["traffic-detection"], "per_day": 15})
+        assert code == 200 and Path(out["path"]).read_text(encoding="utf-8").startswith("<?xml")
+        assert _req(base + "/api/visits/save", "POST", {"format": "exe"})[0] == 400
+        assert _req(base + "/api/visits/save", "POST", {"format": "csv", "kinds": []})[0] == 400       # nothing to visit
+        assert _req(base + "/api/visits/save", "POST", {"format": "csv"}, {"Origin": "http://evil.example"})[0] == 403
+    finally:
+        srv.shutdown()
+
+
 def test_real_sensor_page_builds_without_writing_to_the_db(monkeypatch):
     import pytest
     import qa
@@ -245,8 +273,8 @@ def test_sensor_pages_talk_to_the_app_shell_not_a_second_tab():
 
 def test_shell_has_one_frame_per_view_and_a_refresh_button(tmp_path):
     shell = cr.build_shell(cr.sensor_views(), "?path=7")
-    assert shell.count("<iframe") == 2 + len(cr.sensor_views())        # paths + wiring + sensor tabs
-    assert 'data-t="wiring"' in shell
+    assert shell.count("<iframe") == 3 + len(cr.sensor_views())        # paths + wiring + site visits + sensor tabs
+    assert 'data-t="wiring"' in shell and 'data-t="visits"' in shell
     assert 'src="/map?path=7"' in shell and 'id="rf"' in shell and "crShow" in shell
 
 

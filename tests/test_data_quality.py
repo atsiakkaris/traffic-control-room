@@ -323,6 +323,27 @@ def test_qa_report_status_columns_present_in_both_panels(tmp_path):
     assert "class=badge" not in html
 
 
+def test_bluetooth_dots_carry_the_triangulation_verdict_only_when_given(tmp_path):
+    import json
+    import re
+    import qa
+    api = [{"id": 7, "name": "BT 7", "lat": 35.0, "lon": 33.0, "active": True, "health_pct": None,
+            "total_runs": 0, "last_seen": None, "first_seen": None}]
+    matches = [{"type": "api_only", "ref": None, "api": api[0]}]
+
+    def markers(html):
+        return json.loads(re.search(r"const apiMarkers = (\[.*?\]);\n", html, re.S).group(1))
+
+    html = qa.generate_html("Bluetooth", api, [], matches, tmp_path / "a.html",
+                            verdicts={"7": "faulty_high"}, verdict_labels={"faulty_high": "Faulty"}).read_text(encoding="utf-8")
+    assert "const HAS_VERDICTS = true;" in html and markers(html)[0]["verdict"] == "faulty_high"
+    html = qa.generate_html("Bluetooth", api, [], matches, tmp_path / "b.html").read_text(encoding="utf-8")
+    assert "const HAS_VERDICTS = false;" in html and markers(html)[0]["verdict"] is None
+    # never on the other groups, even if passed
+    html = qa.generate_html("VMS", api, [], matches, tmp_path / "c.html", verdicts={"7": "working"}).read_text(encoding="utf-8")
+    assert "const HAS_VERDICTS = false;" in html
+
+
 def test_qa_ref_only_status_is_the_4th_column(tmp_path):
     import re
     import qa

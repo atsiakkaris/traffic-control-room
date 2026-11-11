@@ -477,6 +477,12 @@ address and log: `plan_renames` / `apply_renames` / `undo_renames` send only the
 OMNIA afterwards because the answer text of that call is not relied on. In `tools/control_room.py`:
 `POST /api/edit/plan` (reads OMNIA live, sends nothing, returns a single-use token) and `POST /api/edit/apply` (needs
 `CONTROL_ROOM_ALLOW_EDIT`, the typed YES, the token, and re-reads OMNIA to refuse paths edited since the preview).
+**Site visits** (`/visits`, `runner/site_visits.py`, pure): `visit_inputs()` in the app runs the same matching as the sensor tabs for
+every group (plus the Bluetooth verdicts), cached on the `history.db` and `QA Locations.xlsx` mtimes; the notes are read per request.
+`collect_items` turns that into things to check, `group_stops` merges what is within 150 m, `plan` assigns stops to the nearest area
+centre, orders them (nearest neighbour then 2-opt, straight-line, open route from the area centre) and cuts them into days;
+`field_sheet_rows` and `to_kml` are the exports, written by `POST /api/visits/save` (the server builds the file; the page only names
+the filters). Google Maps links carry at most 10 points each, their waypoint limit.
 Built pages are cached in the server keyed by `results/history.db` mtime (warmed in a
 thread at start-up; `?refresh=1` forces a rebuild). `/` is a small shell page (tab bar + one iframe per view, all kept loaded); the map itself is
 served at `/map`. The shell exposes `crShow(tab, {path|lat,lon})`, which the pages inside

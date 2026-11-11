@@ -4,7 +4,8 @@ This explains the rules the monitor and the Control Room use for Bluetooth (BT) 
 language, so they can be explained to colleagues. Every number below is a setting in the code (named in
 brackets), not a guess made on the day.
 
-There are three layers, each built on the one before (plus a separate configuration check, section 6):
+There are three layers, each built on the one before (plus a separate configuration check, section 6, and the site-visit list,
+section 8):
 
 1. **One reading** of one path (the monitor, every 6 hours) -> `ok`, `failing`, `stale` or `missing`.
 2. **The path's history** (last 20 readings) -> *good*, *no data*, *unrealistic*, *stale*, *intermittent* or *unknown*.
@@ -176,9 +177,34 @@ The page also lists the nodes that need attention and the API sensors no node st
 |---|---|
 | **Paths tab, inspector** | The path's category, percentage, "bad since" and the last stored values (section 2). |
 | **Paths tab, click a sensor** | The sensor's verdict, reason, and its paths with their states (sections 3-5). |
+| **Bluetooth sensors tab, dot colours** | Every sensor's verdict (section 5): green *Working* or *Probably fine*, orange *Works, but some paths fail*, red *Faulty* (high or likely), dashed grey *Not enough evidence*. Hollow dots (contract ended) are green when a path through them works. |
 | **Bluetooth sensors tab, Triangulation panel** | All suspects, rings on the map, and a CSV export. |
 | **Wiring tab** | Every path with a wiring finding, the nodes that need attention, and a CSV export (section 6). |
 | **Paths tab, inspector and sensor popups** | A "Wiring" line for the selected path; the OMNIA node and path count in a sensor popup. |
 
 The settings are listed at the top of `runner/bt_data_quality.py` (path categories) and
 `runner/bt_sensor_suspects.py` (sensor verdicts).
+
+## 8. Site visits: what goes on the list
+
+Some doubts can only be settled by going there. The **Site visits** tab (`runner/site_visits.py`) collects them from the same
+spreadsheet matching as the sensor tabs (Traffic Detection, Bluetooth, VMS):
+
+| On the list as | Rule |
+|---|---|
+| **Positions differ** | Matched to a spreadsheet row, but the two positions are **100 m** or more apart (`WARN_M`, same line as the amber distance on the sensor maps). Both positions are given. |
+| **Probably the same sensor** | An API sensor with no spreadsheet row and an *active* spreadsheet row with no API sensor, within **1 km** of each other (`PAIR_M`), closest pairs first. One visit settles both. |
+| **Not in the spreadsheet** | An API sensor (still in the feed) with no spreadsheet row and no unmatched row within 1 km. |
+| **No API sensor** | A spreadsheet row marked active (not awaiting power or decommissioned) with no API sensor and no unmatched sensor within 1 km. |
+| **Retired from the API** | The sensor's ID was missing from the latest monitor run. |
+| **Bluetooth sensor faulty** | Triangulation verdict *Faulty (high confidence)* or *Faulty (likely)* (section 5). |
+| **Your note** | You wrote a note on the sensor. |
+
+One sensor can be on the list for several reasons; they are shown together. Co-located twins (a second sensor within 15 m of a
+matched one, usually the other direction) are not listed: they share their twin's row.
+
+**Stops and days.** Things within **150 m** of each other are one stop (`MERGE_M`). Each stop belongs to the nearest area centre
+(Nicosia, Limassol, Larnaca, Paphos, Famagusta; `AREAS`). Within an area the stops are ordered from the centre: always the nearest
+unvisited stop next, then any two legs that cross are untangled (2-opt) until no change shortens the route. The order uses
+straight-line distance, so the real drive can be longer; it is meant to avoid doubling back, not to time the day. An area with more
+stops than *Stops per day* (15 by default) is cut into several days along that order.

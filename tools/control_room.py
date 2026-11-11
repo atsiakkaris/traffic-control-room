@@ -962,8 +962,8 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #stage iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;visibility:hidden}
 #stage iframe.on{visibility:visible}
 </style></head><body>
-<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
-<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe>__FRAMES__</div>
+<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><a data-t="visits" title="Plan on-site checks of sensors whose position or existence is in doubt">Site visits</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe><iframe id="f-visits"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
 function frame(t) { return document.getElementById('f-' + t); }
@@ -979,8 +979,8 @@ function render() {
 window.crShow = function(t, o) {
   o = o || {};
   var f = frame(t);
-  if (t === 'wiring') {
-    if (!f.getAttribute('src')) f.src = '/wiring';
+  if (t === 'wiring' || t === 'visits') {
+    if (!f.getAttribute('src')) f.src = '/' + t;
   } else if (t !== 'paths') {
     var q = o.lat != null ? '?lat=' + o.lat + '&lon=' + o.lon + (o.path ? '&path=' + encodeURIComponent(o.path) : '') : '';
     if (q || !f.getAttribute('src')) f.src = '/sensors/' + t + q;
@@ -1065,17 +1065,238 @@ def build_sensor_page(slug, views=None):
     matches = qa.match_sensors(ref_sensors, api_sensors, max_dist=max_dist)
     qa.annotate_accountability(api_sensors, matches, qa.load_project_accountability(), max_dist=max_dist)
     qa.annotate_ref_accountability(ref_sensors, qa.load_project_accountability())
-    with tempfile.TemporaryDirectory() as tmp:
-        out = qa.generate_html(group, api_sensors, ref_sensors, matches, Path(tmp) / "qa.html",
-                               not_electrified=not_electrified, max_dist=max_dist)
-        page = Path(out).read_text(encoding="utf-8")
+    suspects = None
     if group == "Bluetooth":
         import bt_sensor_suspects
-        tri = triangulation_html(bt_sensor_suspects.analyse())
+        suspects = bt_sensor_suspects.analyse()
+    with tempfile.TemporaryDirectory() as tmp:
+        out = qa.generate_html(group, api_sensors, ref_sensors, matches, Path(tmp) / "qa.html",
+                               not_electrified=not_electrified, max_dist=max_dist,
+                               verdicts={sid: v["verdict"] for sid, v in suspects["sensors"].items()} if suspects else None,
+                               verdict_labels=bt_sensor_suspects.VERDICTS if suspects else None)
+        page = Path(out).read_text(encoding="utf-8")
+    if suspects:
+        tri = triangulation_html(suspects)
         page = page.replace("</body>", tri + "</body>", 1) if "</body>" in page else page + tri
     page = with_notes(page, slug)
     page = page.replace("</head>", TALL_MAP_CSS + "</head>", 1)
     return add_nav(page, slug, views)
+
+
+# ── site visits ──────────────────────────────────────────────────────────────
+
+def visit_inputs(views=None):
+    """What the Site visits tab plans from: per sensor group the API sensors, spreadsheet rows and their matches
+    (the same matching as the sensor tabs), plus the Bluetooth verdicts. Read-only, like the sensor pages."""
+    import qa
+    views = views or sensor_views()
+    workbook = ROOT / "QA Locations.xlsx"
+    if not workbook.exists():
+        return []
+    acct = qa.load_project_accountability()
+    out = []
+    for slug, (group, sheet, max_dist) in views.items():
+        api = qa.load_api_sensors(group)
+        ref, _ne = qa.load_reference([f"{workbook}::{sheet}"])
+        matches = qa.match_sensors(ref, api, max_dist=max_dist)
+        qa.annotate_accountability(api, matches, acct, max_dist=max_dist)
+        qa.annotate_ref_accountability(ref, acct)
+        verdicts = {}
+        if group == "Bluetooth":
+            import bt_sensor_suspects
+            verdicts = {sid: v["verdict"] for sid, v in bt_sensor_suspects.analyse()["sensors"].items()}
+        out.append({"group": group, "slug": slug, "api": api, "matches": matches, "verdicts": verdicts})
+    return out
+
+
+def visit_params(query, views):
+    """kinds, groups, per_day from the page's query string; anything unknown is dropped."""
+    import site_visits as sv
+    q = parse_qs(query or "", keep_blank_values=True)   # "kinds=" means none ticked, not "all"
+    pick =lambda name, allowed: [x for x in ((q.get(name) or [""])[0]).split(",") if x in allowed] if name in q else list(allowed)
+    try:
+        per_day = min(50, max(1, int((q.get("per_day") or [sv.PER_DAY])[0])))
+    except ValueError:
+        per_day = sv.PER_DAY
+    return pick("kinds", sv.KINDS), pick("groups", views), per_day
+
+
+def visit_plan(inputs, notes, kinds, groups, per_day):
+    """(all items, days) for the chosen filters. Notes are read fresh each time (they change while you work)."""
+    import site_visits as sv
+    data = [dict(g, notes=notes_for_group(g["slug"], notes)) for g in inputs]
+    items = sv.collect_items(data)
+    return items, sv.plan(items, per_day, kinds, groups)
+
+
+VISITS_PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Site visits</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
+<style>
+body{margin:0;font:13px Arial,sans-serif;color:#222;background:#f4f6f8}
+header{background:#1f4e79;color:#fff;padding:12px 18px}header h1{margin:0;font-size:18px}
+.sub{opacity:.85;margin-top:4px}
+.bar{padding:10px 18px;background:#fff;border-bottom:1px solid #ddd;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center}
+.bar label{white-space:nowrap}.bar .grp{color:#555;font-weight:bold}
+.bar button{padding:5px 11px;border:0;border-radius:5px;background:#2c3e50;color:#fff;cursor:pointer}
+.bar button.go{background:#2e86c1}
+.bar input[type=number]{width:46px}
+#saved{color:#555;word-break:break-all}
+#map{height:46vh;min-height:300px}
+.day{margin:14px 18px;background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.12);overflow:hidden}
+.day h3{margin:0;padding:10px 14px;font-size:14px;color:#fff}
+.day h3 a{color:#fff;font-weight:normal;margin-left:10px;font-size:12px}
+table{border-collapse:collapse;width:100%}
+td,th{border-top:1px solid #eee;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f6f7f9;font-size:12px;color:#555}
+td.code{font-weight:bold;white-space:nowrap}
+.k{display:inline-block;background:#eef2f7;border-radius:4px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px}
+.note{color:#9a5b00}
+a{color:#2e86c1;cursor:pointer}
+.empty{margin:30px 18px;color:#555;font-size:15px}
+.num{width:22px;height:22px;border-radius:50%;color:#fff;font:bold 10px/20px Arial;text-align:center;border:1px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.5)}
+@media print{.bar,#map,.noprint{display:none}.day{box-shadow:none;break-inside:auto;margin:8px 0}body{background:#fff}}
+</style></head><body>
+<header><h1>Site visits</h1><div class="sub" id="sub"></div></header>
+<div class="bar" id="bar"></div>
+<div id="map"></div>
+<div id="days"></div>
+<script>
+(function() {
+  var D = __DATA__;
+  var COL = ['#c0392b', '#e67e22', '#27ae60', '#8e44ad', '#16a085', '#2c3e50', '#d35400', '#7f8c8d'];
+  var shell = (window.parent !== window && window.parent.crShow) ? window.parent : null;
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function nav(p) { return 'https://www.google.com/maps/dir/?api=1&destination=' + p.lat.toFixed(6) + ',' + p.lon.toFixed(6); }
+  var nStops = 0, nItems = 0;
+  D.days.forEach(function(d) { nStops += d.stops.length; d.stops.forEach(function(s) { nItems += s.items.length; }); });
+  document.getElementById('sub').textContent = D.days.length
+    ? nItems + ' things to check at ' + nStops + ' stops over ' + D.days.length + ' day' + (D.days.length === 1 ? '' : 's') +
+      '. Stops are in driving order from the area centre (straight-line distance; the roads may add more).'
+    : 'Nothing to visit for the ticked options.';
+
+  // ── filters ──
+  var bar = document.getElementById('bar');
+  function box(name, value, label, n, checked) {
+    var l = document.createElement('label');
+    l.innerHTML = '<input type="checkbox" data-f="' + name + '" value="' + esc(value) + '"' + (checked ? ' checked' : '') + '> ' + esc(label) + ' (' + n + ')';
+    return l;
+  }
+  var g1 = document.createElement('span'); g1.className = 'grp'; g1.textContent = 'Check:'; bar.appendChild(g1);
+  Object.keys(D.kinds).forEach(function(k) { bar.appendChild(box('kinds', k, D.kinds[k], D.kind_counts[k] || 0, D.sel.kinds.indexOf(k) >= 0)); });
+  var g2 = document.createElement('span'); g2.className = 'grp'; g2.textContent = 'Groups:'; bar.appendChild(g2);
+  Object.keys(D.groups).forEach(function(s) { bar.appendChild(box('groups', s, D.groups[s], D.group_counts[s] || 0, D.sel.groups.indexOf(s) >= 0)); });
+  var pd = document.createElement('label'); pd.innerHTML = 'Stops per day <input type="number" id="perday" min="1" max="50" value="' + D.sel.per_day + '">'; bar.appendChild(pd);
+  function query() {
+    var q = {kinds: [], groups: []};
+    Array.prototype.forEach.call(bar.querySelectorAll('input[data-f]'), function(i) { if (i.checked) q[i.getAttribute('data-f')].push(i.value); });
+    q.per_day = +document.getElementById('perday').value || D.sel.per_day;
+    return q;
+  }
+  function button(text, cls, fn, title) { var b = document.createElement('button'); b.textContent = text; b.className = cls || ''; b.onclick = fn; if (title) b.title = title; bar.appendChild(b); return b; }
+  button('Plan again', 'go', function() {
+    var q = query();
+    location.search = '?kinds=' + q.kinds.join(',') + '&groups=' + q.groups.join(',') + '&per_day=' + q.per_day;
+  }, 'Rebuild the days with the ticked options');
+  var saved = document.createElement('span'); saved.id = 'saved';
+  function save(fmt) {
+    var q = query(); q.format = fmt;
+    saved.textContent = 'Choose where to save in the dialog that opened (it may be behind this window)...';
+    fetch('/api/visits/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(q)})
+      .then(function(r) { return r.json(); })
+      .then(function(r) {
+        saved.textContent = r.cancelled ? 'Cancelled - nothing saved.'
+          : r.path ? 'Saved to ' + r.path + (r.fallback ? ' (no Save dialog available, so the Downloads folder was used)' : '')
+          : 'Could not save: ' + (r.error || 'unknown error');
+      }).catch(function(e) { saved.textContent = 'Could not save: ' + e; });
+  }
+  button('Save field sheet (CSV)', '', function() { save('csv'); }, 'One row per thing to check, in driving order, with empty columns to fill in on site');
+  button('Save for Google My Maps (KML)', '', function() { save('kml'); }, 'Import into Google My Maps to see the days on your phone; every stop has navigate links');
+  button('Print', '', function() { window.print(); }, 'Print the day lists (the map and these buttons are left out)');
+  bar.appendChild(saved);
+
+  // ── map ──
+  var map = L.map('map');
+  map.whenReady(function() {
+    map.setMaxZoom(19);
+    var t = L.maplibreGL({style: 'https://tiles.openfreemap.org/styles/liberty', attribution:
+      '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' +
+      'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'}).addTo(map);
+    t.getContainer().style.zIndex = 0;
+  });
+  var bounds = [], markers = {};
+  function itemHtml(it) {
+    var h = '<b>' + esc(it.group) + (it.id ? ' ' + esc(it.id) : '') + (it.site_code ? ' (site ' + esc(it.site_code) + ')' : '') + ': ' + esc(it.name || it.ref_name) + '</b><br>';
+    it.kinds.forEach(function(k) { h += '<span class="k">' + esc(D.kinds[k]) + '</span>'; });
+    if (it.project) h += '<span class="k">' + esc(it.project) + '</span>';
+    h += '<br>' + it.checks.map(esc).join('<br>');
+    if (it.note) h += '<br><span class="note">Your note: ' + esc(it.note) + '</span>';
+    h += '<br>' + it.points.map(function(p) { return esc(p.label) + ' position: <a href="' + nav(p) + '" target="_blank">navigate</a>'; }).join(' &middot; ');
+    return h;
+  }
+  D.days.forEach(function(d, di) {
+    var col = COL[di % COL.length], line = [];
+    d.stops.forEach(function(s, si) {
+      var icon = L.divIcon({className: '', html: '<div class="num" style="background:' + col + '">' + (si + 1) + '</div>', iconSize: [22, 22], iconAnchor: [11, 11]});
+      markers[s.code] = L.marker([s.lat, s.lon], {icon: icon}).addTo(map)
+        .bindPopup('<b>' + esc(s.code) + '</b> (day ' + d.day + ', ' + esc(d.area) + ')<br>' + s.items.map(itemHtml).join('<hr style="margin:6px 0">'), {maxWidth: 340})
+        .bindTooltip(esc(s.code) + ': ' + esc(s.items[0].name || s.items[0].ref_name), {direction: 'top', offset: [0, -10]});
+      line.push([s.lat, s.lon]); bounds.push([s.lat, s.lon]);
+      s.items.forEach(function(it) {
+        it.points.slice(1).forEach(function(p) {
+          L.polyline([[s.lat, s.lon], [p.lat, p.lon]], {color: '#1f4e79', weight: 2, dashArray: '4,4', interactive: false}).addTo(map);
+          L.circleMarker([p.lat, p.lon], {radius: 5, color: '#1f4e79', fillColor: '#fff', fillOpacity: 1, weight: 2})
+            .bindTooltip(esc(s.code) + ': ' + esc(p.label.toLowerCase()) + ' position').addTo(map);
+          bounds.push([p.lat, p.lon]);
+        });
+      });
+    });
+    if (line.length > 1) L.polyline(line, {color: col, weight: 3, opacity: .7}).addTo(map);
+  });
+  if (bounds.length) map.fitBounds(bounds, {padding: [30, 30]}); else map.setView([35.0, 33.2], 9);
+
+  // ── day lists ──
+  var host = document.getElementById('days');
+  if (!D.days.length) host.innerHTML = '<div class="empty">' + (D.message || 'Nothing to visit for the ticked options.') + '</div>';
+  D.days.forEach(function(d, di) {
+    var sec = document.createElement('div'); sec.className = 'day';
+    var links = d.links.map(function(u, i) { return '<a class="noprint" href="' + esc(u) + '" target="_blank">Open in Google Maps' + (d.links.length > 1 ? ' (part ' + (i + 1) + ' of ' + d.links.length + ')' : '') + '</a>'; }).join('');
+    var h = '<h3 style="background:' + COL[di % COL.length] + '">Day ' + d.day + ' - ' + esc(d.area) + ': ' + d.stops.length + ' stop' + (d.stops.length === 1 ? '' : 's') +
+            ', about ' + d.km + ' km in straight lines' + links + '</h3><table><tr><th>Stop</th><th>What to check</th><th class="noprint"></th></tr>';
+    d.stops.forEach(function(s) {
+      h += '<tr><td class="code">' + esc(s.code) + '</td><td>' + s.items.map(itemHtml).join('<hr style="margin:6px 0;border:0;border-top:1px dashed #ccc">') + '</td>' +
+           '<td class="noprint" style="white-space:nowrap"><a data-show="' + esc(s.code) + '">show on map</a>' +
+           (shell ? '<br><a data-tab="' + esc(s.items[0].slug) + '" data-lat="' + s.lat + '" data-lon="' + s.lon + '">' + esc(s.items[0].group) + ' tab</a>' : '') + '</td></tr>';
+    });
+    sec.innerHTML = h + '</table>';
+    host.appendChild(sec);
+  });
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest && e.target.closest('[data-show],[data-tab]');
+    if (!a) return;
+    e.preventDefault();
+    if (a.hasAttribute('data-show')) {
+      var m = markers[a.getAttribute('data-show')];
+      document.getElementById('map').scrollIntoView({behavior: 'smooth'});
+      map.flyTo(m.getLatLng(), 16, {duration: 1.0});
+      setTimeout(function() { m.openPopup(); }, 1100);
+    } else if (shell) {
+      shell.crShow(a.getAttribute('data-tab'), {lat: +a.getAttribute('data-lat'), lon: +a.getAttribute('data-lon')});
+    }
+  });
+})();
+</script></body></html>"""
+
+
+def build_visits_page(items, days, kinds, groups, per_day, views, message=""):
+    import site_visits as sv
+    kind_counts, group_counts = sv.counts(items)
+    data = {"days": days, "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
+            "group_counts": group_counts, "sel": {"kinds": kinds, "groups": groups, "per_day": per_day}, "message": message}
+    return VISITS_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
 
 
 # ── server ───────────────────────────────────────────────────────────────────
@@ -1164,6 +1385,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (result or {"paths": {}})["paths"].get(pid, {}))
             except Exception as exc:
                 return self._send(500, {"error": str(exc)})
+        if path == "/visits":
+            try:
+                kinds, groups, per_day = visit_params(parts.query, self.server.views)
+                inputs = self.server.visits(force)
+                items, days = visit_plan(inputs, load_sensor_notes(self.server.notes_file), kinds, groups, per_day)
+                msg = "" if inputs else "QA Locations.xlsx was not found in the repo folder, so there is nothing to compare."
+                page = build_visits_page(items, days, kinds, groups, per_day, self.server.views, msg)
+            except Exception as exc:
+                return self._send(500, f"Could not build the page: {exc}".encode("utf-8"), "text/plain")
+            return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
         if path.startswith("/sensors/"):
             slug = path[len("/sensors/"):].strip("/")
             views = self.server.views
@@ -1298,6 +1529,47 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             return self._send(500, {"error": "could not complete: " + type(exc).__name__})
 
+    def _save_visits(self):
+        """Field sheet (CSV) or Google My Maps file (KML) for the ticked options. Built here, never sent by the page."""
+        import site_visits as sv
+        try:
+            body = self._body()
+            fmt = body.get("format")
+            if fmt not in ("csv", "kml"):
+                raise ValueError("format must be csv or kml")
+            q = "kinds=%s&groups=%s&per_day=%s" % (",".join(map(str, body.get("kinds") or [])),
+                                                  ",".join(map(str, body.get("groups") or [])), body.get("per_day"))
+            kinds, groups, per_day = visit_params(q, self.server.views)
+            _items, days = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), kinds, groups, per_day)
+            if not days:
+                return self._send(400, {"error": "nothing to visit for the ticked options"})
+            folder = Path(self.server.downloads_dir or DOWNLOADS)
+            name = f"site_visits_{datetime.now():%Y%m%d_%H%M%S}.{fmt}"
+            dest, fallback = None, False
+            if self.server.choose_path:
+                try:
+                    dest = self.server.choose_path(folder, name)
+                except Exception:
+                    fallback = True
+                else:
+                    if dest is None:
+                        return self._send(200, {"cancelled": True})
+            out = Path(dest) if dest else folder / name
+            if out.suffix.lower() != "." + fmt:
+                out = out.with_name(out.name + "." + fmt)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if fmt == "csv":
+                buf = io.StringIO()
+                csv.writer(buf).writerows([["" if v is None else v for v in r] for r in sv.field_sheet_rows(days)])
+                out.write_bytes(buf.getvalue().encode("utf-8-sig"))
+            else:
+                out.write_text(sv.to_kml(days), encoding="utf-8")
+        except (ValueError, AttributeError, TypeError) as exc:
+            return self._send(400, {"error": str(exc)})
+        except OSError as exc:
+            return self._send(500, {"error": f"could not write the file: {exc}"})
+        return self._send(200, {"path": str(out), "fallback": fallback})
+
     def do_POST(self):
         self._drain()
         if self.path == "/api/quit" and self._same_origin():
@@ -1332,6 +1604,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send(500, {"error": "could not fetch: " + type(exc).__name__})
             return self._send(200, {"fetched_at": snap["fetched_at"], "paths": len(snap["paths"]), "nodes": len(snap["nodes"])})
+        if self.path == "/api/visits/save" and self._same_origin():
+            return self._save_visits()
         if self.path == "/api/save-csv" and self._same_origin():
             try:
                 body = self._body()
@@ -1501,13 +1775,15 @@ def default_csv_name(name):
 
 
 _SAVE_DIALOG = r"""
-import sys, tkinter as tk
+import os, sys, tkinter as tk
 from tkinter import filedialog
+ext = os.path.splitext(sys.argv[2])[1] or ".csv"
+kind = {".kml": "KML files (Google My Maps)"}.get(ext.lower(), "CSV files")
 root = tk.Tk()
 root.withdraw()
 root.attributes("-topmost", True)
-path = filedialog.asksaveasfilename(parent=root, title="Save CSV", initialdir=sys.argv[1], initialfile=sys.argv[2],
-                                    defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+path = filedialog.asksaveasfilename(parent=root, title="Save " + ext[1:].upper(), initialdir=sys.argv[1], initialfile=sys.argv[2],
+                                    defaultextension=ext, filetypes=[(kind, "*" + ext), ("All files", "*.*")])
 sys.stdout.buffer.write(path.encode("utf-8"))
 """
 
@@ -1596,6 +1872,18 @@ class Server(ThreadingHTTPServer):
                 self._details = (page, sensor_details(page))
             return self._details[1]
 
+    def visits(self, force=False):
+        """The Site visits inputs, rebuilt when the database or QA Locations.xlsx changes (notes are read per request)."""
+        files = (self.db_file, ROOT / "QA Locations.xlsx")
+        stamps = tuple(os.stat(f).st_mtime if os.path.exists(f) else 0 for f in files)
+        with self.build_lock:
+            hit = getattr(self, "_visits", None)
+            if hit and hit[0] == stamps and not force:
+                return hit[1]
+            data = self.visit_inputs()
+            self._visits = (stamps, data)
+            return data
+
     def warm(self):
         """Build every page once, so the first browser load is instant."""
         for key, build in [("map", lambda: self.page_builder()[0])] + \
@@ -1609,7 +1897,8 @@ class Server(ThreadingHTTPServer):
 def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, delete_log=DELETE_LOG,
                 page_builder=None, paths_provider=None, post=None,
                 sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
-                fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path):
+                fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path,
+                visit_inputs=None):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
@@ -1640,6 +1929,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.downloads_dir = downloads_dir
     srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake
     srv.on_quit = None   # set by the app-window launcher to close the window
+    srv.visit_inputs = visit_inputs or (lambda: globals()["visit_inputs"](srv.views))   # tests pass a fake
     return srv
 
 

@@ -59,13 +59,24 @@ it the page opens in your browser instead, with a console that must stay open). 
 window or press **Quit** in the tab bar to stop it; errors, if any, go to
 `results/control_room.log`.
 
-**Reading the sensor maps.** Above each map (Traffic Detection, Bluetooth, VMS) a summary line counts the dots - under 90% uptime, contract ended, retired or no history - and its buttons show only that group. Under it, the key lists every dot style with its count; click a style to show only that style (click it again to show all, ctrl+click adds or removes one). A dot's colour is lifetime uptime. The key also explains the marks on top of the dots (gold halo = confirmed match, number = sensors at one spot, orange N = your note, big rings on Bluetooth = triangulation verdicts); a short distance line is marked by a dashed ring when you filter to it.
+**Reading the sensor maps.** Above each map (Traffic Detection, Bluetooth, VMS) a summary line counts the dots - under 90% uptime, contract ended, retired or no history - and its buttons show only that group. Under it, the key lists every dot style with its count; click a style to show only that style (click it again to show all, ctrl+click adds or removes one). A dot's colour is lifetime uptime, except on the Bluetooth tab: Bluetooth sensors have no uptime of their own, so there the colour is the triangulation verdict (green working, orange works but some paths fail, red faulty, dashed grey not enough evidence). The key also explains the marks on top of the dots (gold halo = confirmed match, number = sensors at one spot, orange N = your note, big rings on Bluetooth = triangulation verdicts); a short distance line is marked by a dashed ring when you filter to it.
 
 **Reload app (top bar).** Restarts the Control Room with the latest code and the local database, for when files changed or you copied in a newer `history.db`; nothing is fetched from the live feed or OMNIA (that is *Refresh*). The window closes and reopens within a few seconds; flags and notes are already saved.
 
 **Notes on sensors.** Click a sensor on the Traffic Detection, Bluetooth or VMS tab (or a Bluetooth sensor on the Paths
 tab) and write in the *Note* box of its popup; it saves by itself and the sensor gets an orange N badge on the map. Notes are kept in
 `results/sensor_notes.json` on this PC only (git-ignored, so they never reach the public repo). Emptying the box removes the note.
+
+**Planning on-site checks (Site visits tab).** Some doubts can only be settled on site: is the sensor still there, and is it
+where the API or the spreadsheet says? The tab lists everything worth a visit (positions more than 100 m apart, a sensor in
+the API with no spreadsheet row or the other way round, a pair of those within 1 km that is probably one device, retired
+sensors, faulty Bluetooth sensors, sensors you wrote a note on), merges what is within 150 m into one stop, splits the stops by
+area (Nicosia, Limassol, Larnaca, Paphos, Famagusta) and puts each area in driving order, cut into days (15 stops by default).
+Tick what to include and press *Plan again*. *Save field sheet (CSV)* gives one row per check in driving order with empty
+columns to fill in on site; *Save for Google My Maps (KML)* can be imported into Google My Maps so the days, with a navigate link
+per stop, are on your phone; *Print* prints the day lists. Each day also has *Open in Google Maps* links that drive through its
+stops. The order uses straight-line distance and nothing is sent anywhere until you open a Google link. Rules:
+[docs/how-the-checks-work.md](docs/how-the-checks-work.md#8-site-visits-what-goes-on-the-list).
 
 **Which Bluetooth sensor is faulty? (Bluetooth tab → *Triangulation*).** A path only reports data when both
 of its sensors work, so a path that works proves both ends are alive. A sensor with no working path, whose failing
@@ -257,6 +268,7 @@ A **weekly digest email** is sent every Monday at 07:30 Cyprus time (EEST). It s
 │   ├── labels.py               ← Shared human-readable sensor names (report + digest)
 │   ├── qa.py                   ← Reference-sheet ↔ API coordinate matching (ownership + commissioning)
 │   ├── update_projects.py      ← Refresh sensor→project + commissioning in the DB after editing the workbook
+│   ├── site_visits.py          ← Site visits tab: what to check on site, stops, driving order, days, CSV/KML exports
 │   ├── digest.py               ← Weekly digest email builder and sender
 │   └── bt_paths_map.py         ← Standalone BT path review map (duplicate/overlap detection, flag/note, CSV export)
 ├── results/
