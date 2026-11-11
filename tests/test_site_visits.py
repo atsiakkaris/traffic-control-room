@@ -1,6 +1,4 @@
 """Site visits planner: what is worth a visit, stops, driving order, days and the two exports."""
-import csv
-import io
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -109,16 +107,100 @@ def test_google_links_stay_within_the_waypoint_limit():
     assert sv.route_urls([]) == []
 
 
-def test_field_sheet_and_kml():
-    a = api(1, 35.0, 33.0, name='A & "B"')
-    items = sv.collect_items([group([{"type": "match", "api": a, "ref": ref("Row <1>", 35.003, 33.0), "distance_m": 333}], [a],
+def _days():
+    a = api(1, 35.0, 33.0, name='A & "B"', site_code="1001")
+    b = api(2, 35.01, 33.0)
+    items = sv.collect_items([group([{"type": "match", "api": a, "ref": ref("Row <1>", 35.003, 33.0), "distance_m": 333},
+                                     {"type": "api_only", "api": b, "ref": None}], [a, b],
                                     notes={"1": {"note": "gate ]]> locked"}})])
-    days = sv.plan(items)
-    rows = sv.field_sheet_rows(days)
-    assert rows[0][-len(sv.FIELD_COLUMNS):] == sv.FIELD_COLUMNS
-    assert rows[1][1] == "D1-01" and "333 m apart" in rows[1][9] and "gate" in rows[1][9]
-    csv.writer(io.StringIO()).writerows(rows)
+    return sv.plan(items), items
+
+
+def test_kml_is_well_formed():
+    days, _ = _days()
     root = ET.fromstring(sv.to_kml(days))                 # well-formed despite the &, <, " and ]]> above
     ns = {"k": "http://www.opengis.net/kml/2.2"}
     names = [p.find("k:name", ns).text for p in root.iter("{http://www.opengis.net/kml/2.2}Placemark")]
     assert names[0].startswith("D1-01") and any("spreadsheet position" in n for n in names)
+
+
+def test_excel_field_sheet_has_dropdowns_links_hidden_key_and_reads_back(tmp_path):
+    from openpyxl import load_workbook
+    days, items = _days()
+    f = tmp_path / "sheet.xlsx"
+    sv.write_field_sheet(days, f)
+    wb = load_workbook(f)
+    assert wb.sheetnames[0] == "Read me" and wb.sheetnames[1].startswith("Day 1")
+    ws = wb[wb.sheetnames[1]]
+    head = {c.value: c.column_letter for c in ws[3]}
+    assert ws.column_dimensions[head["Key"]].hidden and not ws.column_dimensions[head["Found?"]].hidden
+    assert ws.freeze_panes == "C4" and ws.auto_filter.ref
+    lists = {dv.formula1 for dv in ws.data_validations.dataValidation}
+    assert '"Yes,No,Not sure"' in lists and any("API position" in x for x in lists)
+    row = next(r for r in range(4, ws.max_row + 1) if ws["%s%d" % (head["ID"], r)].value == "1")
+    assert ws["%s%d" % (head["Go to API position"], row)].hyperlink.target.startswith("https://www.google.com/maps")
+    # fill it in like a person would, save, read it back
+    ws["%s%d" % (head["Found?"], row)] = "Yes"
+    ws["%s%d" % (head["Right position"], row)] = "API position"
+    ws["%s%d" % (head["Remarks"], row)] = "photo IMG_1"
+    wb.save(f)
+    rows, warnings = sv.read_findings(f)
+    assert warnings == [] and len(rows) == len(items)
+    r1 = next(r for r in rows if r["id"] == "1")
+    assert (r1["found"], r1["right"], r1["remarks"]) == ("yes", "api", "photo IMG_1") and r1["kinds"][0] == "far_apart"
+    assert r1["api"] == [35.0, 33.0] and r1["sheet"] == [35.003, 33.0]
+
+
+def test_read_findings_understands_loose_answers_and_gps_typos(tmp_path):
+    f = tmp_path / "f.csv"
+    f.write_text("Key,Group,ID,Name,Kinds,Found?,Right position,GPS lat,GPS lon,Label on site,Remarks\n"
+                 "td|api|1,TD,1,A,far_apart,y,Spreadsheet position,,,,\n"
+                 "td|api|2,TD,2,B,far_apart,NO,,,,,\n"
+                 "td|api|3,TD,3,C,far_apart,Yes,Neither,\"35.123456, 33.654321\",,L-9,\n"
+                 "td|api|4,TD,4,D,far_apart,maybe,,33.5,35.5,,\n"
+                 "td|api|5,TD,5,E,far_apart,,,,,,\n", encoding="utf-8")
+    rows, warnings = sv.read_findings(f)
+    by = {r["id"]: r for r in rows}
+    assert by["1"]["found"] == "yes" and by["1"]["right"] == "sheet" and by["2"]["found"] == "no"
+    assert (by["3"]["lat"], by["3"]["lon"], by["3"]["label"]) == (35.123456, 33.654321, "L-9")     # pasted "lat, lon"
+    assert by["4"]["found"] == "" and by["4"]["lat"] is None                                       # swapped = not in Cyprus
+    assert sum("not understood" in w for w in warnings) == 1 and sum("not in Cyprus" in w for w in warnings) == 1
+    entries, summary = sv.build_entries(rows, {"td|api|1": {}})
+    assert set(entries) == {"td|api|1", "td|api|2", "td|api|3"}          # 4 has no usable answer, 5 is empty
+    assert summary["skipped_empty"] == 2 and summary["answered"] == 3
+    assert entries["td|api|1"]["done"] and entries["td|api|2"]["done"] and summary["updated"] == 1 and summary["new"] == 2
+
+
+def test_wrong_files_are_refused(tmp_path):
+    import pytest
+    (tmp_path / "x.txt").write_text("hi")
+    with pytest.raises(ValueError):
+        sv.read_findings(tmp_path / "x.txt")
+    (tmp_path / "nokey.csv").write_text("a,b\n1,2\n")
+    with pytest.raises(ValueError):
+        sv.read_findings(tmp_path / "nokey.csv")
+
+
+def test_what_each_finding_means():
+    act = lambda **kw: sv.finding_action(dict({"found": "yes"}, **kw))[0]
+    api_pos, sheet_pos = [35.0, 33.0], [35.003, 33.0]
+    assert act(kinds=["far_apart"], right="api", api=api_pos, sheet=sheet_pos) == "fix_sheet"
+    assert act(kinds=["far_apart"], right="sheet") == "fix_api"
+    assert act(kinds=["far_apart"], right="neither", lat=35.1, lon=33.1) == "fix_both"
+    assert "no GPS fix" in sv.finding_action({"found": "yes", "right": "neither", "kinds": ["far_apart"]})[1]
+    assert act(kinds=["far_apart"]) == "incomplete"
+    assert act(kinds=["api_only"]) == "add_sheet" and act(kinds=["ref_only"]) == "not_in_api" and act(kinds=["retired"]) == "not_in_api"
+    assert act(kinds=["faulty"]) == "check_contractor" and act(kinds=["note"]) == "ok"
+    assert act(found="no", kinds=["far_apart"]) == "not_found" and act(found="unsure") == "unsure" and act(found="") == "open"
+    assert sv.correct_position({"right": "api", "api": api_pos, "lat": None}) == api_pos
+    assert sv.correct_position({"right": "api", "api": api_pos, "lat": 35.5, "lon": 33.5}) == [35.5, 33.5]    # a GPS fix wins
+
+
+def test_corrections_list_groups_by_action():
+    store = {"td|api|1": {"found": "yes", "right": "api", "kinds": ["far_apart"], "api": [35.0, 33.0], "sheet": [35.003, 33.0],
+                          "group": "TD", "id": "1", "name": "A", "at": "2026-11-12T10:00:00", "done": True},
+             "td|api|2": {"found": "no", "kinds": ["retired"], "group": "TD", "id": "2", "name": "B", "at": "2026-11-12T11:00:00", "done": True},
+             "td|api|3": {"done": True, "source": "manual", "group": "TD", "id": "3", "name": "C"}}
+    rows = sv.corrections_rows(store)
+    assert [r[0] for r in rows[1:]] == ["Correct in the spreadsheet", "Not found on site"]      # the bare mark is not a finding
+    assert rows[1][4:6] == [35.0, 33.0]

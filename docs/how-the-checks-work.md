@@ -208,3 +208,19 @@ matched one, usually the other direction) are not listed: they share their twin'
 unvisited stop next, then any two legs that cross are untangled (2-opt) until no change shortens the route. The order uses
 straight-line distance, so the real drive can be longer; it is meant to avoid doubling back, not to time the day. An area with more
 stops than *Stops per day* (15 by default) is cut into several days along that order.
+
+**Visited, and what a finding means.** After a visit the filled-in field sheet is imported. *Found?* Yes or No makes the item
+*visited* (it leaves the plan); Not sure keeps it on the plan. A GPS fix is only accepted inside Cyprus (a swapped lat and lon is
+refused), and 'lat, lon' pasted into one cell is split. What it means for you:
+
+| Found? | Right position | You have to |
+|---|---|---|
+| Yes | API position | Correct the position in the spreadsheet. |
+| Yes | Spreadsheet position | Ask SWARCO to correct the position in the API. |
+| Yes | Neither (+ GPS) | Correct both, to the GPS position (no GPS: measure it on the next visit). |
+| Yes | (it was in the API only) | Add a row to the spreadsheet. |
+| Yes | (it was in the spreadsheet only, or retired) | It is installed but the API does not report it: check power and communication. |
+| Yes | (it was a faulty Bluetooth sensor) | Pass the remarks on to the contractor. |
+| No | | Not on site: if the API still lists it ask the contractor or SWARCO; if the spreadsheet lists it as active, mark it decommissioned. |
+
+The importer only reads; it never changes the spreadsheet, the API or OMNIA. The corrections are a list for you to act on.

@@ -206,7 +206,9 @@ def test_site_visits_page_and_saves(tmp_path):
     srv = cr.make_server(port=0, review_file=tmp_path / "r.json", notes_file=tmp_path / "n.json", page_builder=lambda: ("", {}),
                          paths_provider=dict, views={"traffic-detection": ("Traffic Detection", "TD", 300)},
                          db_file=tmp_path / "none.db", choose_path=None, downloads_dir=tmp_path / "dl",
-                         visit_inputs=lambda: calls.append(1) or inputs)
+                         visit_inputs=lambda: calls.append(1) or inputs, visits_file=tmp_path / "v.json",
+                         choose_open=lambda folder: picked[0])
+    picked = [None]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     try:
@@ -215,13 +217,49 @@ def test_site_visits_page_and_saves(tmp_path):
         empty = urllib.request.urlopen(base + "/visits?kinds=&groups=traffic-detection&per_day=5").read().decode("utf-8")
         assert '"days": []' in empty                                # nothing ticked means nothing, not everything
         assert len(calls) == 1                                      # inputs cached until the DB or the workbook changes
-        code, out = _req(base + "/api/visits/save", "POST", {"format": "csv", "kinds": ["far_apart"], "groups": ["traffic-detection"], "per_day": 15})
-        assert code == 200 and out["path"].endswith(".csv") and "Loop 1" in Path(out["path"]).read_text(encoding="utf-8-sig")
-        code, out = _req(base + "/api/visits/save", "POST", {"format": "kml", "kinds": ["far_apart"], "groups": ["traffic-detection"], "per_day": 15})
+        want = {"kinds": ["far_apart"], "groups": ["traffic-detection"], "per_day": 15}
+        code, out = _req(base + "/api/visits/save", "POST", dict(want, format="xlsx"))
+        assert code == 200 and out["path"].endswith(".xlsx")
+        sheet = Path(out["path"])
+        code, out = _req(base + "/api/visits/save", "POST", dict(want, format="kml"))
         assert code == 200 and Path(out["path"]).read_text(encoding="utf-8").startswith("<?xml")
         assert _req(base + "/api/visits/save", "POST", {"format": "exe"})[0] == 400
-        assert _req(base + "/api/visits/save", "POST", {"format": "csv", "kinds": []})[0] == 400       # nothing to visit
-        assert _req(base + "/api/visits/save", "POST", {"format": "csv"}, {"Origin": "http://evil.example"})[0] == 403
+        assert _req(base + "/api/visits/save", "POST", {"format": "xlsx", "kinds": []})[0] == 400       # nothing to visit
+        assert _req(base + "/api/visits/save", "POST", {"format": "corrections"})[0] == 400              # no findings yet
+        assert _req(base + "/api/visits/save", "POST", {"format": "xlsx"}, {"Origin": "http://evil.example"})[0] == 403
+
+        # fill the saved sheet in, import it: preview first, then apply
+        from openpyxl import load_workbook
+        wb = load_workbook(sheet)
+        ws = wb[wb.sheetnames[1]]
+        head = {c.value: c.column_letter for c in ws[3]}
+        ws[head["Found?"] + "4"], ws[head["Right position"] + "4"], ws[head["Remarks"] + "4"] = "Yes", "API position", "bolted on a pole"
+        wb.save(sheet)
+        assert _req(base + "/api/visits/import", "POST", {"action": "pick"})[1] == {"cancelled": True}
+        picked[0] = sheet
+        code, prev = _req(base + "/api/visits/import", "POST", {"action": "pick"})
+        assert code == 200 and prev["summary"]["answered"] == 1 and prev["summary"]["done"] == 1
+        assert prev["items"][0]["action_label"] == "Correct in the spreadsheet" and not (tmp_path / "v.json").exists()   # preview saves nothing
+        code, done = _req(base + "/api/visits/import", "POST", {"action": "apply", "token": prev["token"], "to_notes": True})
+        assert code == 200 and done["saved"] == 1 and done["notes_added"] == 1
+        assert _req(base + "/api/visits/import", "POST", {"action": "apply", "token": prev["token"]})[0] == 400   # once only
+        assert "Site visit" in cr.load_sensor_notes(tmp_path / "n.json")["traffic-detection:1"]["note"]
+        html = urllib.request.urlopen(base + "/visits").read().decode("utf-8")
+        assert '"days": []' in html and '"n_done": 1' in html and "Correct in the spreadsheet" in html      # visited leaves the plan
+        shown = urllib.request.urlopen(base + "/visits?done=1").read().decode("utf-8")
+        assert "D1-01" in shown and "bolted on a pole" in shown
+        code, out = _req(base + "/api/visits/save", "POST", {"format": "corrections"})
+        assert code == 200 and "Correct in the spreadsheet" in Path(out["path"]).read_text(encoding="utf-8-sig")
+
+        # marking by hand, and taking it back
+        key = "traffic-detection|api|1"
+        assert _req(base + "/api/visits/mark", "POST", {"key": "x", "done": True})[0] == 400
+        assert _req(base + "/api/visits/mark", "POST", {"key": key, "done": False})[0] == 200
+        assert cr.load_visits(tmp_path / "v.json")[key]["found"] == "yes"                 # the imported finding is kept
+        assert _req(base + "/api/visits/mark", "POST", {"key": "traffic-detection|api|9", "done": True, "name": "Z"})[0] == 200
+        assert cr.load_visits(tmp_path / "v.json")["traffic-detection|api|9"]["done"] is True
+        assert _req(base + "/api/visits/mark", "POST", {"key": "traffic-detection|api|9", "done": False})[0] == 200
+        assert "traffic-detection|api|9" not in cr.load_visits(tmp_path / "v.json")      # a bare mark disappears
     finally:
         srv.shutdown()
 

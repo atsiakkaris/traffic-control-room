@@ -72,10 +72,19 @@ where the API or the spreadsheet says? The tab lists everything worth a visit (p
 the API with no spreadsheet row or the other way round, a pair of those within 1 km that is probably one device, retired
 sensors, faulty Bluetooth sensors, sensors you wrote a note on), merges what is within 150 m into one stop, splits the stops by
 area (Nicosia, Limassol, Larnaca, Paphos, Famagusta) and puts each area in driving order, cut into days (15 stops by default).
-Tick what to include and press *Plan again*. *Save field sheet (CSV)* gives one row per check in driving order with empty
-columns to fill in on site; *Save for Google My Maps (KML)* can be imported into Google My Maps so the days, with a navigate link
-per stop, are on your phone; *Print* prints the day lists. Each day also has *Open in Google Maps* links that drive through its
-stops. The order uses straight-line distance and nothing is sent anywhere until you open a Google link. Rules:
+Tick what to include and press *Plan again*. *Save field sheet (Excel)* gives one sheet per day, stops in driving order, with
+yellow columns to fill in on site (drop-down lists for *Found?* and *Right position*, GPS, label, remarks), *Navigate* links and
+print-ready pages; *Save for Google My Maps (KML)* can be imported into Google My Maps so the days are on your phone; *Print*
+prints the day lists. Click a day's heading to fold or unfold it (*Fold all days* / *Unfold all days* do all at once; folded days still print open). Each day also has *Open in Google Maps* links that drive through its stops. The order uses straight-line
+distance and nothing is sent anywhere until you open a Google link.
+
+**After the visit.** *Import findings...* reads the filled-in Excel file back (a preview first; nothing changes until you press
+Apply). Items with a Yes or No answer count as *visited* and leave the plan (*Show visited* brings them back), and every finding
+is translated into what you have to do: correct the spreadsheet, ask SWARCO to correct the API position, add a missing row,
+installed but not reported by the API, not found on site, and so on. These appear in *What the visits found* and can be saved
+as a corrections CSV. The import can also add a dated line to each sensor's note. Single items can be marked visited by hand
+(*Mark as visited* in the popup or the list; *Not visited after all* takes it back without losing imported findings). Findings
+are kept in `results/site_visits.json` (git-ignored, like the notes). Rules:
 [docs/how-the-checks-work.md](docs/how-the-checks-work.md#8-site-visits-what-goes-on-the-list).
 
 **Which Bluetooth sensor is faulty? (Bluetooth tab → *Triangulation*).** A path only reports data when both

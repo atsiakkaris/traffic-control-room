@@ -177,6 +177,48 @@ def notes_for_group(group, notes):
     return {k.split(":", 1)[1]: v for k, v in notes.items() if k.startswith(group + ":")}
 
 
+# ── site visits: what was found on site ──────────────────────────────────────
+
+SITE_VISITS_FILE = ROOT / "results" / "site_visits.json"
+VISIT_KEY_RE = re.compile(r"^[\w\-]+\|(api|ref)\|[^\x00-\x1f]{1,200}$")
+
+
+def load_visits(path=SITE_VISITS_FILE):
+    """{item key: finding} - only well-formed entries. Keys look like 'bluetooth|api|9' (see site_visits.collect_items)."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, dict) and VISIT_KEY_RE.match(str(k))} if isinstance(data, dict) else {}
+
+
+def save_visits(store, path=SITE_VISITS_FILE):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(store, indent=1, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def mark_visit(store, key, done, group="", sensor_id="", name="", now=None):
+    """Mark one item visited by hand (or take it back). Findings that came from an imported sheet are never lost:
+    taking the mark back only clears 'done'; an entry that holds nothing but the mark is removed."""
+    if not VISIT_KEY_RE.match(str(key)):
+        raise ValueError("unknown item")
+    e = store.get(key)
+    if done:
+        if e is None:
+            e = store[key] = {"source": "manual", "group": str(group)[:80], "id": str(sensor_id)[:40], "name": str(name)[:200],
+                              "at": (now or datetime.now()).isoformat(timespec="seconds")}
+        e["done"] = True
+    elif e is not None:
+        if e.get("source") == "manual" and not any(e.get(f) for f in ("found", "right", "label", "remarks")) and e.get("lat") is None:
+            del store[key]
+        else:
+            e["done"] = False
+    return store.get(key)
+
+
 NOTES_JS = """<style>
 .crnote{margin-top:8px;padding-top:8px;border-top:1px dashed #999;min-width:230px}
 .crnote textarea{width:100%;box-sizing:border-box;min-height:62px;resize:vertical;font:13px Arial,sans-serif;padding:5px;border:1px solid #bbb;border-radius:5px}
@@ -1113,20 +1155,27 @@ def visit_params(query, views):
     """kinds, groups, per_day from the page's query string; anything unknown is dropped."""
     import site_visits as sv
     q = parse_qs(query or "", keep_blank_values=True)   # "kinds=" means none ticked, not "all"
-    pick =lambda name, allowed: [x for x in ((q.get(name) or [""])[0]).split(",") if x in allowed] if name in q else list(allowed)
+    pick = lambda name, allowed: [x for x in ((q.get(name) or [""])[0]).split(",") if x in allowed] if name in q else list(allowed)
     try:
         per_day = min(50, max(1, int((q.get("per_day") or [sv.PER_DAY])[0])))
     except ValueError:
         per_day = sv.PER_DAY
-    return pick("kinds", sv.KINDS), pick("groups", views), per_day
+    return pick("kinds", sv.KINDS), pick("groups", views), per_day, (q.get("done") or ["0"])[0] == "1"
 
 
-def visit_plan(inputs, notes, kinds, groups, per_day):
-    """(all items, days) for the chosen filters. Notes are read fresh each time (they change while you work)."""
+def visit_plan(inputs, notes, visits, kinds, groups, per_day, show_done=False):
+    """(items shown, days, number of visited items) for the chosen filters. Notes and findings are read fresh each
+    time (they change while you work); visited items leave the plan unless show_done."""
     import site_visits as sv
     data = [dict(g, notes=notes_for_group(g["slug"], notes)) for g in inputs]
     items = sv.collect_items(data)
-    return items, sv.plan(items, per_day, kinds, groups)
+    for it in items:
+        e = visits.get(it["key"])
+        it["visit"] = None if not e else {"done": bool(e.get("done")), "at": (e.get("at") or "")[:10], "summary": sv.visit_summary(e),
+                                          "action": sv.finding_action(e)[1] if (e.get("found") or e.get("right")) else ""}
+    n_done = sum(1 for it in items if it["visit"] and it["visit"]["done"])
+    shown = [it for it in items if show_done or not (it["visit"] and it["visit"]["done"])]
+    return shown, sv.plan(shown, per_day, kinds, groups), n_done
 
 
 VISITS_PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Site visits</title>
@@ -1147,7 +1196,10 @@ header{background:#1f4e79;color:#fff;padding:12px 18px}header h1{margin:0;font-s
 #saved{color:#555;word-break:break-all}
 #map{height:46vh;min-height:300px}
 .day{margin:14px 18px;background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.12);overflow:hidden}
-.day h3{margin:0;padding:10px 14px;font-size:14px;color:#fff}
+.day h3{margin:0;padding:10px 14px;font-size:14px;color:#fff;cursor:pointer;user-select:none}
+.day h3::before{content:'\25BE';display:inline-block;width:18px}
+.day.closed h3::before{content:'\25B8'}
+.day.closed table{display:none}
 .day h3 a{color:#fff;font-weight:normal;margin-left:10px;font-size:12px}
 table{border-collapse:collapse;width:100%}
 td,th{border-top:1px solid #eee;padding:6px 8px;text-align:left;vertical-align:top}
@@ -1157,13 +1209,26 @@ td.code{font-weight:bold;white-space:nowrap}
 .note{color:#9a5b00}
 a{color:#2e86c1;cursor:pointer}
 .empty{margin:30px 18px;color:#555;font-size:15px}
+.k.done{background:#d5f0dd;color:#1e6b34}
+.visit{margin-top:4px;color:#1e6b34}
+.mark{margin-left:6px;padding:1px 7px;border:1px solid #9bb;border-radius:4px;background:#fff;color:#234;cursor:pointer;font-size:11px}
+details.find{margin:14px 18px;background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+details.find summary{padding:10px 14px;font-weight:bold;cursor:pointer}
+details.find table{margin:0 0 6px}
+#imp{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding:30px 12px;overflow:auto}
+#imp .box{background:#fff;border-radius:10px;max-width:980px;width:100%;padding:16px 18px;box-shadow:0 6px 30px rgba(0,0,0,.4)}
+#imp h2{margin:0 0 8px;font-size:16px}#imp .warn{color:#9a5b00;margin:6px 0;font-size:12px}
+#imp button{padding:6px 13px;border:0;border-radius:5px;background:#2c3e50;color:#fff;cursor:pointer;margin-right:6px}
+#imp button.go{background:#2e86c1}
 .num{width:22px;height:22px;border-radius:50%;color:#fff;font:bold 10px/20px Arial;text-align:center;border:1px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.5)}
-@media print{.bar,#map,.noprint{display:none}.day{box-shadow:none;break-inside:auto;margin:8px 0}body{background:#fff}}
+@media print{.day.closed table{display:table}.bar,#map,.noprint{display:none}.day{box-shadow:none;break-inside:auto;margin:8px 0}body{background:#fff}}
 </style></head><body>
 <header><h1>Site visits</h1><div class="sub" id="sub"></div></header>
 <div class="bar" id="bar"></div>
 <div id="map"></div>
+<div id="findings"></div>
 <div id="days"></div>
+<div id="imp"><div class="box"><h2>Import findings</h2><div id="impbody"></div></div></div>
 <script>
 (function() {
   var D = __DATA__;
@@ -1173,10 +1238,11 @@ a{color:#2e86c1;cursor:pointer}
   function nav(p) { return 'https://www.google.com/maps/dir/?api=1&destination=' + p.lat.toFixed(6) + ',' + p.lon.toFixed(6); }
   var nStops = 0, nItems = 0;
   D.days.forEach(function(d) { nStops += d.stops.length; d.stops.forEach(function(s) { nItems += s.items.length; }); });
-  document.getElementById('sub').textContent = D.days.length
+  document.getElementById('sub').textContent = (D.days.length
     ? nItems + ' things to check at ' + nStops + ' stops over ' + D.days.length + ' day' + (D.days.length === 1 ? '' : 's') +
       '. Stops are in driving order from the area centre (straight-line distance; the roads may add more).'
-    : 'Nothing to visit for the ticked options.';
+    : 'Nothing to visit for the ticked options.') +
+    (D.n_done ? ' ' + D.n_done + ' already visited ' + (D.sel.done ? '(shown).' : '(left out).') : '');
 
   // ── filters ──
   var bar = document.getElementById('bar');
@@ -1190,17 +1256,23 @@ a{color:#2e86c1;cursor:pointer}
   var g2 = document.createElement('span'); g2.className = 'grp'; g2.textContent = 'Groups:'; bar.appendChild(g2);
   Object.keys(D.groups).forEach(function(s) { bar.appendChild(box('groups', s, D.groups[s], D.group_counts[s] || 0, D.sel.groups.indexOf(s) >= 0)); });
   var pd = document.createElement('label'); pd.innerHTML = 'Stops per day <input type="number" id="perday" min="1" max="50" value="' + D.sel.per_day + '">'; bar.appendChild(pd);
+  var sd = document.createElement('label'); sd.innerHTML = '<input type="checkbox" id="showdone"' + (D.sel.done ? ' checked' : '') + '> Show visited (' + D.n_done + ')'; bar.appendChild(sd);
   function query() {
     var q = {kinds: [], groups: []};
     Array.prototype.forEach.call(bar.querySelectorAll('input[data-f]'), function(i) { if (i.checked) q[i.getAttribute('data-f')].push(i.value); });
     q.per_day = +document.getElementById('perday').value || D.sel.per_day;
+    q.done = document.getElementById('showdone').checked ? 1 : 0;
     return q;
   }
-  function button(text, cls, fn, title) { var b = document.createElement('button'); b.textContent = text; b.className = cls || ''; b.onclick = fn; if (title) b.title = title; bar.appendChild(b); return b; }
-  button('Plan again', 'go', function() {
+  function reload() {   // same options, fresh data
     var q = query();
-    location.search = '?kinds=' + q.kinds.join(',') + '&groups=' + q.groups.join(',') + '&per_day=' + q.per_day;
-  }, 'Rebuild the days with the ticked options');
+    location.search = '?kinds=' + q.kinds.join(',') + '&groups=' + q.groups.join(',') + '&per_day=' + q.per_day + '&done=' + q.done;
+  }
+  function post(url, body) {
+    return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})}).then(function(r) { return r.json(); });
+  }
+  function button(text, cls, fn, title) { var b = document.createElement('button'); b.textContent = text; b.className = cls || ''; b.onclick = fn; if (title) b.title = title; bar.appendChild(b); return b; }
+  button('Plan again', 'go', reload, 'Rebuild the days with the ticked options');
   var saved = document.createElement('span'); saved.id = 'saved';
   function save(fmt) {
     var q = query(); q.format = fmt;
@@ -1213,9 +1285,16 @@ a{color:#2e86c1;cursor:pointer}
           : 'Could not save: ' + (r.error || 'unknown error');
       }).catch(function(e) { saved.textContent = 'Could not save: ' + e; });
   }
-  button('Save field sheet (CSV)', '', function() { save('csv'); }, 'One row per thing to check, in driving order, with empty columns to fill in on site');
+  button('Save field sheet (Excel)', '', function() { save('xlsx'); }, 'One sheet per day, stops in driving order, yellow columns to fill in on site, drop-down lists and navigate links');
   button('Save for Google My Maps (KML)', '', function() { save('kml'); }, 'Import into Google My Maps to see the days on your phone; every stop has navigate links');
-  button('Print', '', function() { window.print(); }, 'Print the day lists (the map and these buttons are left out)');
+  button('Print', '', function() { window.print(); }, 'Print the day lists (the map and these buttons are left out; folded days print open)');
+  function foldAll(closed) { Array.prototype.forEach.call(document.querySelectorAll('.day'), function(d) { d.classList.toggle('closed', closed); }); }
+  if (D.days.length > 1) {
+    button('Fold all days', '', function() { foldAll(true); }, 'Show only the day headings');
+    button('Unfold all days', '', function() { foldAll(false); }, 'Show every stop');
+  }
+  button('Import findings...', 'go', function() { openImport(); }, 'Read a filled-in field sheet back: you see a preview first, nothing changes until you apply it');
+  if (D.findings.length) button('Save corrections list (CSV)', '', function() { save('corrections'); }, 'What the visits found, grouped by what you have to do');
   bar.appendChild(saved);
 
   // ── map ──
@@ -1234,7 +1313,13 @@ a{color:#2e86c1;cursor:pointer}
     if (it.project) h += '<span class="k">' + esc(it.project) + '</span>';
     h += '<br>' + it.checks.map(esc).join('<br>');
     if (it.note) h += '<br><span class="note">Your note: ' + esc(it.note) + '</span>';
-    h += '<br>' + it.points.map(function(p) { return esc(p.label) + ' position: <a href="' + nav(p) + '" target="_blank">navigate</a>'; }).join(' &middot; ');
+    if (it.visit) {
+      h += '<div class="visit">' + (it.visit.done ? '&#10003; Visited ' + esc(it.visit.at) : 'Visit recorded, not finished') +
+           (it.visit.summary ? ': ' + esc(it.visit.summary) : '') + (it.visit.action ? '<br><b>' + esc(it.visit.action) + '</b>' : '') + '</div>';
+    }
+    h += '<br><button class="mark" data-mark="' + esc(it.key) + '" data-done="' + (it.visit && it.visit.done ? 0 : 1) + '" data-g="' + esc(it.group) + '" data-id="' + esc(it.id) +
+         '" data-name="' + esc(it.name || it.ref_name) + '">' + (it.visit && it.visit.done ? 'Not visited after all' : 'Mark as visited') + '</button><br>';
+    h += it.points.map(function(p) { return esc(p.label) + ' position: <a href="' + nav(p) + '" target="_blank">navigate</a>'; }).join(' &middot; ');
     return h;
   }
   D.days.forEach(function(d, di) {
@@ -1272,13 +1357,22 @@ a{color:#2e86c1;cursor:pointer}
            (shell ? '<br><a data-tab="' + esc(s.items[0].slug) + '" data-lat="' + s.lat + '" data-lon="' + s.lon + '">' + esc(s.items[0].group) + ' tab</a>' : '') + '</td></tr>';
     });
     sec.innerHTML = h + '</table>';
+    var head = sec.querySelector('h3');
+    head.title = 'Click to fold or unfold this day';
+    head.onclick = function(e) { if (!(e.target.closest && e.target.closest('a'))) sec.classList.toggle('closed'); };
     host.appendChild(sec);
   });
   document.addEventListener('click', function(e) {
-    var a = e.target.closest && e.target.closest('[data-show],[data-tab]');
+    var a = e.target.closest && e.target.closest('[data-show],[data-tab],[data-mark]');
     if (!a) return;
     e.preventDefault();
-    if (a.hasAttribute('data-show')) {
+    if (a.hasAttribute('data-mark')) {
+      a.disabled = true;
+      post('/api/visits/mark', {key: a.getAttribute('data-mark'), done: a.getAttribute('data-done') === '1', group: a.getAttribute('data-g'),
+                                id: a.getAttribute('data-id'), name: a.getAttribute('data-name')})
+        .then(function(r) { if (r.error) { a.disabled = false; alert(r.error); } else reload(); })
+        .catch(function() { a.disabled = false; alert('No contact with the Control Room.'); });
+    } else if (a.hasAttribute('data-show')) {
       var m = markers[a.getAttribute('data-show')];
       document.getElementById('map').scrollIntoView({behavior: 'smooth'});
       map.flyTo(m.getLatLng(), 16, {duration: 1.0});
@@ -1287,15 +1381,66 @@ a{color:#2e86c1;cursor:pointer}
       shell.crShow(a.getAttribute('data-tab'), {lat: +a.getAttribute('data-lat'), lon: +a.getAttribute('data-lon')});
     }
   });
+
+  // ── what the visits found ──
+  if (D.findings.length) {
+    var det = document.createElement('details'); det.className = 'find'; det.open = true;
+    var rows = '', last = '';
+    D.findings.forEach(function(f) {
+      if (f.action_label !== last) { rows += '<tr><th colspan="4">' + esc(f.action_label) + '</th></tr>'; last = f.action_label; }
+      rows += '<tr><td>' + esc(f.group) + (f.id ? ' ' + esc(f.id) : '') + '</td><td><b>' + esc(f.name) + '</b><br>' + esc(f.summary) + '</td><td>' + esc(f.action_text) +
+              '</td><td>' + esc((f.at || '').slice(0, 10)) + '</td></tr>';
+    });
+    det.innerHTML = '<summary>What the visits found (' + D.findings.length + ') - things to correct, by what you have to do</summary>' +
+                    '<table><tr><th>Sensor</th><th>Found on site</th><th>What to do</th><th>Visited</th></tr>' + rows + '</table>';
+    document.getElementById('findings').appendChild(det);
+  }
+
+  // ── import ──
+  var imp = document.getElementById('imp'), impBody = document.getElementById('impbody');
+  function closeImp() { imp.style.display = 'none'; }
+  function openImp(html) { impBody.innerHTML = html; imp.style.display = 'flex'; }
+  window.openImport = function() {
+    openImp('<p>Choose the filled-in field sheet in the dialog that opened (it may be behind this window)...</p>');
+    post('/api/visits/import', {action: 'pick'}).then(function(r) {
+      if (r.cancelled) { closeImp(); return; }
+      if (r.error) { openImp('<p class="warn">' + esc(r.error) + '</p><button id="impx">Close</button>'); document.getElementById('impx').onclick = closeImp; return; }
+      var s = r.summary, h = '<p><b>' + esc(r.file) + '</b>: ' + s.rows + ' rows, ' + s.answered + ' with an answer (' + s.new + ' new, ' + s.updated + ' already recorded), ' +
+                s.skipped_empty + ' left empty. ' + s.done + ' will count as visited and leave the plan.</p>';
+      r.warnings.slice(0, 20).forEach(function(w) { h += '<div class="warn">' + esc(w) + '</div>'; });
+      if (r.warnings.length > 20) h += '<div class="warn">... and ' + (r.warnings.length - 20) + ' more</div>';
+      if (r.items.length) {
+        h += '<table><tr><th>Sensor</th><th>Found on site</th><th>What it means</th></tr>';
+        r.items.forEach(function(f) { h += '<tr><td>' + esc(f.group) + (f.id ? ' ' + esc(f.id) : '') + '<br>' + esc(f.name) + '</td><td>' + esc(f.summary) + '</td><td><b>' + esc(f.action_label) + '</b><br>' + esc(f.action_text) + '</td></tr>'; });
+        h += '</table>';
+        if (r.more) h += '<div class="warn">... and ' + r.more + ' more rows</div>';
+        h += '<p><label><input type="checkbox" id="impnotes" checked> Also add each finding to the sensor\'s note (the orange N on the maps)</label></p>' +
+             '<button class="go" id="impgo">Apply ' + s.answered + ' findings</button>';
+      } else h += '<p>Nothing to import: no row has an answer yet.</p>';
+      openImp(h + '<button id="impx">Cancel</button>');
+      document.getElementById('impx').onclick = closeImp;
+      var go = document.getElementById('impgo');
+      if (go) go.onclick = function() {
+        go.disabled = true;
+        post('/api/visits/import', {action: 'apply', token: r.token, to_notes: document.getElementById('impnotes').checked}).then(function(a) {
+          if (a.error) { openImp('<p class="warn">' + esc(a.error) + '</p><button id="impx">Close</button>'); document.getElementById('impx').onclick = closeImp; return; }
+          openImp('<p>Saved ' + a.saved + ' findings (' + a.done + ' visited).' + (a.notes_added ? ' ' + a.notes_added + ' notes added.' : '') +
+                  (a.notes_skipped ? ' ' + a.notes_skipped + ' notes not changed (too long, or the finding was already in the note).' : '') + '</p><button class="go" id="impok">Show the new plan</button>');
+          document.getElementById('impok').onclick = reload;
+        }).catch(function() { go.disabled = false; alert('No contact with the Control Room.'); });
+      };
+    }).catch(function() { openImp('<p class="warn">No contact with the Control Room.</p><button id="impx">Close</button>'); document.getElementById('impx').onclick = closeImp; });
+  };
 })();
 </script></body></html>"""
 
 
-def build_visits_page(items, days, kinds, groups, per_day, views, message=""):
+def build_visits_page(items, days, kinds, groups, per_day, views, message="", visits=None, n_done=0, show_done=False):
     import site_visits as sv
     kind_counts, group_counts = sv.counts(items)
     data = {"days": days, "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
-            "group_counts": group_counts, "sel": {"kinds": kinds, "groups": groups, "per_day": per_day}, "message": message}
+            "group_counts": group_counts, "message": message, "n_done": n_done, "findings": sv.findings_list(visits or {}),
+            "sel": {"kinds": kinds, "groups": groups, "per_day": per_day, "done": show_done}}
     return VISITS_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
 
 
@@ -1387,11 +1532,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(exc)})
         if path == "/visits":
             try:
-                kinds, groups, per_day = visit_params(parts.query, self.server.views)
+                kinds, groups, per_day, show_done = visit_params(parts.query, self.server.views)
                 inputs = self.server.visits(force)
-                items, days = visit_plan(inputs, load_sensor_notes(self.server.notes_file), kinds, groups, per_day)
+                visits = load_visits(self.server.visits_file)
+                items, days, n_done = visit_plan(inputs, load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done)
                 msg = "" if inputs else "QA Locations.xlsx was not found in the repo folder, so there is nothing to compare."
-                page = build_visits_page(items, days, kinds, groups, per_day, self.server.views, msg)
+                page = build_visits_page(items, days, kinds, groups, per_day, self.server.views, msg, visits, n_done, show_done)
             except Exception as exc:
                 return self._send(500, f"Could not build the page: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
@@ -1535,16 +1681,24 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._body()
             fmt = body.get("format")
-            if fmt not in ("csv", "kml"):
-                raise ValueError("format must be csv or kml")
-            q = "kinds=%s&groups=%s&per_day=%s" % (",".join(map(str, body.get("kinds") or [])),
-                                                  ",".join(map(str, body.get("groups") or [])), body.get("per_day"))
-            kinds, groups, per_day = visit_params(q, self.server.views)
-            _items, days = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), kinds, groups, per_day)
-            if not days:
-                return self._send(400, {"error": "nothing to visit for the ticked options"})
+            if fmt not in ("xlsx", "kml", "corrections"):
+                raise ValueError("format must be xlsx, kml or corrections")
+            visits = load_visits(self.server.visits_file)
+            if fmt == "corrections":
+                days = sv.findings_list(visits)
+                if not days:
+                    return self._send(400, {"error": "no findings yet: import a filled-in field sheet first"})
+            else:
+                q = "kinds=%s&groups=%s&per_day=%s&done=%s" % (",".join(map(str, body.get("kinds") or [])),
+                                                              ",".join(map(str, body.get("groups") or [])), body.get("per_day"),
+                                                              1 if body.get("done") else 0)
+                kinds, groups, per_day, show_done = visit_params(q, self.server.views)
+                _items, days, _n = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done)
+                if not days:
+                    return self._send(400, {"error": "nothing to visit for the ticked options"})
             folder = Path(self.server.downloads_dir or DOWNLOADS)
-            name = f"site_visits_{datetime.now():%Y%m%d_%H%M%S}.{fmt}"
+            ext = "csv" if fmt == "corrections" else fmt
+            name = f"{'site_visit_corrections' if fmt == 'corrections' else 'site_visits'}_{datetime.now():%Y%m%d_%H%M%S}.{ext}"
             dest, fallback = None, False
             if self.server.choose_path:
                 try:
@@ -1555,13 +1709,15 @@ class Handler(BaseHTTPRequestHandler):
                     if dest is None:
                         return self._send(200, {"cancelled": True})
             out = Path(dest) if dest else folder / name
-            if out.suffix.lower() != "." + fmt:
-                out = out.with_name(out.name + "." + fmt)
+            if out.suffix.lower() != "." + ext:
+                out = out.with_name(out.name + "." + ext)
             out.parent.mkdir(parents=True, exist_ok=True)
-            if fmt == "csv":
+            if fmt == "corrections":
                 buf = io.StringIO()
-                csv.writer(buf).writerows([["" if v is None else v for v in r] for r in sv.field_sheet_rows(days)])
+                csv.writer(buf).writerows([["" if v is None else v for v in r] for r in sv.corrections_rows(visits)])
                 out.write_bytes(buf.getvalue().encode("utf-8-sig"))
+            elif fmt == "xlsx":
+                sv.write_field_sheet(days, out)
             else:
                 out.write_text(sv.to_kml(days), encoding="utf-8")
         except (ValueError, AttributeError, TypeError) as exc:
@@ -1569,6 +1725,86 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as exc:
             return self._send(500, {"error": f"could not write the file: {exc}"})
         return self._send(200, {"path": str(out), "fallback": fallback})
+
+    def _import_visits(self):
+        """Import findings from a filled-in field sheet: 'pick' (choose the file, preview) then 'apply' (save)."""
+        import site_visits as sv
+        srv = self.server
+        try:
+            body = self._body()
+            if body.get("action") == "pick":
+                if srv.choose_open is None:
+                    return self._send(400, {"error": "No file dialog is available on this PC."})
+                try:
+                    chosen = srv.choose_open(Path(srv.downloads_dir or DOWNLOADS))
+                except Exception:
+                    return self._send(500, {"error": "Could not show the file dialog."})
+                if chosen is None:
+                    return self._send(200, {"cancelled": True})
+                try:
+                    rows, warnings = sv.read_findings(chosen)
+                except ValueError as exc:
+                    return self._send(400, {"error": str(exc)})
+                except Exception as exc:
+                    return self._send(400, {"error": "Could not read that file (%s). Is it the field sheet saved from the Site visits tab?" % type(exc).__name__})
+                with srv.visits_lock:
+                    store = load_visits(srv.visits_file)
+                entries, summary = sv.build_entries(rows, store)
+                token = secrets.token_hex(8)
+                srv.visit_import = {token: entries}               # only the newest preview can be applied
+                items = []
+                for key, e in sorted(entries.items(), key=lambda kv: (sv.ACTIONS_ORDER.index(sv.finding_action(kv[1])[0]), kv[1]["group"], kv[1]["name"])):
+                    code, text = sv.finding_action(e)
+                    items.append({"key": key, "group": e["group"], "id": e["id"], "name": e["name"], "summary": sv.visit_summary(e),
+                                  "action_label": sv.ACTIONS[code], "action_text": text})
+                return self._send(200, {"file": Path(chosen).name, "summary": summary, "warnings": warnings, "token": token,
+                                        "items": items[:300], "more": max(0, len(items) - 300)})
+            if body.get("action") == "apply":
+                entries = srv.visit_import.pop(body.get("token"), None)
+                if not entries:
+                    return self._send(400, {"error": "Choose the file again: the preview can be applied once."})
+                groups = set(srv.views) | {"bluetooth"}
+                added = skipped = 0
+                with srv.visits_lock:
+                    store = load_visits(srv.visits_file)
+                    store.update(entries)
+                    save_visits(store, srv.visits_file)
+                if body.get("to_notes"):
+                    for key, e in entries.items():
+                        slug, kind, sid = (key.split("|", 2) + ["", ""])[:3]
+                        if kind != "api" or slug not in groups or not (e.get("found") or e.get("remarks") or e.get("label")):
+                            continue
+                        line = sv.note_line(e)
+                        old = (load_sensor_notes(srv.notes_file).get("%s:%s" % (slug, sid)) or {}).get("note", "")
+                        new = (old + "\n" + line) if old.strip() else line
+                        if line in old or len(new) > MAX_NOTE:
+                            skipped += 1
+                            continue
+                        try:
+                            set_sensor_note(slug, sid, new, groups, srv.notes_file)
+                            added += 1
+                        except ValueError:
+                            skipped += 1
+                return self._send(200, {"saved": len(entries), "done": sum(1 for e in entries.values() if e["done"]),
+                                        "notes_added": added, "notes_skipped": skipped})
+            raise ValueError("unknown action")
+        except (ValueError, AttributeError, TypeError) as exc:
+            return self._send(400, {"error": str(exc)})
+        except OSError as exc:
+            return self._send(500, {"error": f"could not write the file: {exc}"})
+
+    def _mark_visit(self):
+        try:
+            body = self._body()
+            with self.server.visits_lock:
+                store = load_visits(self.server.visits_file)
+                mark_visit(store, body.get("key"), bool(body.get("done")), body.get("group") or "", body.get("id") or "", body.get("name") or "")
+                save_visits(store, self.server.visits_file)
+        except (ValueError, AttributeError, TypeError) as exc:
+            return self._send(400, {"error": str(exc)})
+        except OSError as exc:
+            return self._send(500, {"error": f"could not write the file: {exc}"})
+        return self._send(200, {"ok": True})
 
     def do_POST(self):
         self._drain()
@@ -1606,6 +1842,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"fetched_at": snap["fetched_at"], "paths": len(snap["paths"]), "nodes": len(snap["nodes"])})
         if self.path == "/api/visits/save" and self._same_origin():
             return self._save_visits()
+        if self.path == "/api/visits/import" and self._same_origin():
+            return self._import_visits()
+        if self.path == "/api/visits/mark" and self._same_origin():
+            return self._mark_visit()
         if self.path == "/api/save-csv" and self._same_origin():
             try:
                 body = self._body()
@@ -1778,7 +2018,7 @@ _SAVE_DIALOG = r"""
 import os, sys, tkinter as tk
 from tkinter import filedialog
 ext = os.path.splitext(sys.argv[2])[1] or ".csv"
-kind = {".kml": "KML files (Google My Maps)"}.get(ext.lower(), "CSV files")
+kind = {".kml": "KML files (Google My Maps)", ".xlsx": "Excel files"}.get(ext.lower(), "CSV files")
 root = tk.Tk()
 root.withdraw()
 root.attributes("-topmost", True)
@@ -1802,6 +2042,31 @@ def choose_save_path(initial_dir, initial_name):
                        capture_output=True, timeout=900, creationflags=flags)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.decode("utf-8", "replace")[-300:] or "the save dialog failed")
+    chosen = r.stdout.decode("utf-8").strip()
+    return Path(chosen) if chosen else None
+
+
+_OPEN_DIALOG = r"""
+import sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)
+path = filedialog.askopenfilename(parent=root, title="Choose the filled-in field sheet", initialdir=sys.argv[1],
+                                  filetypes=[("Excel or CSV files", "*.xlsx *.xlsm *.csv"), ("All files", "*.*")])
+sys.stdout.buffer.write(path.encode("utf-8"))
+"""
+
+
+def choose_open_path(initial_dir):
+    """Ask on this PC's desktop which file to read (a normal Open dialog). Path, or None if cancelled."""
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
+        exe = exe.with_name("python.exe")
+    r = subprocess.run([str(exe), "-c", _OPEN_DIALOG, str(initial_dir)], capture_output=True, timeout=900,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode("utf-8", "replace")[-300:] or "the open dialog failed")
     chosen = r.stdout.decode("utf-8").strip()
     return Path(chosen) if chosen else None
 
@@ -1898,7 +2163,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
                 page_builder=None, paths_provider=None, post=None,
                 sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path,
-                visit_inputs=None):
+                visit_inputs=None, visits_file=None, choose_open=choose_open_path):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
@@ -1930,6 +2195,10 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake
     srv.on_quit = None   # set by the app-window launcher to close the window
     srv.visit_inputs = visit_inputs or (lambda: globals()["visit_inputs"](srv.views))   # tests pass a fake
+    srv.visits_file = visits_file or SITE_VISITS_FILE
+    srv.visits_lock = threading.Lock()
+    srv.visit_import = {}
+    srv.choose_open = choose_open                # the Open dialog; tests pass a fake or None
     return srv
 
 
