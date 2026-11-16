@@ -21,10 +21,12 @@
 <div id="tabs">
   <button data-target="frame-dashboard" class="active">Dashboard</button>
   <button data-target="frame-btmap">BT Paths Map</button>
+  <button data-target="frame-live">Live</button>
 </div>
 <div id="frames">
   <iframe id="frame-dashboard" class="active" data-src="reports/latest.html"></iframe>
   <iframe id="frame-btmap" data-src="docs/bt-paths-map.html"></iframe>
+  <iframe id="frame-live" allow="fullscreen" data-src="docs/live.html"></iframe>
 </div>
 <script>
   // Forward the shell's query string (e.g. UTM tags from the digest email link)

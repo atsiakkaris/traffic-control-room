@@ -258,8 +258,10 @@ def load_run_statuses(conn, group=GROUP):
     return per_run, per_path
 
 
-def analyse(conn=None, paths=None, sensors=None):
+def analyse(conn=None, paths=None, sensors=None, skip_runs=0):
     """Everything in one go from the database (read-only).
+
+    skip_runs=1 gives the verdicts as they stood one run earlier (for "new / recovered").
 
     Returns {sensors: {sid: {...verdict..., name, site_code, lat, lon}}, paths: {pid: {...}},
              meta: {runs_used, runs_ignored_as_outage, counts}}.
@@ -274,6 +276,9 @@ def analyse(conn=None, paths=None, sensors=None):
     finally:
         if own:
             conn.close()
+    if skip_runs:                       # judge as of the run(s) before the newest: per_run is newest first
+        for run_id in list(per_run)[:skip_runs]:
+            del per_run[run_id]
     kept, skipped = healthy_runs(per_run)
     states = {}
     for pid in paths:

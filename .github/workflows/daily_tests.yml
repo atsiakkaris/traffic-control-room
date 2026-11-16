@@ -54,6 +54,7 @@ jobs:
           [ -f results/history.db ] && git add results/history.db
           [ -f reports/latest.html ] && git add reports/latest.html
           [ -f docs/bt-paths-map.html ] && git add docs/bt-paths-map.html
+          [ -f docs/live.html ] && git add docs/live.html
           git diff --cached --quiet || git commit -m "chore: test results $(date -u +%Y-%m-%dT%H:%M)Z"
           git push
 
