@@ -215,6 +215,7 @@ def test_site_visits_page_and_saves(tmp_path):
         html = urllib.request.urlopen(base + "/visits").read().decode("utf-8")
         assert "Site visits" in html and "D1-01" in html and "333 m apart" in html
         assert '"start": "Office, Strovolos"' in html and "origin=35.150000,33.350000" in html
+        assert "Why are these sensors recommended?" in html and "we flag 100 m or more" in html and "From the list to the days" in html
         empty = urllib.request.urlopen(base + "/visits?kinds=&groups=traffic-detection&per_day=5").read().decode("utf-8")
         assert '"days": []' in empty                                # nothing ticked means nothing, not everything
         assert len(calls) == 1                                      # inputs cached until the DB or the workbook changes

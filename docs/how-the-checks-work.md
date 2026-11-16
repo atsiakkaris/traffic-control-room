@@ -200,7 +200,10 @@ spreadsheet matching as the sensor tabs (Traffic Detection, Bluetooth, VMS):
 | **Bluetooth sensor faulty** | Triangulation verdict *Faulty (high confidence)* or *Faulty (likely)* (section 5). |
 | **Your note** | You wrote a note on the sensor. |
 
-One sensor can be on the list for several reasons; they are shown together. Co-located twins (a second sensor within 15 m of a
+One sensor can be on the list for several reasons; they are shown together. Each reason carries its own evidence (the two positions
+and the distance, the unmatched row it was paired with, the last time the ID was seen, the triangulation reason) in the card's *Why
+it is on the list*, and the tab's *Why are these sensors recommended?* panel states the rules and thresholds above in plain words
+(`site_visits.explanation()`, built from the same constants, so the panel cannot disagree with the code). Co-located twins (a second sensor within 15 m of a
 matched one, usually the other direction) are not listed: they share their twin's row.
 
 **Stops and days.** Things within **150 m** of each other are one stop (`MERGE_M`). Each stop belongs to the nearest area centre

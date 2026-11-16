@@ -97,6 +97,67 @@ def test_plan_cuts_days_filters_and_numbers_stops():
     assert sv.plan(items, groups=["vms"]) == []
 
 
+def test_each_recommended_sensor_says_why_with_its_own_numbers():
+    a_far, r_far = api(1, 35.0, 33.0), ref("Far row", 35.002, 33.0)
+    a_only, r_only = api(3, 35.2, 33.2), ref("Lonely row", 35.204, 33.2)
+    a_alone, r_alone = api(4, 34.7, 32.4), ref("Row far away", 34.9, 33.6)
+    a_ret = api(5, 34.68, 33.04, active=False)
+    a_ret["last_seen"] = "2026-11-04T10:00:00"
+    a_bt = api(9, 35.5, 33.5)
+    matches = [{"type": "match", "api": a_far, "ref": r_far, "distance_m": 222.4},
+               {"type": "api_only", "api": a_only, "ref": None}, {"type": "ref_only", "api": None, "ref": r_only},
+               {"type": "api_only", "api": a_alone, "ref": None}, {"type": "ref_only", "api": None, "ref": r_alone},
+               {"type": "api_only", "api": a_ret, "ref": None}]
+    g = group(matches, [a_far, a_only, a_alone, a_ret, a_bt], slug="bluetooth", verdicts={"9": "faulty_high"}, notes={"4": {"note": "gate"}})
+    g["radius"] = 300
+    g["verdict_info"] = {"9": ("Faulty (high confidence)", "no path through it works")}
+    g["statuses"] = {"1": ("Down for 12 days (since 30 Oct): No measurement.", "bad")}
+    items = {(it["id"] or it["ref_name"]): it for it in sv.collect_items([g])}
+    why = {k: " ".join(it["why"]) for k, it in items.items()}
+    assert "222 m apart (we flag 100 m or more)" in why["1"] and "35.00000, 33.00000" in why["1"] and "Far row" in why["1"]
+    assert "Lonely row" in why["3"] and "445 m apart (we pair them up to 1000 m)" in why["3"] and "probably one device" in why["3"]
+    assert "within 300 m" in why["4"] and "You wrote a note" in why["4"]                       # api-only AND your note: both reasons
+    assert "Row far away" not in why["4"] and "within 300 m" in why["Row far away"] and "lists it as active" in why["Row far away"]
+    assert "last seen 2026-11-04" in why["5"]
+    assert why["9"] == "Triangulation verdict: Faulty (high confidence). No path through it works."
+    assert items["1"]["status"] == {"text": "Down for 12 days (since 30 Oct): No measurement.", "tone": "bad"} and items["3"]["status"] is None
+    assert all(len(it["why"]) == len(it["kinds"]) and it["why"] for it in items.values())   # one piece of evidence per reason, never none
+
+
+def test_the_written_rules_use_the_numbers_the_code_uses():
+    ex = sv.explanation()
+    assert [r["kind"] for r in ex["reasons"]] == list(sv.KINDS) and all(r["rule"] and r["matters"] for r in ex["reasons"])
+    rules = {r["kind"]: r["rule"] for r in ex["reasons"]}
+    assert "%d m or more" % sv.WARN_M in rules["far_apart"] and "%d m" % sv.PAIR_M in rules["pair"]
+    assert any("%d m of each other" % sv.MERGE_M in s for s in ex["steps"]) and any("%d m" % sv.COLOCATION_M in s for s in ex["not_flagged"])
+    assert "(7 by default)" in " ".join(sv.explanation(per_day=7)["steps"])
+
+
+def test_stops_say_how_far_they_are_from_the_previous_stop():
+    matches = [{"type": "api_only", "api": api(i, 35.17 + i / 100, 33.36), "ref": None} for i in range(3)]
+    items = sv.collect_items([group(matches, [])])
+    d = sv.plan(items, start=OFFICE)[0]
+    s0, s1 = d["stops"][0], d["stops"][1]
+    assert s0["leg_km"] == round(sv.haversine_m(OFFICE[0], OFFICE[1], s0["lat"], s0["lon"]) / 1000, 1)
+    assert s1["leg_km"] == round(sv.haversine_m(s0["lat"], s0["lon"], s1["lat"], s1["lon"]) / 1000, 1)
+    assert sv.plan(items)[0]["stops"][0]["leg_km"] is None            # no start: the first stop has nothing to measure from
+
+
+def test_the_reasoning_is_in_every_export(tmp_path):
+    from openpyxl import load_workbook
+    days, _ = _days()
+    sv.write_field_sheet(days, tmp_path / "w.xlsx")
+    wb = load_workbook(tmp_path / "w.xlsx")
+    readme = "\n".join(str(c.value) for row in wb["Read me"].iter_rows() for c in row if c.value)
+    assert "Why these sensors are on the list" in readme and "Positions differ" in readme and "Not on the list" in readme
+    ws = wb[wb.sheetnames[1]]
+    head = {c.value: c.column_letter for c in ws[3]}
+    assert any("333 m apart" in str(ws[head["Why it is on the list"] + str(r)].value) for r in range(4, ws.max_row + 1))
+    assert "Why: " in sv.to_kml(days) and "333 m apart" in sv.to_kml(days)
+    page = sv.mobile_html(days)
+    assert "Why it is on the list:" in page and "333 m apart" in page
+
+
 OFFICE = (35.150000, 33.350000, "Office, Strovolos")
 
 

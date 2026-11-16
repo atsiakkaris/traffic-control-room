@@ -87,6 +87,14 @@ print-ready pages; *Save for Google My Maps (KML)* can be imported into Google M
 prints the day lists. Click a day's heading to fold or unfold it (*Fold all days* / *Unfold all days* do all at once; folded days still print open). Each day also has *Open in Google Maps* links that drive through its stops. The order uses straight-line
 distance and nothing is sent anywhere until you open a Google link.
 
+**Why a sensor is recommended.** Nothing on the list is a verdict. Every card says *Why it is on the list* with the numbers behind
+it (for example "the API puts it at ..., the spreadsheet row at ...: 233 m apart, we flag 100 m or more"), *The monitor says* (the
+same sentence as the popup status line) and *To check* on site. Under the map, *Why are these sensors recommended? How the list is
+made* explains the reasons with their thresholds and what each one means, how the list becomes stops and days, and what is
+deliberately **not** on the list; it is written from the same constants the code uses and prints with the days. Each stop also shows
+its straight-line km from the previous stop (or the start). The same reasoning is in the Excel field sheet (a *Why it is on the list*
+column and sections on the Read me sheet), in the Google My Maps file and on the phone page, so you can show a colleague any of them.
+
 **Where each day starts.** Every day begins at your office, so each day's stops are ordered from it, the drive from it is counted
 and the Google Maps links start there. It is set in the git-ignored `.env` (the repo is public, so the address is not in the
 code): `CONTROL_ROOM_VISIT_START=Name shown|lat,lon`. Without it a day starts at the centre of its area. Coming back is not counted.

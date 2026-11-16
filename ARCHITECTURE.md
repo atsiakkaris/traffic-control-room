@@ -487,6 +487,10 @@ text `ID:` (the note box finds the sensor id by it).
 every group (plus the Bluetooth verdicts), cached on the `history.db` and `QA Locations.xlsx` mtimes; the notes are read per request.
 `collect_items` turns that into things to check, `group_stops` merges what is within 150 m, `plan` assigns stops to the nearest area
 centre, orders them (nearest neighbour then 2-opt, straight-line, open route from the area centre) and cuts them into days;
+Reasoning for colleagues: `collect_items` gives each item `why` (one evidence sentence per reason, with the real numbers) and `status`
+(the `sensor_status` sentence, computed in `visit_inputs`); `explanation()` is the rules table, the steps from list to days and the
+"not flagged" list, built from the module's constants; `plan` stamps each stop with `leg_km`. The tab, the Excel sheet (a column and
+Read me sections), the KML and the phone page all show them.
 `plan(..., start=(lat, lon, name))` makes every day begin at the office: ordering, the km and the Google links start from it, and
 what is left of an area is ordered again from it for the next day; `visit_start_setting` reads `CONTROL_ROOM_VISIT_START` from the
 git-ignored `.env`. `mobile_html` is the phone page: one self-contained file (no external scripts, styles or tiles), a fixed JSON

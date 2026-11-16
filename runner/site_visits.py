@@ -48,6 +48,56 @@ KINDS = {
 }
 KIND_ORDER = list(KINDS)
 
+COLOCATION_M = 15    # same as qa.COLOCATION_M: a second sensor this close to a matched one shares its row
+
+
+def explanation(warn_m=WARN_M, pair_m=PAIR_M, merge_m=MERGE_M, per_day=PER_DAY):
+    """The reasoning in plain words, so colleagues can see why a sensor is recommended. Shown on the Site visits tab, in the
+    field sheet and on the phone page. The thresholds come from the same constants the code uses, so it cannot drift."""
+    reasons = {
+        "far_apart": ("It is matched to a spreadsheet row, but the API position and the spreadsheet position are %d m or more apart." % warn_m,
+                      "One of the two positions is wrong. Maps, fault location and the sensor-to-contract matching all depend on the coordinates."),
+        "pair": ("An API sensor has no spreadsheet row, an active spreadsheet row has no API sensor, and the two are within %d m of each other "
+                 "(closest pairs first)." % pair_m,
+                 "Most likely one device whose position is wrong on one side: a single visit settles both."),
+        "api_only": ("The API lists it (it is still in the feed), but the spreadsheet has no row for it nearby: none within the matching radius "
+                     "and no unmatched row within %d m." % pair_m,
+                     "Either a sensor was installed without being recorded (owner and contract unknown), or the API lists a sensor that is not there."),
+        "ref_only": ("The spreadsheet lists it as active, but no API sensor is near it: none within the matching radius and no unmatched "
+                     "sensor within %d m." % pair_m,
+                     "Either it is not installed, not connected to the system, or it reports under a wrong position. The contract may count "
+                     "equipment the system cannot see."),
+        "retired": ("Its ID is missing from the latest monitor run: it dropped out of the API feed.",
+                    "The equipment may have been removed, damaged or lost power, or it was only deleted from the system."),
+        "faulty": ("Bluetooth triangulation: no path through it works, and its failing paths lead to sensors that are alive elsewhere "
+                   "(verdicts 'Faulty (high confidence)' and 'Faulty (likely)').",
+                   "A path only reports when both its sensors work, so this sensor is the most likely cause. Only a visit can confirm it."),
+        "note": ("You wrote a note on this sensor.", "You flagged it yourself."),
+    }
+    steps = [
+        "Compare: every sensor group (Traffic Detection, Bluetooth, VMS) is matched with the QA Locations spreadsheet by position, the same "
+        "matching as the sensor tabs.",
+        "Flag: a sensor is recommended when at least one of the reasons below applies. Sensors with nothing in doubt are not listed.",
+        "Filter: you choose which reasons and groups to include. Anything already visited (answered Yes or No) is left out unless you show it.",
+        "Stops: things within %d m of each other are one stop, so one visit covers them." % merge_m,
+        "Areas: each stop goes to the nearest of Nicosia, Limassol, Larnaca, Paphos and Famagusta.",
+        "Order: from where the day starts (your office, or the area centre) always the nearest unvisited stop next, then any two crossing "
+        "legs are untangled. Straight-line distances, so the real drive can be longer.",
+        "Days: at most 'Stops per day' stops (%d by default); what is left is ordered again from the start for the next day." % per_day,
+    ]
+    not_flagged = [
+        "Sensors with nothing in doubt: matched to a spreadsheet row less than %d m away and no other reason." % warn_m,
+        "Spreadsheet rows marked awaiting power or decommissioned: they are not expected to work.",
+        "Spreadsheet rows without coordinates: they cannot be placed on a map or a route.",
+        "A second sensor within %d m of a matched one (usually the other direction): it shares its twin's row." % COLOCATION_M,
+        "Bluetooth sensors that work but have failing paths (look at the paths), or with not enough evidence (nothing to check on site).",
+        "How long a sensor has been down is not a reason by itself. The visit list is about position and existence doubts; the popup "
+        "status line says when a sensor is down.",
+    ]
+    return {"reasons": [{"kind": k, "label": KINDS[k], "rule": reasons[k][0], "matters": reasons[k][1]} for k in KIND_ORDER],
+            "steps": steps, "not_flagged": not_flagged}
+
+
 FOUND_CHOICES = ["Yes", "No", "Not sure"]
 RIGHT_CHOICES = ["API position", "Spreadsheet position", "Neither", "Not applicable"]
 
@@ -95,8 +145,10 @@ def collect_items(groups, warn_m=WARN_M, pair_m=PAIR_M):
     """Everything worth a visit, one item per sensor or spreadsheet row.
 
     groups: [{"group", "slug", "matches" (qa.match_sensors), "api" (all API sensors), "verdicts" ({id: verdict},
-    Bluetooth only), "notes" ({id: {"note"}})}]. An item: {key, group, slug, kinds [..], id, name, site_code, project,
-    ref_name, dist, points [{label, lat, lon}] (first = where to go), checks [text], note}.
+    Bluetooth only), "verdict_info" ({id: (label, reason)}), "notes" ({id: {"note"}}), "radius" (match radius m),
+    "statuses" ({id: (sentence, tone)} from sensor_status)}]. An item: {key, group, slug, kinds [..], id, name, site_code,
+    project, ref_name, dist, points [{label, lat, lon}] (first = where to go), why [evidence, one per reason: what the data
+    says], checks [what to check on site], status ({text, tone} or None), note}.
     """
     items = {}
 
@@ -104,10 +156,14 @@ def collect_items(groups, warn_m=WARN_M, pair_m=PAIR_M):
         it = items.get(key)
         if it is None:
             it = items[key] = {"key": "|".join(str(k) for k in key), "group": g["group"], "slug": g["slug"], "kinds": [], "checks": [],
+                               "why": [], "status": None,
                                "id": str(api["id"]) if api else None, "name": (api or ref or {}).get("name"),
                                "site_code": api.get("site_code") if api else None,
                                "project": (api or {}).get("project") or (ref or {}).get("project"),
                                "ref_name": ref.get("name") if ref else None, "dist": dist, "points": [], "note": None}
+            st = (g.get("statuses") or {}).get(str(api["id"])) if api else None
+            if st and api.get("active", True):          # a retired sensor's reason already says it is retired
+                it["status"] = {"text": st[0], "tone": st[1]}
             if _has_coords(api):
                 it["points"].append(_point("API", api["lat"], api["lon"]))
             if _has_coords(ref):
@@ -116,13 +172,17 @@ def collect_items(groups, warn_m=WARN_M, pair_m=PAIR_M):
             it["kinds"].append(kind)
         return it
 
+    fmt = lambda p: "%.5f, %.5f" % (p["lat"], p["lon"])
     for g in groups:
         api_only, ref_only = [], []
+        rad = ("%d m" % g["radius"]) if g.get("radius") else "the matching radius"
         for m in g.get("matches", []):
             api, ref = m.get("api"), m.get("ref")
             if m["type"] == "match" and (m.get("distance_m") or 0) >= warn_m and _has_coords(api) and _has_coords(ref):
                 it = item((g["slug"], "api", str(api["id"])), g, "far_apart", api, ref, round(m["distance_m"]))
                 it["checks"].append("Spreadsheet and API are %d m apart: which position is right?" % round(m["distance_m"]))
+                it["why"].append("The API puts it at %s and the spreadsheet row \"%s\" at %s: %d m apart (we flag %d m or more), "
+                                 "so one of the two positions is wrong." % (fmt(api), ref.get("name"), fmt(ref), round(m["distance_m"]), warn_m))
             elif m["type"] == "api_only" and _has_coords(api) and api.get("active", True):
                 api_only.append(api)
             elif m["type"] == "ref_only" and _has_coords(ref) and ref.get("commissioning", "active") == "active":
@@ -143,31 +203,41 @@ def collect_items(groups, warn_m=WARN_M, pair_m=PAIR_M):
             it = item((g["slug"], "api", str(a["id"])), g, "pair", a, r, round(d))
             it["checks"].append("API sensor without a spreadsheet row, and a spreadsheet row \"%s\" without an API sensor "
                                 "%d m apart: probably the same device. Which position is right?" % (r.get("name"), round(d)))
+            it["why"].append("The API sensor (at %s) has no spreadsheet row, and the spreadsheet row \"%s\" (at %s) has no API sensor. They are %d m "
+                             "apart (we pair them up to %d m), so it is probably one device whose position is wrong on one side."
+                             % (fmt(a), r.get("name"), fmt(r), round(d), pair_m))
         for ai, a in enumerate(api_only):
             if ai not in used_a:
-                item((g["slug"], "api", str(a["id"])), g, "api_only", a)["checks"].append(
-                    "In the API but not in the spreadsheet: is a sensor installed here? Note its label and project.")
+                it = item((g["slug"], "api", str(a["id"])), g, "api_only", a)
+                it["checks"].append("In the API but not in the spreadsheet: is a sensor installed here? Note its label and project.")
+                it["why"].append("It is in the API feed, but the spreadsheet has no row for it: none within %s and no unmatched row within %d m." % (rad, pair_m))
         for ri, r in enumerate(ref_only):
             if ri not in used_r:
                 key = (g["slug"], "ref", "%.5f,%.5f" % (r["lat"], r["lon"]), r.get("name"))
-                item(key, g, "ref_only", None, r)["checks"].append(
-                    "In the spreadsheet (active) but no API sensor: is it installed, powered and connected?")
+                it = item(key, g, "ref_only", None, r)
+                it["checks"].append("In the spreadsheet (active) but no API sensor: is it installed, powered and connected?")
+                it["why"].append("The spreadsheet lists it as active, but no API sensor is near it: none within %s and no unmatched sensor within %d m." % (rad, pair_m))
 
         by_id = {str(s["id"]): s for s in g.get("api", [])}
         for sid, s in by_id.items():
             if not s.get("active", True) and _has_coords(s):
-                item((g["slug"], "api", sid), g, "retired", s)["checks"].append(
-                    "Missing from the latest API data: is it still installed? Removed, damaged or without power?")
+                it = item((g["slug"], "api", sid), g, "retired", s)
+                it["checks"].append("Missing from the latest API data: is it still installed? Removed, damaged or without power?")
+                seen = str(s.get("last_seen") or "")[:10]
+                it["why"].append("Its ID is missing from the latest monitor run%s: it dropped out of the API feed." % (" (last seen %s)" % seen if seen else ""))
         for sid, v in (g.get("verdicts") or {}).items():
             s = by_id.get(str(sid))
             if v in ("faulty_high", "faulty_likely") and _has_coords(s) and s.get("active", True):
-                item((g["slug"], "api", str(sid)), g, "faulty", s)["checks"].append(
-                    "No Bluetooth path through it works: check power, antenna and communication.")
+                it = item((g["slug"], "api", str(sid)), g, "faulty", s)
+                it["checks"].append("No Bluetooth path through it works: check power, antenna and communication.")
+                label, reason = (g.get("verdict_info") or {}).get(str(sid), (v, ""))
+                it["why"].append("Triangulation verdict: %s.%s" % (label, (" " + reason[0].upper() + reason[1:] + ".") if reason else ""))
         for sid, n in (g.get("notes") or {}).items():
             s = by_id.get(str(sid))
             if _has_coords(s):
                 it = item((g["slug"], "api", str(sid)), g, "note", s)
                 it["note"] = n.get("note") if isinstance(n, dict) else str(n)
+                it["why"].append("You wrote a note on this sensor.")
     out = [it for it in items.values() if it["points"]]
     for it in out:
         it["kinds"].sort(key=KIND_ORDER.index)
@@ -246,8 +316,11 @@ def plan(items, per_day=PER_DAY, kinds=None, groups=None, merge_m=MERGE_M, areas
             route = order_route(left, origin)
             part, left = route[:per_day], route[per_day:]
             n += 1
+            prev = origin if start else None          # straight-line km from the previous stop (or from the start)
             for i, s in enumerate(part, 1):
                 s["code"] = "D%d-%02d" % (n, i)
+                s["leg_km"] = round(haversine_m(prev[0], prev[1], s["lat"], s["lon"]) / 1000, 1) if prev else None
+                prev = (s["lat"], s["lon"])
             pts = [(s["lat"], s["lon"]) for s in part]
             days.append({"day": n, "area": area, "stops": part, "start": start[2] if start else None,
                          "origin": list(origin) if start else None,
@@ -281,7 +354,7 @@ def _sensor_label(it):
 H_KEY, H_KINDS = "Key", "Kinds"
 H_FOUND, H_RIGHT, H_LAT, H_LON, H_LABEL, H_REMARKS = "Found?", "Right position", "GPS lat", "GPS lon", "Label on site", "Remarks"
 SHEET_COLUMNS = [
-    ("Stop", 8), ("Group", 15), ("ID", 7), ("Site code", 9), ("Name", 28), ("What to check", 52),
+    ("Stop", 8), ("Group", 15), ("ID", 7), ("Site code", 9), ("Name", 28), ("Why it is on the list", 50), ("What to check", 46),
     ("Go to API position", 13), ("Go to spreadsheet position", 13),
     (H_FOUND, 11), (H_RIGHT, 20), (H_LAT, 11), (H_LON, 11), (H_LABEL, 18), (H_REMARKS, 32),
     ("Project", 16), ("Spreadsheet name", 22), ("Distance m", 9),
@@ -341,6 +414,24 @@ def write_field_sheet(days, path):
         c.font = Font(bold=bold, size=13 if i == 1 else 11)
         c.alignment = Alignment(wrap_text=True, vertical="top")
 
+    # why sensors are recommended, in words (same text as the Site visits tab), after the instructions
+    exp = explanation()
+    r = len(READ_ME) + 2
+    ws.cell(row=r, column=1, value="Why these sensors are on the list").font = Font(bold=True, size=13)
+    for rs in exp["reasons"]:
+        r += 1
+        ws.cell(row=r, column=1, value="%s: %s Why it matters: %s" % (rs["label"], rs["rule"], rs["matters"])).alignment = Alignment(wrap_text=True, vertical="top")
+    r += 2
+    ws.cell(row=r, column=1, value="How the days are made").font = Font(bold=True, size=13)
+    for s_ in exp["steps"]:
+        r += 1
+        ws.cell(row=r, column=1, value=s_).alignment = Alignment(wrap_text=True, vertical="top")
+    r += 2
+    ws.cell(row=r, column=1, value="Not on the list").font = Font(bold=True, size=13)
+    for s_ in exp["not_flagged"]:
+        r += 1
+        ws.cell(row=r, column=1, value=s_).alignment = Alignment(wrap_text=True, vertical="top")
+
     col = {h: i for i, (h, _w) in enumerate(SHEET_COLUMNS, 1)}
     for day in days:
         ws = wb.create_sheet(_sheet_name(day))
@@ -368,6 +459,7 @@ def write_field_sheet(days, path):
                 api, ref = pts.get("API"), pts.get("Spreadsheet")
                 checks = list(it["checks"]) + (["Your note: " + it["note"]] if it["note"] else [])
                 vals = {"Stop": st["code"], "Group": it["group"], "ID": it["id"], "Site code": it["site_code"], "Name": it["name"] or it["ref_name"],
+                        "Why it is on the list": "\n".join(it["why"] + (["The monitor says: " + it["status"]["text"]] if it.get("status") else [])),
                         "What to check": "\n".join(checks), "Project": it["project"], "Spreadsheet name": it["ref_name"],
                         "Distance m": it["dist"], H_KEY: it["key"], H_KINDS: ",".join(it["kinds"]),
                         "API lat": round(api["lat"], 6) if api else None, "API lon": round(api["lon"], 6) if api else None,
@@ -438,6 +530,7 @@ a.btn.alt,button.btn.alt{background:transparent;color:var(--blue);border:2px sol
 .item{border-top:1px dashed var(--line);padding:12px 0}.item:first-child{border-top:0}
 .k{display:inline-block;background:rgba(31,78,121,.12);border-radius:6px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px}
 .chk{margin:6px 0;color:var(--ink)}.note{color:#a35a00;margin:4px 0}
+.why{margin:6px 0;color:var(--mute);font-size:14px}.why b{color:var(--ink)}.mon{font-size:14px;margin:4px 0}
 .nav{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
 .lbl{font-weight:600;margin:10px 0 4px;font-size:14px;color:var(--mute)}
 .seg{display:flex;gap:6px;flex-wrap:wrap}
@@ -503,13 +596,15 @@ footer .btn{flex:1}
       var sec = document.createElement('section'), fin = stopDone(s);
       sec.className = 'stop' + (fin ? ' done closed' : '');
       var h = '<div class="sh" data-toggle="1"><span class="c">' + esc(s.code) + '</span><span class="n"><b>' + esc(s.items[0].name || s.items[0].ref_name) + '</b>' +
-              '<small>' + (fin ? '✓ done' : s.items.length + ' to check') + '</small></span><span class="chev">' + (fin ? '▸' : '▾') + '</span></div><div class="body">';
+              '<small>' + (fin ? '✓ done' : s.items.length + ' to check') + (s.leg_km != null ? ' - ' + s.leg_km + ' km from the previous stop' : '') + '</small></span><span class="chev">' + (fin ? '▸' : '▾') + '</span></div><div class="body">';
       s.items.forEach(function(it) {
         var a = st[it.key] || {};
         h += '<div class="item"><b>' + esc(it.group) + (it.id ? ' ' + esc(it.id) : '') + (it.site_code ? ' (site ' + esc(it.site_code) + ')' : '') + '</b>';
         if (it.project) h += ' <span class="k">' + esc(it.project) + '</span>';
         h += '<br>' + it.kinds.map(function(k) { return '<span class="k">' + esc(D.kinds[k] || k) + '</span>'; }).join('');
-        h += '<div class="chk">' + it.checks.map(esc).join('<br>') + '</div>';
+        if (it.why && it.why.length) h += '<div class="why"><b>Why it is on the list:</b> ' + it.why.map(esc).join(' ') + '</div>';
+        if (it.status) h += '<div class="mon"><b>The monitor says:</b> ' + esc(it.status.text) + '</div>';
+        h += '<div class="chk"><b>To check:</b> ' + it.checks.map(esc).join('<br>') + '</div>';
         if (it.note) h += '<div class="note">Your note: ' + esc(it.note) + '</div>';
         h += '<div class="nav">' + it.points.map(function(p, i) { return '<a class="btn' + (i ? ' alt' : '') + '" href="' + esc(nav(p)) + '">' + (it.points.length > 1 ? 'Go to ' + esc(p.label.toLowerCase()) + ' position' : 'Navigate') + '</a>'; }).join('') + '</div>';
         h += '<div class="lbl">Found?</div><div class="seg">' + ['Yes', 'No', 'Not sure'].map(function(v) {
@@ -605,8 +700,9 @@ def mobile_html(days, generated=None):
         "generated": (generated or datetime.now()).strftime("%d/%m/%Y %H:%M"), "kinds": KINDS, "head": MOBILE_HEAD,
         "days": [{"day": d["day"], "area": d["area"], "km": d["km"], "start": d.get("start"), "links": d["links"],
                   "stops": [{"code": s["code"], "lat": s["lat"], "lon": s["lon"],
+                             "leg_km": s.get("leg_km"),
                              "items": [{k: it[k] for k in ("key", "group", "id", "site_code", "name", "ref_name", "kinds", "checks",
-                                                           "note", "project", "points", "dist")} for it in s["items"]]}
+                                                           "why", "status", "note", "project", "points", "dist")} for it in s["items"]]}
                             for s in d["stops"]]} for d in days]}
     return MOBILE_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/").replace("<!--", "<\\!--"))
 
@@ -847,8 +943,9 @@ def to_kml(days, title="Site visits"):
         for st in day["stops"]:
             desc = []
             for it in st["items"]:
-                desc.append("<b>%s</b> (%s)<br>%s" % (escape(_sensor_label(it)), escape(", ".join(KINDS[k] for k in it["kinds"])),
-                                                        "<br>".join(escape(c) for c in it["checks"])))
+                desc.append("<b>%s</b> (%s)<br>Why: %s<br>To check: %s" % (
+                    escape(_sensor_label(it)), escape(", ".join(KINDS[k] for k in it["kinds"])),
+                    " ".join(escape(w) for w in it["why"]), "<br>".join(escape(c) for c in it["checks"])))
                 if it["note"]:
                     desc.append("Your note: " + escape(it["note"]))
                 for p in it["points"]:

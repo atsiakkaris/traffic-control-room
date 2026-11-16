@@ -1161,6 +1161,7 @@ def visit_inputs(views=None):
     """What the Site visits tab plans from: per sensor group the API sensors, spreadsheet rows and their matches
     (the same matching as the sensor tabs), plus the Bluetooth verdicts. Read-only, like the sensor pages."""
     import qa
+    import sensor_status
     views = views or sensor_views()
     workbook = ROOT / "QA Locations.xlsx"
     if not workbook.exists():
@@ -1173,11 +1174,15 @@ def visit_inputs(views=None):
         matches = qa.match_sensors(ref, api, max_dist=max_dist)
         qa.annotate_accountability(api, matches, acct, max_dist=max_dist)
         qa.annotate_ref_accountability(ref, acct)
-        verdicts = {}
+        verdicts, vinfo = {}, {}
         if group == "Bluetooth":
             import bt_sensor_suspects
-            verdicts = {sid: v["verdict"] for sid, v in bt_sensor_suspects.analyse()["sensors"].items()}
-        out.append({"group": group, "slug": slug, "api": api, "matches": matches, "verdicts": verdicts})
+            found = bt_sensor_suspects.analyse()["sensors"]
+            verdicts = {sid: v["verdict"] for sid, v in found.items()}
+            vinfo = {str(sid): (bt_sensor_suspects.VERDICTS[v["verdict"]], v["reason"]) for sid, v in found.items()}
+        statuses = {str(s["id"]): sensor_status.status_sentence(s, verdicts.get(s["id"]) or verdicts.get(str(s["id"])), group) for s in api}
+        out.append({"group": group, "slug": slug, "api": api, "matches": matches, "verdicts": verdicts,
+                    "radius": max_dist, "verdict_info": vinfo, "statuses": statuses})
     return out
 
 
@@ -1259,6 +1264,10 @@ a{color:#2e86c1;cursor:pointer}
 details.find{margin:14px 18px;background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.12)}
 details.find summary{padding:10px 14px;font-weight:bold;cursor:pointer}
 details.find table{margin:0 0 6px}
+details.find.exp{border-left:5px solid #2e86c1}
+.exp .in{padding:0 16px 14px;line-height:1.45}.exp h4{margin:14px 0 4px;font-size:13px}
+.exp ol,.exp ul{margin:4px 0 0 18px;padding:0}.exp td,.exp th{font-size:12.5px}
+.why{margin:5px 0;color:#444}.mon{margin:4px 0;font-size:12px;color:#555}
 #imp{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:flex-start;justify-content:center;padding:30px 12px;overflow:auto}
 #imp .box{background:#fff;border-radius:10px;max-width:980px;width:100%;padding:16px 18px;box-shadow:0 6px 30px rgba(0,0,0,.4)}
 #imp h2{margin:0 0 8px;font-size:16px}#imp .warn{color:#9a5b00;margin:6px 0;font-size:12px}
@@ -1270,6 +1279,7 @@ details.find table{margin:0 0 6px}
 <header><h1>Site visits</h1><div class="sub" id="sub"></div></header>
 <div class="bar" id="bar"></div>
 <div id="map"></div>
+<div id="explain"></div>
 <div id="findings"></div>
 <div id="days"></div>
 <div id="imp"><div class="box"><h2>Import findings</h2><div id="impbody"></div></div></div>
@@ -1356,7 +1366,9 @@ details.find table{margin:0 0 6px}
     var h = '<b>' + esc(it.group) + (it.id ? ' ' + esc(it.id) : '') + (it.site_code ? ' (site ' + esc(it.site_code) + ')' : '') + ': ' + esc(it.name || it.ref_name) + '</b><br>';
     it.kinds.forEach(function(k) { h += '<span class="k">' + esc(D.kinds[k]) + '</span>'; });
     if (it.project) h += '<span class="k">' + esc(it.project) + '</span>';
-    h += '<br>' + it.checks.map(esc).join('<br>');
+    if (it.why && it.why.length) h += '<div class="why"><b>Why it is on the list:</b> ' + it.why.map(esc).join(' ') + '</div>';
+    if (it.status) h += '<div class="mon"><b>The monitor says:</b> ' + esc(it.status.text) + '</div>';
+    h += '<b>To check:</b> ' + it.checks.map(esc).join('<br>');
     if (it.note) h += '<br><span class="note">Your note: ' + esc(it.note) + '</span>';
     if (it.visit) {
       h += '<div class="visit">' + (it.visit.done ? '&#10003; Visited ' + esc(it.visit.at) : 'Visit recorded, not finished') +
@@ -1397,7 +1409,8 @@ details.find table{margin:0 0 6px}
     var h = '<h3 style="background:' + COL[di % COL.length] + '">Day ' + d.day + ' - ' + esc(d.area) + ': ' + d.stops.length + ' stop' + (d.stops.length === 1 ? '' : 's') +
             ', about ' + d.km + ' km in straight lines' + links + '</h3><table><tr><th>Stop</th><th>What to check</th><th class="noprint"></th></tr>';
     d.stops.forEach(function(s) {
-      h += '<tr><td class="code">' + esc(s.code) + '</td><td>' + s.items.map(itemHtml).join('<hr style="margin:6px 0;border:0;border-top:1px dashed #ccc">') + '</td>' +
+      h += '<tr><td class="code">' + esc(s.code) + (s.leg_km != null ? '<br><small style="font-weight:normal;color:#666">' + s.leg_km + ' km from ' +
+           (s.code.slice(-2) === '01' && D.start ? 'the start' : 'the previous stop') + '</small>' : '') + '</td><td>' + s.items.map(itemHtml).join('<hr style="margin:6px 0;border:0;border-top:1px dashed #ccc">') + '</td>' +
            '<td class="noprint" style="white-space:nowrap"><a data-show="' + esc(s.code) + '">show on map</a>' +
            (shell ? '<br><a data-tab="' + esc(s.items[0].slug) + '" data-lat="' + s.lat + '" data-lon="' + s.lon + '">' + esc(s.items[0].group) + ' tab</a>' : '') + '</td></tr>';
     });
@@ -1426,6 +1439,27 @@ details.find table{margin:0 0 6px}
       shell.crShow(a.getAttribute('data-tab'), {lat: +a.getAttribute('data-lat'), lon: +a.getAttribute('data-lon')});
     }
   });
+
+  // ── why these sensors are recommended (for colleagues) ──
+  (function() {
+    var ex = D.explain, det = document.createElement('details'), open = true;
+    try { open = localStorage.getItem('svExplainOpen') !== '0'; } catch (e) {}
+    det.className = 'find exp'; det.open = open;
+    var h = '<summary>Why are these sensors recommended? How the list is made</summary><div class="in">' +
+      '<p>A sensor is recommended for a visit only when the data leaves a doubt that can be settled on site. It does not say the sensor is wrong: ' +
+      'it says the API and the spreadsheet disagree, or that something is missing on one side, or that the monitor sees it failing.</p>' +
+      '<h4>The reasons (' + nItems + ' things on this plan right now)</h4><table><tr><th>Reason</th><th>Rule</th><th>Why it matters</th><th>On the plan</th></tr>';
+    ex.reasons.forEach(function(r) {
+      h += '<tr><td><b>' + esc(r.label) + '</b></td><td>' + esc(r.rule) + '</td><td>' + esc(r.matters) + '</td><td>' + (D.kind_counts[r.kind] || 0) + '</td></tr>';
+    });
+    h += '</table><p style="margin:6px 0 0;color:#555">One sensor can have several reasons; they are shown together on its card. The plan counts what is not visited yet.</p>' +
+         '<h4>From the list to the days</h4><ol>' + ex.steps.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>' +
+         '<h4>What is not on the list</h4><ul>' + ex.not_flagged.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul></div>';
+    det.innerHTML = h;
+    det.addEventListener('toggle', function() { try { localStorage.setItem('svExplainOpen', det.open ? '1' : '0'); } catch (e) {} });
+    window.addEventListener('beforeprint', function() { det.open = true; });   // the reasoning prints with the days
+    document.getElementById('explain').appendChild(det);
+  })();
 
   // ── what the visits found ──
   if (D.findings.length) {
@@ -1483,7 +1517,7 @@ details.find table{margin:0 0 6px}
 def build_visits_page(items, days, kinds, groups, per_day, views, message="", visits=None, n_done=0, show_done=False, start=""):
     import site_visits as sv
     kind_counts, group_counts = sv.counts(items)
-    data = {"days": days, "start": start, "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
+    data = {"days": days, "start": start, "explain": sv.explanation(per_day=per_day), "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
             "group_counts": group_counts, "message": message, "n_done": n_done, "findings": sv.findings_list(visits or {}),
             "sel": {"kinds": kinds, "groups": groups, "per_day": per_day, "done": show_done}}
     return VISITS_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
