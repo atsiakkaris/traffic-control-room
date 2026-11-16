@@ -489,6 +489,14 @@ def test_triangulation_export_uses_the_server_not_a_browser_download():
     assert "/api/save-csv" in html and "createObjectURL" not in html and 'id="triSaved"' in html
 
 
+def test_triangulation_panel_has_a_show_only_button_next_to_export():
+    result = {"sensors": {}, "meta": {"enough_history": True, "runs_used": 20, "runs_ignored_as_outage": 0,
+                                      "unusable_paths": 0}}
+    html = cr.triangulation_html(result)
+    assert html.index('id="triEx"') < html.index('id="triOnly"') < html.index('id="triNote"')
+    assert "Show only" in html and "Show all" in html and "applyOnly" in html
+
+
 def _dl_server(tmp_path, chooser):
     srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv",
                          page_builder=lambda: ("", {}), paths_provider=dict, downloads_dir=tmp_path / "dl",

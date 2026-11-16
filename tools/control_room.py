@@ -385,7 +385,9 @@ TRIANGULATION_JS = """<style>
 #triPanel .row{padding:7px 8px;border-radius:6px;cursor:pointer;border-left:5px solid #ccc;margin:4px 0;background:#f6f7f9}
 #triPanel .row:hover{background:#e8eef5}
 #triPanel .row small{display:block;color:#555}
-#triPanel button.ex{margin:8px 14px 12px;padding:6px 12px;border:0;border-radius:6px;background:#2c3e50;color:#fff;cursor:pointer}
+#triPanel .btns{display:flex;gap:8px;flex-wrap:wrap;padding:0 14px}
+#triPanel button.ex{margin:8px 0 12px;padding:6px 12px;border:0;border-radius:6px;background:#2c3e50;color:#fff;cursor:pointer}
+#triPanel button.ex.on{background:#7b241c}
 .triPop{max-width:300px;font:13px Arial,sans-serif}.triPop ul{margin:6px 0 0;padding-left:18px}
 .triPop a,.triInfo a{color:#2e86c1;cursor:pointer}
 .triInfo{margin-top:6px;padding-top:6px;border-top:1px dashed #ccc;max-width:320px}
@@ -398,7 +400,11 @@ TRIANGULATION_JS = """<style>
   <div class="tb sm" id="triSum"></div>
   <div class="tb" id="triOpts"></div>
   <div class="tb" id="triList"></div>
-  <button class="ex" id="triEx">Export CSV</button>
+  <div class="btns">
+    <button class="ex" id="triEx">Export CSV</button>
+    <button class="ex" id="triOnly" title="Hide every other dot on the map and keep only the sensors ticked above">Show only</button>
+  </div>
+  <div class="tb sm" id="triNote" style="padding-top:0"></div>
   <div class="tb sm" id="triSaved" style="padding-top:0;word-break:break-all"></div>
 </div>
 <script>
@@ -408,6 +414,7 @@ TRIANGULATION_JS = """<style>
   var shell = (window.parent !== window && window.parent.crShow) ? window.parent : null;
   var layer = L.layerGroup().addTo(map), markers = {};
   var on = {faulty_high: true, faulty_likely: true, path_problem: false};   // path problems start hidden
+  var onlyMode = false, hidden = [];   // "Show only": the map dots taken off the map, so they can be put back
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   function popup(s) {
     var h = '<div class="triPop"><b>' + esc(s.name) + '</b> (site ' + esc(s.site_code) + ')<br><i>' + esc(D.labels[s.verdict]) + '</i><br>' + esc(s.reason) + '<ul>';
@@ -491,7 +498,30 @@ TRIANGULATION_JS = """<style>
       list.appendChild(r);
     });
     if (!list.children.length) list.innerHTML = '<div class="sm">Nothing to show for the ticked options.</div>';
+    if (onlyMode) applyOnly(true);
   }
+  // "Show only": keep on the map just the dots of the sensors ticked in this panel (plus their rings).
+  // The dots live in the page's own style layers, so they are taken out one by one and put back afterwards.
+  function shown() { return D.sensors.filter(function(s) { return on[s.verdict] && s.lat != null; }); }
+  function applyOnly(refit) {
+    hidden.forEach(function(h) { h.g.addLayer(h.m); });
+    hidden = [];
+    var note = document.getElementById('triNote'), btn2 = document.getElementById('triOnly');
+    btn2.classList.toggle('on', onlyMode);
+    btn2.textContent = onlyMode ? 'Show all' : 'Show only';
+    if (!onlyMode || typeof CAT_LAYERS === 'undefined') { note.textContent = ''; return; }
+    var keep = shown();
+    function wanted(ll) { return keep.some(function(s) { return Math.abs(ll.lat - s.lat) < 0.00005 && Math.abs(ll.lng - s.lon) < 0.00005; }); }
+    Object.keys(CAT_LAYERS).forEach(function(c) {
+      var g = CAT_LAYERS[c], drop = [];
+      g.eachLayer(function(m) { if (!(m.getLatLng && wanted(m.getLatLng()))) drop.push(m); });
+      drop.forEach(function(m) { g.removeLayer(m); hidden.push({g: g, m: m}); });
+    });
+    map.closePopup();
+    note.textContent = 'Showing only the ' + keep.length + ' sensor' + (keep.length === 1 ? '' : 's') + ' ticked above. Click Show all to bring back the rest.';
+    if (refit && keep.length) map.fitBounds(L.latLngBounds(keep.map(function(s) { return [s.lat, s.lon]; })).pad(0.2), {maxZoom: 15});
+  }
+  document.getElementById('triOnly').onclick = function() { onlyMode = !onlyMode; applyOnly(true); };
   refresh();
   document.getElementById('triEx').onclick = function() {
     var note = document.getElementById('triSaved');

@@ -111,7 +111,8 @@ are kept in `results/site_visits.json` (git-ignored, like the notes). Rules:
 of its sensors work, so a path that works proves both ends are alive. A sensor with no working path, whose failing
 paths lead to sensors that work elsewhere, is the likely culprit; a sensor with both working and failing paths is
 only a *path problem*. The panel (bottom-left of the Bluetooth tab) lists the suspects, rings them on the map, and
-each popup links to its paths on the Paths tab; it can export a CSV. Runs during whole-feed outages are ignored,
+each popup links to its paths on the Paths tab; it can export a CSV. **Show only** (next to *Export CSV*) hides every
+other dot on the map and keeps just the sensors ticked in the panel; click it again (*Show all*) to bring the rest back. Runs during whole-feed outages are ignored,
 and paths whose name doesn't match where they really end are left out rather than guessed.
 
 **Is a path wired to the right sensors? (Wiring tab).** In OMNIA every path has a start and an end *logical node*,
