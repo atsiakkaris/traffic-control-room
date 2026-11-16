@@ -76,13 +76,6 @@ OVERLAP_FRACTION  = 0.5  # fraction of a path's samples that must be this close 
 # not merely two paths sharing a road.
 DUPLICATE_OVERLAP_M        = 40   # metres — tight; duplicates trace the same physical route
 DUPLICATE_OVERLAP_FRACTION = 0.7  # both directions must be almost fully coincident
-# A second, one-directional tier for pairs with very uneven point coverage —
-# e.g. an early, rougher registration (fewer points, doesn't trace quite as
-# far) later re-registered properly. The short side can still be almost
-# entirely contained in the long side's route even though the long side
-# only partly overlaps the short one, which fails the bidirectional check
-# above outright. Caught this way, not auto-collapsed like a confirmed dup.
-DUPLICATE_CONTAINED_FRACTION = 0.85
 
 
 def _path_length_m(coords):
@@ -181,18 +174,12 @@ def _find_geometric_duplicate_groups(paths, ids):
     two differently-named paths tracing the same road (e.g. re-registered
     under a new ID without retiring the old one) are just as much a
     duplicate as two unnamed ones, and location doesn't care what either one
-    is called. Flags a pair if either:
-      - both directions of the overlap fraction clear the tight bidirectional
-        threshold (the two traces are almost fully coincident), or
-      - one path is almost entirely contained in the other (one-directional),
-        which catches a shorter/rougher trace re-registered more completely
-        later without failing the bidirectional check outright.
+    is called. Flags a pair when both directions of the overlap fraction
+    clear the tight bidirectional threshold (the two traces are almost fully
+    coincident). A short trace that is merely contained in a longer one is
+    NOT flagged.
     Pairs stored in opposite point order are skipped: a forward path and its
     mirrored partner trace the same road by design and are not duplicates.
-
-    A short path that merely starts along a long one still won't count,
-    since even full containment requires clearing DUPLICATE_CONTAINED_FRACTION
-    of its own points, not just a partial run alongside.
 
     Uses every traced point rather than the fixed 16-point sample used
     elsewhere: that sample is fine for the loose "runs alongside" check at
@@ -2623,25 +2610,24 @@ def main():
     else:
         paths = fetch_bt_path_coords()
 
-    keep_ids, collapsed, ambiguous = find_duplicate_groups(paths)
-    dropped_ids = {pid for _, _, dropped, _ in collapsed for pid in dropped}
+    # One analysis for every copy of the map (local, published, Control Room),
+    # so they can never disagree — see analyse_paths().
+    analysis = analyse_paths(paths)
+    duplicate_groups = analysis["duplicate_groups"]
+    dropped_ids = analysis["dropped_ids"]
+    collapsed = {n: g for n, g in duplicate_groups.items() if g["confirmed"]}
+    ambiguous = {n: g for n, g in duplicate_groups.items() if not g["confirmed"]}
     if collapsed:
         print(f"Found {len(collapsed)} duplicate path registration(s) - dropped copies stay on "
               f"the map, hidden behind the 'Show duplicates' toggle:")
-        for name, kept, dropped, pct in collapsed:
-            print(f"  {name}: kept {kept}, dropped {', '.join(dropped)}  (status match {pct*100:.0f}%)")
+        for name, g in collapsed.items():
+            print(f"  {name}: kept {g['ids'][0]}, dropped {', '.join(g['ids'][1:])}  (status match {g['match_pct']*100:.0f}%)")
     if ambiguous:
         print(f"{len(ambiguous)} same-name group(s) left as-is — status diverges, needs manual check:")
-        for name, ids, pct in ambiguous:
-            print(f"  {name}: ids {', '.join(ids)}  (status match {pct*100:.0f}%)")
+        for name, g in ambiguous.items():
+            print(f"  {name}: ids {', '.join(g['ids'])}  (status match {g['match_pct']*100:.0f}%)")
 
-    duplicate_groups = {}
-    for name, kept, dropped, pct in collapsed:
-        duplicate_groups[name] = {"ids": [kept] + dropped, "match_pct": pct, "confirmed": True}
-    for name, ids, pct in ambiguous:
-        duplicate_groups[name] = {"ids": ids, "match_pct": pct, "confirmed": False}
-
-    reversed_by_id, reversed_groups = find_reversed_direction_pairs(paths)
+    reversed_groups = analysis["reversed_groups"]
     if reversed_groups:
         bug_n = sum(1 for v in reversed_groups.values() if v['category'] == 'bug')
         amb_n = sum(1 for v in reversed_groups.values() if v['category'] == 'ambiguous')
@@ -2649,14 +2635,14 @@ def main():
         print(f"Reversed-direction check: {bug_n} bug, {amb_n} ambiguous, {ok_n} ok "
               f"(of {len(reversed_groups)} named reverse pairs)")
 
-    direction_by_id, direction_pairs = find_direction_pairs(paths)
+    direction_pairs = analysis["direction_pairs"]
     if direction_pairs:
         counts = {b: sum(1 for p in direction_pairs if p['bucket'] == b) for b in _DIRECTION_PRIORITY}
         print(f"Geometry direction check: {counts['1-non-reversed']} non-reversed, "
               f"{counts['2-same-direction-unexplained']} same-direction unexplained, "
               f"{counts['4-unclear']} unclear, {counts['3-healthy']} healthy")
 
-    data_quality_by_id = find_data_quality(paths)
+    data_quality_by_id = analysis["data_quality_by_id"]
     if data_quality_by_id:
         dq_counts = {c: sum(1 for v in data_quality_by_id.values() if v["category"] == c) for c in dq.CATEGORIES}
         print("Data quality (last %d runs): " % dq.WINDOW_RUNS +
@@ -2664,12 +2650,8 @@ def main():
 
     sensors = fetch_sensor_coords().get("Bluetooth", {})
     ref_sensors = load_reference_sensors()
-    page = build_html(paths, sensors, ref_sensors, duplicate_groups,
-                       dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
-                       reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
-                       direction_by_id=direction_by_id, direction_pairs=direction_pairs,
-                       data_quality_by_id=data_quality_by_id,
-                       live_geometry_at=live_geometry_at)
+    page = build_html(paths, sensors, ref_sensors, show_dropped_by_default=args.show_duplicates,
+                      live_geometry_at=live_geometry_at, **analysis)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2680,12 +2662,9 @@ def main():
           f"{len(sensors)} API sensors, {len(ref_sensors)} spreadsheet sensors)")
 
     if args.publish:
-        published_page = build_html(paths, sensors, ref_sensors, duplicate_groups,
-                                     dropped_ids=dropped_ids, show_dropped_by_default=args.show_duplicates,
-                                     include_live_data=False,
-                                     reversed_by_id=reversed_by_id, reversed_groups=reversed_groups,
-                       direction_by_id=direction_by_id, direction_pairs=direction_pairs,
-                       data_quality_by_id=public_data_quality(find_data_quality(paths, use_snapshots=False)))
+        published = dict(analysis, data_quality_by_id=public_data_quality(find_data_quality(paths, use_snapshots=False)))
+        published_page = build_html(paths, sensors, ref_sensors, show_dropped_by_default=args.show_duplicates,
+                                    include_live_data=False, **published)
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
         published_path = DOCS_DIR / "bt-paths-map.html"
         published_path.write_text(published_page, encoding="utf-8")

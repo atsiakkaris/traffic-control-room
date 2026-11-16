@@ -245,7 +245,7 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
                 add("swapped", "The start node '%s' is at the drawn end and the end node '%s' at the drawn start"
                     % (sn["name"], en["name"]))
             else:
-                for label, node, point, d in (("start", sn, spt, ds), ("end", en, ept, de)):
+                for label, own, node, point, d in (("start", sid_, sn, spt, ds), ("end", eid_, en, ept, de)):
                     if d <= END_OK_M:
                         other = close.get(node["sensor"]) if node["sensor"] is not None else None
                         if other is not None:
@@ -256,7 +256,7 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
                     near, _how = bs.resolve_endpoint(point, sensors)
                     if near is not None and node["sensor"] is not None and near != node["sensor"]:
                         # the drawing is trusted here: the node nearest the drawn end is offered as the replacement
-                        found = [f for f in nearest_nodes(point, matches, sensors=sensors) if f["id"] != nid]
+                        found = [f for f in nearest_nodes(point, matches, sensors=sensors) if f["id"] != own]
                         if found:
                             found[0]["replaces"] = True
                             suggest[label] = found

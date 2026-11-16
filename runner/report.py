@@ -294,7 +294,7 @@ STATUS_TOOLTIP = {
     "malfunctioning": "Sensor reported speed = -1, which is the hardware fault code. The loop detector is likely damaged or requires maintenance.",
     "failing":        "Bluetooth path reported no speed or travel time data. This usually means no vehicles were detected on the route, or the Bluetooth readers at each end lost connectivity.",
     "missing":        "Sensor was expected in the live feed based on the inventory, but was not present in this run.",
-    "stale":          "The feed's publication timestamp is older than expected. Data may not reflect current conditions.",
+    "stale":          "The sensor's own last-update time is older than the limit, so its data may not reflect current conditions.",
 }
 
 CHECK_DESCRIPTION = {
@@ -1165,7 +1165,9 @@ def _build_history_playback(all_sensors):
             rat = h["run_at"]
             if rat not in run_timeline:
                 run_timeline[rat] = {"run_at": _to_cyprus(rat), "statuses": {}}
-            run_timeline[rat]["statuses"][s["sensor_id"]] = h["status"]
+            # Keyed by group AND id: ids are only unique within a group, so a
+            # bare id would let a VMS pick up a Bluetooth path's status.
+            run_timeline[rat]["statuses"][f"{s['group_name']}|{s['sensor_id']}"] = h["status"]
     # Sort by the raw ISO timestamp key — NOT the formatted dd/mm/yy display
     # string, which sorts wrongly across month boundaries ("01/07" < "30/06").
     runs_sorted = [run_timeline[rat] for rat in sorted(run_timeline)]
@@ -1362,9 +1364,9 @@ def generate_report() -> str:
                         if cname not in seen:
                             seen.add(cname)
                             label = _humanize_failure(cname, fr)
-                            failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{label}</div>'
+                            failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{_html.escape(label)}</div>'
                 else:
-                    failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{fr}</div>'
+                    failure_lines += f'<div style="font-size:11px;color:{dot_color};padding:2px 0 0 16px;line-height:1.5">{_html.escape(fr)}</div>'
 
             # Name suffix: device count for BT Inventory; health fraction for sensor checks
             name_suffix = ""
@@ -1406,7 +1408,7 @@ def generate_report() -> str:
             detail_rows += f"""
             <div style="padding:6px 0;border-bottom:0.5px solid var(--color-border-tertiary)">
               <div style="display:flex;align-items:center;gap:8px">
-                <span title="{dot_tip}" style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0;cursor:help"></span>
+                <span title="{_html.escape(dot_tip)}" style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0;cursor:help"></span>
                 <span style="font-size:13px;color:var(--color-text-primary);flex:1">{r['test_name']}{name_suffix}</span>
               </div>
               {check_desc_html}
@@ -1444,17 +1446,29 @@ def generate_report() -> str:
               </div>
             </details>"""
 
+        # Sensors awaiting power / decommissioned are not expected to work, so the
+        # tiles leave them out — the same rule as the "X/Y working" line above and
+        # every other statistic. They get their own neutral tile instead.
+        live_ids = {st: [i for i in ids if not _is_excluded_commissioning(sensor_projects, group_name, i)]
+                    for st, ids in sensor_data.items()}
+        not_live_tiles = "".join(
+            _kpi_tile(n, label, *_KPI_NEUTRAL) for n, label in (
+                (awaiting_by_group.get(group_name, 0), " awaiting power (not counted)"),
+                (decommissioned_by_group.get(group_name, 0), " decommissioned (not counted)")) if n)
+
         for r in results:
             cs = r.get("check_summary", "") or ""
             if "vms_controller_status" in cs:
                 d = parse_vms_detail(cs)
+                if d and sensor_data:
+                    d = dict(d, **{k: len(live_ids.get(k, [])) for k in ("working", "not_working", "no_status", "stale")})
                 if d:
                     vms_total = d['working'] + d['not_working'] + d['no_status'] + d['stale']
                     vms_pct = round(d['working'] / vms_total * 100) if vms_total else 0
                     bar_color = _health_color(vms_pct)
-                    not_working_ids = sensor_data.get("not_working", [])
-                    no_status_ids   = sensor_data.get("no_status", [])
-                    stale_ids       = sensor_data.get("stale", [])
+                    not_working_ids = live_ids.get("not_working", [])
+                    no_status_ids   = live_ids.get("no_status", [])
+                    stale_ids       = live_ids.get("stale", [])
                     extra += f"""
                     <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                       <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">VMS Controllers</div>
@@ -1469,6 +1483,7 @@ def generate_report() -> str:
                         {_kpi_tile(d['not_working'], ' not working', *_KPI_FAULT)}
                         {_kpi_tile(d['no_status'], ' no status', *_KPI_NEUTRAL)}
                         {_kpi_tile(d['stale'], ' stale', *_KPI_STALE)}
+                        {not_live_tiles}
                       </div>
                       {_collapsible_ids("not working", "#e24b4a", not_working_ids)}
                       {_collapsible_ids("no status", "#888", no_status_ids)}
@@ -1495,12 +1510,15 @@ def generate_report() -> str:
                     </div>"""
             elif "sensor_speed_status" in cs:
                 d = parse_sensor_detail(cs)
+                if d and sensor_data:
+                    d = dict(d, **{k: len(live_ids.get(k, [])) for k in ("working", "no_traffic", "malfunctioning", "no_measurement")})
+                    d["total"] = sum(len(v) for v in live_ids.values())
                 if d:
                     td_pct = round(d['working'] / d['total'] * 100) if d['total'] else 0
                     bar_color = _health_color(td_pct)
-                    malfunctioning_ids = sensor_data.get("malfunctioning", [])
-                    no_traffic_ids     = sensor_data.get("no_traffic", [])
-                    no_measurement_ids = sensor_data.get("no_measurement", [])
+                    malfunctioning_ids = live_ids.get("malfunctioning", [])
+                    no_traffic_ids     = live_ids.get("no_traffic", [])
+                    no_measurement_ids = live_ids.get("no_measurement", [])
                     extra += f"""
                     <div style="margin-top:12px;padding:12px;background:var(--color-background-secondary);border-radius:8px;font-size:12px">
                       <div style="font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Traffic Detection Units — {d['total']} total</div>
@@ -1515,6 +1533,7 @@ def generate_report() -> str:
                         {_kpi_tile(d['no_traffic'], ' no traffic', *_KPI_NEUTRAL)}
                         {_kpi_tile(d['malfunctioning'], ' malfunctioning', *_KPI_FAULT)}
                         {_kpi_tile(d['no_measurement'], ' no data', *_KPI_NEUTRAL)}
+                        {not_live_tiles}
                       </div>
                       {_collapsible_ids("malfunctioning", "#e24b4a", malfunctioning_ids)}
                       {_collapsible_ids("no traffic", "#888", no_traffic_ids)}
@@ -1537,7 +1556,7 @@ def generate_report() -> str:
               <div style="font-size:15px;font-weight:500;color:var(--color-text-primary)">{GROUP_DISPLAY.get(group_name, group_name)}</div>
               <div style="font-size:12px;color:var(--color-text-secondary)">{pass_count}/{len(results)} checks passing</div>
             </div>
-            <span title="{status_tip}" style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:4px 10px;border-radius:20px;background:{status_bg};color:{status_color};cursor:help">
+            <span title="{_html.escape(status_tip)}" style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:4px 10px;border-radius:20px;background:{status_bg};color:{status_color};cursor:help">
               <i class="ti {status_icon}" style="font-size:14px" aria-hidden="true"></i>{status_label}
             </span>
           </div>
@@ -3037,12 +3056,12 @@ function setRun(idx) {
   _playIdx = Math.max(0, Math.min(+idx, _history.length - 1));
   var statuses = (_history[_playIdx] || {}).statuses || {};
   _markers.forEach(function(m) {
-    var st = statuses[m._sensorId] || 'unknown';
+    var st = statuses[m._sensorGroup2 + '|' + m._sensorId] || 'unknown';
     m._sensorStatus = st;
     m._sensorColor  = STATUS_COLOR_MAP[st] || '#6b7280';
   });
   _paths.forEach(function(p) {
-    var st = statuses[p._pathId] || 'unknown';
+    var st = statuses['Bluetooth Paths|' + p._pathId] || 'unknown';
     p._pathStatus = st;
   });
   applyVisibility();

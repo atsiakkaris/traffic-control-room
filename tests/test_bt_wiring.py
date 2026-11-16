@@ -90,6 +90,14 @@ def test_wrong_node_names_the_sensor_it_is_really_drawn_to():
     assert "Gamma" in f[0]["text"] and "Beta" in f[0]["text"]
 
 
+def test_wrong_start_node_is_never_suggested_as_its_own_replacement():
+    # start node 5 stands for Beta but sits 280 m from the drawn start (Gamma): it must not be offered back
+    nodes = NODES + [node(5, "Beta", 35.0175)]
+    r = run([opath(10, "x", 5, 4)], {"10": {"name": "x", "coords": [[35.02, 33.0], [35.03, 33.0]]}}, nodes=nodes)
+    assert "wrong_node" in codes(r, "10")
+    assert [f["id"] for f in r["paths"]["10"]["suggest"]["start"]] == [3]
+
+
 def test_swapped_start_and_end_nodes():
     r = run([opath(10, "1001->1002", 2, 1)], {"10": drawn("1", "2")})
     assert "swapped" in codes(r, "10") and "wrong_node" not in codes(r, "10")

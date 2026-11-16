@@ -207,6 +207,19 @@ def test_history_playback_keeps_the_newest_30_runs():
     assert runs[0]["run_at"][:8] == "25/06/26"
 
 
+def test_history_playback_keeps_groups_apart():
+    """Ids are only unique within a group: VMS 8 and Bluetooth path 8 are different things."""
+    import json, report
+    importlib.reload(report)
+
+    rat = "2026-07-01T12:00:00+00:00"
+    vms = _sensor("8", [(rat, "working")])
+    path = dict(_sensor("8", [(rat, "failing")]), group_name="Bluetooth Paths")
+
+    statuses = json.loads(report._build_history_playback([vms, path]))[0]["statuses"]
+    assert statuses == {"VMS|8": "working", "Bluetooth Paths|8": "failing"}
+
+
 # ── Exact ("quoted") search tokens ────────────────────────────────────────────
 
 def test_search_tokens_split_site_code_and_name():

@@ -13,14 +13,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db import get_connection, fetch_sensor_projects, fetch_sensor_stability
 from labels import sensor_display_name, with_id
 from stability import (CYPRUS_TZ, GOOD_STATUSES, EXCLUDED_COMMISSIONING,
-                       STABILITY_TIERS, tier_for, health_pct,
+                       STABILITY_TIERS, tier_for, tier_for_counts, health_pct,
                        load_project_accountability, contract_census)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    datefmt="%H:%M:%S",
-)
 log = logging.getLogger(__name__)
 
 DASHBOARD_URL = "https://atsiakkaris.github.io/traffic-control-room/"
@@ -45,10 +40,17 @@ def _tier_label(tier):
     return _WEEK_TIER_LABEL.get(tier.key, tier.label)
 
 
-def _badge(pct):
+def _tier(pct, counts=None):
+    """Tier for a week's result. From the raw (good, total) counts when they are
+    known — the same unrounded rule the dashboard uses, so 98.6% is Healthy and
+    not rounded up into Always on. Falls back to the percentage otherwise."""
+    return tier_for_counts(*counts) if counts and counts[1] else tier_for(pct)
+
+
+def _badge(pct, counts=None):
     if pct is None:
         return '<span style="background:#e5e7eb;color:#6b7280;padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">No data</span>'
-    tier = tier_for(pct)
+    tier = _tier(pct, counts)
     return f'<span style="background:{tier.bg};color:{tier.fg};padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap">{_tier_label(tier)} ({pct}%)</span>'
 
 
@@ -175,7 +177,7 @@ def _counts(stats):
     counts.update({tier.key: 0 for tier in STABILITY_TIERS})
     for s in stats:
         if s["this_pct"] is not None:
-            counts[tier_for(s["this_pct"]).key] += 1
+            counts[_tier(s["this_pct"], s.get("this_counts")).key] += 1
     return counts
 
 
@@ -211,8 +213,8 @@ def build_digest():
 
     conn = get_connection()
     run_count = conn.execute(
-        "SELECT COUNT(DISTINCT run_at) FROM sensor_results WHERE run_at >= ?",
-        (week_start.isoformat(),)
+        "SELECT COUNT(DISTINCT run_at) FROM sensor_results WHERE run_at >= ? AND run_at < ?",
+        (week_start.isoformat(), today.isoformat())
     ).fetchone()[0]
     conn.close()
 
@@ -221,13 +223,16 @@ def build_digest():
     this_week_days = [(week_start      + timedelta(days=i)).isoformat() for i in range(7)]
     prev_week_days = [(prev_week_start + timedelta(days=i)).isoformat() for i in range(7)]
 
-    def week_pct(key, days):
+    def week_counts(key, days):
         good = total = 0
         for d in days:
             s = daily.get(key, {}).get(d, {})
             good  += s.get("good", 0)
             total += s.get("total", 0)
-        return health_pct(good, total)
+        return good, total
+
+    def week_pct(key, days):
+        return health_pct(*week_counts(key, days))
 
     sensor_stats = [
         {
@@ -236,20 +241,22 @@ def build_digest():
             "name":      sensor_names.get(key, str(key[1])),
             "this_pct":  week_pct(key, this_week_days),
             "prev_pct":  week_pct(key, prev_week_days),
+            "this_counts": week_counts(key, this_week_days),
+            "prev_counts": week_counts(key, prev_week_days),
         }
         for key in active
         if week_pct(key, this_week_days) is not None or week_pct(key, prev_week_days) is not None
     ]
 
     always_off = sorted(
-        [s for s in sensor_stats if s["this_pct"] is not None and s["this_pct"] == 0],
+        [s for s in sensor_stats if s["this_pct"] is not None and s["this_counts"][0] == 0],
         key=lambda x: x["group"]
     )
     persistent = sorted(
         [s for s in sensor_stats
          if s["this_pct"] is not None and s["this_pct"] < 70
          and s["prev_pct"] is not None and s["prev_pct"] < 70
-         and s["this_pct"] > 0],
+         and s["this_counts"][0] > 0],
         key=lambda x: x["this_pct"]
     )
     degraded = sorted(
@@ -296,11 +303,11 @@ def _sensor_table(sensors, show_prev=False):
         return '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'
     rows = ""
     for s in sensors[:30]:
-        prev_cell = f'<td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s["prev_pct"])}</td>' if show_prev else ""
+        prev_cell = f'<td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s["prev_pct"], s.get("prev_counts"))}</td>' if show_prev else ""
         rows += f"""
         <tr style="border-bottom:1px solid #f3f4f6">
           <td style="padding:6px 12px;font-size:13px">{html.escape(str(s['name']))}</td>
-          <td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s['this_pct'])}</td>
+          <td style="padding:6px 12px;white-space:nowrap;width:1%;text-align:right">{_badge(s['this_pct'], s.get('this_counts'))}</td>
           {prev_cell}
         </tr>"""
     note = f'<p style="font-size:11px;color:#9ca3af;margin-top:4px"><strong>Showing top 30 of {len(sensors)}</strong></p>' if len(sensors) > 30 else ""
@@ -498,7 +505,7 @@ def _note_section(note):
 
 
 def build_html(d):
-    generated_at = datetime.now(CYPRUS_TZ).strftime("%d %b %Y %H:%M EEST")
+    generated_at = datetime.now(CYPRUS_TZ).strftime("%d %b %Y %H:%M %Z")
 
     def section(title, color, description, content):
         return f"""
@@ -526,6 +533,10 @@ def build_html(d):
       </tr></thead><tbody>{retired_rows}</tbody>
     </table>""" if d["retired"] else '<p style="color:#6b7280;font-size:13px;margin:4px 0">None this week.</p>'
 
+    legend_chips = "\n        ".join(
+        f'<span style="display:inline-block;background:{t.bg};color:{t.fg};padding:2px 8px;border-radius:10px;'
+        f'white-space:nowrap;margin:2px 4px 2px 0">{_tier_label(t)} — {html.escape(_TIER_RANGE[t.key])}</span>'
+        for t in STABILITY_TIERS)
     badge_legend = f"""
     <div style="background:#f9fafb;border-radius:8px;padding:12px 16px;margin-bottom:28px;font-size:12px">
       <div style="font-weight:600;color:#374151;margin-bottom:8px">How to read the health badges</div>
@@ -535,12 +546,7 @@ def build_html(d):
         one at 0% failed every check.
       </p>
       <div>
-        <span style="display:inline-block;background:#e1f5ee;color:#085041;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Always on — {_TIER_RANGE['always_on']}</span>
-        <span style="display:inline-block;background:#c0dd97;color:#27500a;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Healthy — 90–99%</span>
-        <span style="display:inline-block;background:#faeeda;color:#633806;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Intermittent — 70–89%</span>
-        <span style="display:inline-block;background:#fac775;color:#412402;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Unstable — 40–69%</span>
-        <span style="display:inline-block;background:#f09595;color:#501313;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">Critical — 1–39%</span>
-        <span style="display:inline-block;background:#e24b4a;color:#ffffff;padding:2px 8px;border-radius:10px;white-space:nowrap;margin:2px 4px 2px 0">No good runs — 0%</span>
+        {legend_chips}
       </div>
     </div>"""
 
@@ -703,7 +709,7 @@ def build_html(d):
 
     {section("📋 Sensors by contract",
              "#111827",
-             "Every maintenance contract and the sensors it covers. A <strong>fault</strong> is a persistent problem &mdash; a sensor that failed <strong>at least 80% of its last 20 runs</strong>, not a one-off blip &mdash. Expand a contract to see which sensors are failing. <strong>No maintenance plan</strong> means the sensor is matched to no contract yet.",
+             "Every maintenance contract and the sensors it covers. A <strong>fault</strong> is a persistent problem &mdash; a sensor that failed <strong>at least 80% of its last 20 runs</strong>, not a one-off blip. Expand a contract to see which sensors are failing. <strong>No maintenance plan</strong> means the sensor is matched to no contract yet.",
              _contract_summary_html(d["census"], d["sensor_names"]))}
     {section("🔴 No good runs this week",
              "#e24b4a",
@@ -730,7 +736,7 @@ def build_html(d):
       <a href="{DASHBOARD_URL_TAGGED}" style="display:inline-block;background:#1d9e75;color:#fff;text-decoration:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500">See dashboard →</a>
     </div>
 
-    <p style="color:#9ca3af;font-size:11px;margin-top:24px">Cyprus ITS Infrastructure Monitor · Sent every Monday at 07:30 EEST</p>
+    <p style="color:#9ca3af;font-size:11px;margin-top:24px">Cyprus ITS Infrastructure Monitor · Sent every Monday morning</p>
     </body></html>"""
 
 
@@ -771,6 +777,13 @@ def send_digest():
 
 
 if __name__ == "__main__":
+    # Configured here, not at import: report.py imports this module, and a
+    # module-level basicConfig would silently win over run_tests.py's own format.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
     if "--preview" in sys.argv:
         import webbrowser
         # Preview-only convenience: paste the note into this gitignored file

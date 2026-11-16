@@ -42,3 +42,24 @@ def test_an_active_sensor_is_never_excluded(monkeypatch):
         "VMS": {"7": {"commissioning": "active"}, "8": {}},
     })
     assert digest.fetch_excluded_commissioning() == set()
+
+
+def test_week_tier_uses_raw_counts_not_the_rounded_percentage():
+    """98.6% is Healthy, as on the dashboard; rounding it to 99 would call it Always on."""
+    import digest
+    assert digest._tier(99, (986, 1000)).key == "healthy"
+    assert digest._tier(0, (1, 500)).key == "critical"      # one good run is not "no good runs"
+    assert digest._tier(0, (0, 28)).key == "offline"
+    assert digest._tier(99).key == "always_on"              # no counts: falls back to the percentage
+
+
+def test_legend_ranges_come_from_the_tier_definitions():
+    import digest
+    from stability import STABILITY_TIERS
+    page = digest.build_html({
+        "week_start": "", "week_end": "", "run_count": 0, "check_freq": "every 6 hours", "total": 0,
+        **{t.key: 0 for t in STABILITY_TIERS}, "groups": {}, "bt": {"total": 0, **{t.key: 0 for t in STABILITY_TIERS}},
+        "always_off": [], "persistent": [], "degraded": [], "recovered": [], "retired": [], "census": [],
+        "sensor_names": {}})
+    assert "Healthy — 90–98%" in page and "90–99%" not in page
+    assert "&mdash." not in page and "EEST</p>" not in page

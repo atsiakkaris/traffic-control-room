@@ -110,6 +110,28 @@ def test_live_geometry_refuses_publish(monkeypatch):
     assert exc.value.code == 2
 
 
+def test_published_map_uses_the_same_analysis_as_the_control_room(monkeypatch, tmp_path):
+    """main() must build every copy from analyse_paths(), so the published map never lacks a field."""
+    import bt_paths_map as bpm
+    analysis = {"duplicate_groups": {"X": {"ids": ["1", "2"], "match_pct": 0.1, "confirmed": False, "same_road": False}},
+                "dropped_ids": set(), "reversed_by_id": {}, "reversed_groups": {},
+                "direction_by_id": {}, "direction_pairs": [], "data_quality_by_id": {}}
+    calls = []
+    monkeypatch.setattr(bpm, "fetch_bt_path_coords", lambda: {"1": {"name": "X", "coords": []}})
+    monkeypatch.setattr(bpm, "analyse_paths", lambda paths: dict(analysis))
+    monkeypatch.setattr(bpm, "find_data_quality", lambda paths, use_snapshots=True: {})
+    monkeypatch.setattr(bpm, "fetch_sensor_coords", lambda: {})
+    monkeypatch.setattr(bpm, "load_reference_sensors", lambda: [])
+    monkeypatch.setattr(bpm, "build_html", lambda *a, **kw: calls.append(kw) or "<html></html>")
+    monkeypatch.setattr(bpm, "DOCS_DIR", tmp_path / "docs")
+    monkeypatch.setattr(sys, "argv", ["bt_paths_map.py", "--out", str(tmp_path / "m.html"), "--publish"])
+    bpm.main()
+    assert len(calls) == 2
+    for kw in calls:                       # local copy and published copy
+        assert kw["duplicate_groups"]["X"]["same_road"] is False
+    assert calls[1]["include_live_data"] is False
+
+
 def test_recovering_needs_four_good_runs_after_a_bad_stretch():
     # 16 bad then 4 good: still "no data" by the 80% rule, but recovering
     r = dq.classify_path(hist(*["failing"] * 16 + ["ok"] * 4), [])
