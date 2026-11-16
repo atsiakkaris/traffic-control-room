@@ -487,6 +487,14 @@ text `ID:` (the note box finds the sensor id by it).
 every group (plus the Bluetooth verdicts), cached on the `history.db` and `QA Locations.xlsx` mtimes; the notes are read per request.
 `collect_items` turns that into things to check, `group_stops` merges what is within 150 m, `plan` assigns stops to the nearest area
 centre, orders them (nearest neighbour then 2-opt, straight-line, open route from the area centre) and cuts them into days;
+All issues view: `visit_plan` also returns every item before the kind/group filters and before visited items are hidden; the page
+gets it as `D.issues` and filters it in the browser (`onK` reasons, `onG` groups, `incDone`, a search box), drawing the overview
+table, the list and an `iLayer` of dots, so no request and no replanning happens; `planCode` (from `D.days`) says which stop of the
+current plan an issue is on.
+Review views: `review_rows(groups, notes, visits)` (pure) lists every note and every saved visit as one row per sensor or spreadsheet
+row, independent of the plan's filters and of whether the item is still a candidate; the page gets it as `D.review` and the *View*
+buttons only switch what is drawn (the plan's markers live in one `planLayer`, the review's in `rvLayer`), so switching never
+reloads or replans.
 Reasoning for colleagues: `collect_items` gives each item `why` (one evidence sentence per reason, with the real numbers) and `status`
 (the `sensor_status` sentence, computed in `visit_inputs`); `explanation()` is the rules table, the steps from list to days and the
 "not flagged" list, built from the module's constants; `plan` stamps each stop with `leg_km`. The tab, the Excel sheet (a column and

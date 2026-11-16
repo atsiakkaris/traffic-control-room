@@ -87,6 +87,22 @@ print-ready pages; *Save for Google My Maps (KML)* can be imported into Google M
 prints the day lists. Click a day's heading to fold or unfold it (*Fold all days* / *Unfold all days* do all at once; folded days still print open). Each day also has *Open in Google Maps* links that drive through its stops. The order uses straight-line
 distance and nothing is sent anywhere until you open a Google link.
 
+**A general view of the issues, filtered without replanning (*All issues*).** The *All issues* view lists everything the checks
+flag, before any plan filter, with an overview table of reasons by group (for example how many Bluetooth sensors have a position
+that differs) at the top, right under the View buttons, and the map and the list below it. Tick or untick a reason or a group, or click a number to see just those; *include visited* and *tick everything*
+and the search box narrow it further. The list and the map (one coloured dot per reason) change instantly; the plan, its filters
+and its day numbers are not touched, and each row says which stop of the current plan it is on (or that it is not in the plan).
+This is different from the tick boxes under *Plan*, which choose what goes into the days and only take effect with *Plan again*.
+
+**Your notes and what you have checked (View buttons, top of the tab).** *Plan* is the days. *My notes*, *Visited / checked* and
+*Notes + visits* switch the map and the list to just what you wrote or did, for every sensor, wherever it is in the plan and
+whatever the filters say; nothing is replanned (the plan, its filters and its day numbers are untouched, and *Plan* brings it back
+as it was). The list shows each sensor with your note (and its date), what was found on site and what it means for you, with *show
+on map*, *navigate* and a link to the sensor's own tab; a search box filters the text. On the map an orange **N** is a note, a green
+**✓** a visited sensor and a purple **N✓** both. In the plan itself a note is now a highlighted box on the card and an orange N on
+the stop's map marker. The view is remembered until you press *Plan again*. Notes are the ones you write in a sensor's popup
+on the sensor tabs; write or edit them there.
+
 **Why a sensor is recommended.** Nothing on the list is a verdict. Every card says *Why it is on the list* with the numbers behind
 it (for example "the API puts it at ..., the spreadsheet row at ...: 233 m apart, we flag 100 m or more"), *The monitor says* (the
 same sentence as the popup status line) and *To check* on site. Under the map, *Why are these sensors recommended? How the list is

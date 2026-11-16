@@ -216,6 +216,15 @@ def test_site_visits_page_and_saves(tmp_path):
         assert "Site visits" in html and "D1-01" in html and "333 m apart" in html
         assert '"start": "Office, Strovolos"' in html and "origin=35.150000,33.350000" in html
         assert "Why are these sensors recommended?" in html and "we flag 100 m or more" in html and "From the list to the days" in html
+        assert 'id="views"' in html and "My notes (" in html and '"review": []' in html                # nothing written yet
+        assert "All issues (" in html and '"issues": [{"key": "traffic-detection|api|1"' in html
+        assert html.index('id="views"') < html.index('id="overview"') < html.index('id="map"') < html.index('id="review"')    # overview: under the View buttons, above the map
+        import shutil
+        import subprocess
+        if shutil.which("node"):                                    # the page's own script must at least parse
+            (tmp_path / "v.js").write_text(html.split("<script>", 1)[1].rsplit("</script>", 1)[0], encoding="utf-8")
+            chk = subprocess.run([shutil.which("node"), "--check", str(tmp_path / "v.js")], capture_output=True, text=True)
+            assert chk.returncode == 0, chk.stderr
         empty = urllib.request.urlopen(base + "/visits?kinds=&groups=traffic-detection&per_day=5").read().decode("utf-8")
         assert '"days": []' in empty                                # nothing ticked means nothing, not everything
         assert len(calls) == 1                                      # inputs cached until the DB or the workbook changes
@@ -251,6 +260,10 @@ def test_site_visits_page_and_saves(tmp_path):
         assert "Site visit" in cr.load_sensor_notes(tmp_path / "n.json")["traffic-detection:1"]["note"]
         html = urllib.request.urlopen(base + "/visits").read().decode("utf-8")
         assert '"days": []' in html and '"n_done": 1' in html and "Correct in the spreadsheet" in html      # visited leaves the plan
+        # ... but your note and the visit stay visible in the review view, which does not depend on the plan
+        assert '"review": [{"key": "traffic-detection|api|1"' in html and "Site visit " in html.split('"review":')[1].split('"explain"')[0]
+        # the All issues view still has it (visited, flagged "done"), although the plan and its filters left it out
+        assert '"key": "traffic-detection|api|1"' in html.split('"issues": ')[1][:3000] and '"done": true' in html.split('"issues": ')[1][:6000]
         shown = urllib.request.urlopen(base + "/visits?done=1").read().decode("utf-8")
         assert "D1-01" in shown and "bolted on a pole" in shown
         code, out = _req(base + "/api/visits/save", "POST", {"format": "corrections"})

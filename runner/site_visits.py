@@ -913,6 +913,52 @@ def findings_list(store):
     return out
 
 
+def review_rows(groups, notes, visits):
+    """Everything you wrote or checked, whether or not it is on the plan: [{key, slug, group, id, name, site_code, lat, lon,
+    note, note_at, visit}]. Not affected by the plan's filters, so you can look at your notes and visits without replanning.
+
+    groups: [{"slug", "group", "api"}]; notes: {"<slug>:<id>": {"note", "at"}}; visits: the saved findings store.
+    visit = {done, summary, action_label, action_text, at, source} (action_* only once Found? or a right position was answered)."""
+    names = {g["slug"]: g["group"] for g in groups}
+    api = {g["slug"]: {str(s["id"]): s for s in g.get("api", [])} for g in groups}
+    rows = {}
+
+    def row(key, slug, sid, entry=None):
+        r = rows.get(key)
+        if r is None:
+            s = api.get(slug, {}).get(sid) if sid else None
+            r = rows[key] = {"key": key, "slug": slug, "group": names.get(slug, slug), "id": sid or None,
+                             "name": (s or {}).get("name") or (entry or {}).get("name") or sid or "",
+                             "site_code": (s or {}).get("site_code"), "lat": (s or {}).get("lat"), "lon": (s or {}).get("lon"),
+                             "note": None, "note_at": None, "visit": None}
+        return r
+
+    for k, n in notes.items():
+        slug, _, sid = k.partition(":")
+        if slug in names and isinstance(n, dict) and str(n.get("note") or "").strip():
+            r = row("%s|api|%s" % (slug, sid), slug, sid)
+            r["note"], r["note_at"] = n["note"], str(n.get("at") or "")[:10]
+    for key, e in visits.items():
+        slug, kind, rest = (key.split("|", 2) + ["", ""])[:3]
+        if slug not in names:
+            continue
+        r = row(key, slug, rest if kind == "api" else None, e)
+        if r["lat"] is None:                                    # a removed sensor or a spreadsheet row: where it was on the sheet
+            pos = e.get("api") or e.get("sheet")
+            if not pos and kind == "ref":
+                try:
+                    pos = [float(x) for x in rest.split("|")[0].split(",")]
+                except ValueError:
+                    pos = None
+            if pos:
+                r["lat"], r["lon"] = pos[0], pos[1]
+        answered = bool(e.get("found") or e.get("right"))
+        code, text = finding_action(e) if answered else (None, "")
+        r["visit"] = {"done": bool(e.get("done")), "summary": visit_summary(e), "action_label": ACTIONS[code] if code else "",
+                      "action_text": text, "at": str(e.get("at") or "")[:10], "source": e.get("source") or ""}
+    return sorted(rows.values(), key=lambda r: (r["group"], str(r["name"]).lower()))
+
+
 def corrections_rows(store):
     """CSV rows of what the visits found, one line per finding, grouped by what you need to do."""
     rows = [["What to do", "Group", "ID", "Name", "Correct lat", "Correct lon", "API lat", "API lon", "Sheet lat", "Sheet lon",

@@ -143,6 +143,31 @@ def test_stops_say_how_far_they_are_from_the_previous_stop():
     assert sv.plan(items)[0]["stops"][0]["leg_km"] is None            # no start: the first stop has nothing to measure from
 
 
+def test_review_rows_list_every_note_and_visit_even_when_not_on_the_plan():
+    a1, a2 = api(1, 35.0, 33.0, name="Loop 1", site_code="1001"), api(2, 35.1, 33.1, name="Loop 2")
+    groups = [{"slug": "traffic-detection", "group": "Traffic Detection", "api": [a1, a2]},
+              {"slug": "vms", "group": "VMS", "api": []}]
+    notes = {"traffic-detection:1": {"note": "cabinet open", "at": "2026-11-10T09:00:00"},
+             "traffic-detection:77": {"note": "sensor that no longer exists", "at": "2026-11-01T09:00:00"},     # removed from the feed
+             "traffic-detection:2": {"note": "   ", "at": ""},                                                    # blank: not a note
+             "gone-group:3": {"note": "not a known group", "at": ""}}
+    visits = {"traffic-detection|api|1": {"found": "yes", "right": "api", "api": [35.0, 33.0], "sheet": [35.003, 33.0], "kinds": ["far_apart"],
+                                         "done": True, "at": "2026-11-12T10:00:00", "name": "Loop 1"},
+              "traffic-detection|api|2": {"done": True, "source": "manual", "at": "2026-11-12T11:00:00", "name": "Loop 2"},
+              "vms|ref|35.30000,33.30000|Sheet row": {"found": "no", "kinds": ["ref_only"], "done": True, "name": "Sheet row", "at": "2026-11-13T08:00:00"}}
+    rows = {r["key"]: r for r in sv.review_rows(groups, notes, visits)}
+    assert set(rows) == {"traffic-detection|api|1", "traffic-detection|api|77", "traffic-detection|api|2", "vms|ref|35.30000,33.30000|Sheet row"}
+    r1 = rows["traffic-detection|api|1"]
+    assert r1["note"] == "cabinet open" and r1["note_at"] == "2026-11-10" and r1["name"] == "Loop 1" and (r1["lat"], r1["lon"]) == (35.0, 33.0)
+    assert r1["visit"]["done"] and r1["visit"]["action_label"] == "Correct in the spreadsheet" and "Found: yes" in r1["visit"]["summary"]
+    assert rows["traffic-detection|api|77"]["note"] and rows["traffic-detection|api|77"]["lat"] is None        # kept, but nothing to put on the map
+    r2 = rows["traffic-detection|api|2"]
+    assert r2["note"] is None and r2["visit"]["done"] and r2["visit"]["action_label"] == "" and r2["visit"]["source"] == "manual"   # a bare mark has no finding
+    ref = rows["vms|ref|35.30000,33.30000|Sheet row"]
+    assert (ref["lat"], ref["lon"]) == (35.3, 33.3) and ref["group"] == "VMS" and ref["visit"]["action_label"] == "Not found on site"
+    assert [r["group"] for r in sv.review_rows(groups, notes, visits)] == sorted(r["group"] for r in sv.review_rows(groups, notes, visits))
+
+
 def test_the_reasoning_is_in_every_export(tmp_path):
     from openpyxl import load_workbook
     days, _ = _days()

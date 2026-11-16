@@ -1213,8 +1213,9 @@ def visit_start_setting(env=None, env_file=ROOT / ".env"):
 
 
 def visit_plan(inputs, notes, visits, kinds, groups, per_day, show_done=False, start=None):
-    """(items shown, days, number of visited items) for the chosen filters. Notes and findings are read fresh each
-    time (they change while you work); visited items leave the plan unless show_done."""
+    """(items shown, days, number of visited items, every item) for the chosen filters. Notes and findings are read fresh
+    each time (they change while you work); visited items leave the plan unless show_done. 'Every item' ignores all
+    filters and the visited mark: it feeds the All issues view, which filters in the page without replanning."""
     import site_visits as sv
     data = [dict(g, notes=notes_for_group(g["slug"], notes)) for g in inputs]
     items = sv.collect_items(data)
@@ -1224,7 +1225,7 @@ def visit_plan(inputs, notes, visits, kinds, groups, per_day, show_done=False, s
                                           "action": sv.finding_action(e)[1] if (e.get("found") or e.get("right")) else ""}
     n_done = sum(1 for it in items if it["visit"] and it["visit"]["done"])
     shown = [it for it in items if show_done or not (it["visit"] and it["visit"]["done"])]
-    return shown, sv.plan(shown, per_day, kinds, groups, start=start), n_done
+    return shown, sv.plan(shown, per_day, kinds, groups, start=start), n_done, items
 
 
 VISITS_PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Site visits</title>
@@ -1255,7 +1256,16 @@ td,th{border-top:1px solid #eee;padding:6px 8px;text-align:left;vertical-align:t
 th{background:#f6f7f9;font-size:12px;color:#555}
 td.code{font-weight:bold;white-space:nowrap}
 .k{display:inline-block;background:#eef2f7;border-radius:4px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px}
-.note{color:#9a5b00}
+.note{color:#7a4a00;background:#fff4e0;border-left:4px solid #f39c12;padding:5px 8px;margin:6px 0;white-space:pre-wrap}
+.nbadge{display:inline-block;background:#f39c12;color:#fff;border:1px solid #fff;border-radius:3px;width:16px;height:16px;font:bold 11px Arial;text-align:center;line-height:15px;box-shadow:0 0 3px rgba(0,0,0,.5)}
+.rv{display:inline-block;min-width:22px;height:22px;padding:0 3px;border-radius:11px;color:#fff;font:bold 11px/18px Arial;text-align:center;border:2px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.5)}
+.rv.note{background:#f39c12;border-left:2px solid #fff}.rv.ok{background:#1e7a3c}.rv.both{background:#6c3483}
+.rvwrap{margin:14px 18px;background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.12);overflow:hidden}
+.rvh{padding:10px 14px;font-weight:bold;background:#eef2f7}
+.bar button.go{background:#2e86c1}
+#overview .rvwrap{display:inline-block;margin:10px 18px 0;max-width:calc(100% - 36px);vertical-align:top}
+#overview table{width:auto}#overview td,#overview th{padding:5px 16px;text-align:left}
+#overview td:not(:first-child),#overview th:not(:first-child){text-align:center}
 a{color:#2e86c1;cursor:pointer}
 .empty{margin:30px 18px;color:#555;font-size:15px}
 .k.done{background:#d5f0dd;color:#1e6b34}
@@ -1277,10 +1287,13 @@ details.find.exp{border-left:5px solid #2e86c1}
 @media print{.day.closed table{display:table}.bar,#map,.noprint{display:none}.day{box-shadow:none;break-inside:auto;margin:8px 0}body{background:#fff}}
 </style></head><body>
 <header><h1>Site visits</h1><div class="sub" id="sub"></div></header>
+<div class="bar" id="views"></div>
+<div id="overview" style="display:none"></div>
 <div class="bar" id="bar"></div>
 <div id="map"></div>
 <div id="explain"></div>
 <div id="findings"></div>
+<div id="review" style="display:none"></div>
 <div id="days"></div>
 <div id="imp"><div class="box"><h2>Import findings</h2><div id="impbody"></div></div></div>
 <script>
@@ -1318,7 +1331,8 @@ details.find.exp{border-left:5px solid #2e86c1}
     q.done = document.getElementById('showdone').checked ? 1 : 0;
     return q;
   }
-  function reload() {   // same options, fresh data
+  function reload(keepView) {   // same options, fresh data (and back to the plan, unless keepView)
+    if (!keepView) { try { localStorage.setItem('svView', 'plan'); } catch (e) {} }
     var q = query();
     location.search = '?kinds=' + q.kinds.join(',') + '&groups=' + q.groups.join(',') + '&per_day=' + q.per_day + '&done=' + q.done;
   }
@@ -1361,7 +1375,7 @@ details.find.exp{border-left:5px solid #2e86c1}
       'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'}).addTo(map);
     t.getContainer().style.zIndex = 0;
   });
-  var bounds = [], markers = {};
+  var bounds = [], markers = {}, planLayer = L.layerGroup().addTo(map);   // what the Plan view draws; the other views swap it out
   function itemHtml(it) {
     var h = '<b>' + esc(it.group) + (it.id ? ' ' + esc(it.id) : '') + (it.site_code ? ' (site ' + esc(it.site_code) + ')' : '') + ': ' + esc(it.name || it.ref_name) + '</b><br>';
     it.kinds.forEach(function(k) { h += '<span class="k">' + esc(D.kinds[k]) + '</span>'; });
@@ -1369,7 +1383,7 @@ details.find.exp{border-left:5px solid #2e86c1}
     if (it.why && it.why.length) h += '<div class="why"><b>Why it is on the list:</b> ' + it.why.map(esc).join(' ') + '</div>';
     if (it.status) h += '<div class="mon"><b>The monitor says:</b> ' + esc(it.status.text) + '</div>';
     h += '<b>To check:</b> ' + it.checks.map(esc).join('<br>');
-    if (it.note) h += '<br><span class="note">Your note: ' + esc(it.note) + '</span>';
+    if (it.note) h += '<div class="note"><b>Your note:</b> ' + esc(it.note) + '</div>';
     if (it.visit) {
       h += '<div class="visit">' + (it.visit.done ? '&#10003; Visited ' + esc(it.visit.at) : 'Visit recorded, not finished') +
            (it.visit.summary ? ': ' + esc(it.visit.summary) : '') + (it.visit.action ? '<br><b>' + esc(it.visit.action) + '</b>' : '') + '</div>';
@@ -1383,20 +1397,23 @@ details.find.exp{border-left:5px solid #2e86c1}
     var col = COL[di % COL.length], line = [];
     d.stops.forEach(function(s, si) {
       var icon = L.divIcon({className: '', html: '<div class="num" style="background:' + col + '">' + (si + 1) + '</div>', iconSize: [22, 22], iconAnchor: [11, 11]});
-      markers[s.code] = L.marker([s.lat, s.lon], {icon: icon}).addTo(map)
+      if (s.items.some(function(it) { return it.note; })) {      // the orange N of the other maps: you wrote something about this stop
+        L.marker([s.lat, s.lon], {icon: L.divIcon({className: '', html: '<div class="nbadge">N</div>', iconSize: [16, 16], iconAnchor: [-5, 21]}), interactive: false, keyboard: false}).addTo(planLayer);
+      }
+      markers[s.code] = L.marker([s.lat, s.lon], {icon: icon}).addTo(planLayer)
         .bindPopup('<b>' + esc(s.code) + '</b> (day ' + d.day + ', ' + esc(d.area) + ')<br>' + s.items.map(itemHtml).join('<hr style="margin:6px 0">'), {maxWidth: 340})
         .bindTooltip(esc(s.code) + ': ' + esc(s.items[0].name || s.items[0].ref_name), {direction: 'top', offset: [0, -10]});
       line.push([s.lat, s.lon]); bounds.push([s.lat, s.lon]);
       s.items.forEach(function(it) {
         it.points.slice(1).forEach(function(p) {
-          L.polyline([[s.lat, s.lon], [p.lat, p.lon]], {color: '#1f4e79', weight: 2, dashArray: '4,4', interactive: false}).addTo(map);
+          L.polyline([[s.lat, s.lon], [p.lat, p.lon]], {color: '#1f4e79', weight: 2, dashArray: '4,4', interactive: false}).addTo(planLayer);
           L.circleMarker([p.lat, p.lon], {radius: 5, color: '#1f4e79', fillColor: '#fff', fillOpacity: 1, weight: 2})
-            .bindTooltip(esc(s.code) + ': ' + esc(p.label.toLowerCase()) + ' position').addTo(map);
+            .bindTooltip(esc(s.code) + ': ' + esc(p.label.toLowerCase()) + ' position').addTo(planLayer);
           bounds.push([p.lat, p.lon]);
         });
       });
     });
-    if (line.length > 1) L.polyline(line, {color: col, weight: 3, opacity: .7}).addTo(map);
+    if (line.length > 1) L.polyline(line, {color: col, weight: 3, opacity: .7}).addTo(planLayer);
   });
   if (bounds.length) map.fitBounds(bounds, {padding: [30, 30]}); else map.setView([35.0, 33.2], 9);
 
@@ -1421,24 +1438,178 @@ details.find.exp{border-left:5px solid #2e86c1}
     host.appendChild(sec);
   });
   document.addEventListener('click', function(e) {
-    var a = e.target.closest && e.target.closest('[data-show],[data-tab],[data-mark]');
+    var a = e.target.closest && e.target.closest('[data-show],[data-tab],[data-mark],[data-rv],[data-iv],[data-cell],[data-iall]');
     if (!a) return;
     e.preventDefault();
     if (a.hasAttribute('data-mark')) {
       a.disabled = true;
       post('/api/visits/mark', {key: a.getAttribute('data-mark'), done: a.getAttribute('data-done') === '1', group: a.getAttribute('data-g'),
                                 id: a.getAttribute('data-id'), name: a.getAttribute('data-name')})
-        .then(function(r) { if (r.error) { a.disabled = false; alert(r.error); } else reload(); })
+        .then(function(r) { if (r.error) { a.disabled = false; alert(r.error); } else reload(true); })
         .catch(function() { a.disabled = false; alert('No contact with the Control Room.'); });
     } else if (a.hasAttribute('data-show')) {
       var m = markers[a.getAttribute('data-show')];
       document.getElementById('map').scrollIntoView({behavior: 'smooth'});
       map.flyTo(m.getLatLng(), 16, {duration: 1.0});
       setTimeout(function() { m.openPopup(); }, 1100);
+    } else if (a.hasAttribute('data-cell') || a.hasAttribute('data-iall')) {         // a number in the overview: just those; "tick everything": all
+      var all = a.hasAttribute('data-iall'), pc = (a.getAttribute('data-cell') || '').split('|');
+      Object.keys(D.kinds).forEach(function(k) { onK[k] = all || !pc[0] || pc[0] === k; });
+      Object.keys(D.groups).forEach(function(g) { onG[g] = all || !pc[1] || pc[1] === g; });
+      incDone = all ? true : incDone;
+      drawIssues(true);
+    } else if (a.hasAttribute('data-iv')) {
+      var im = iMarkers[a.getAttribute('data-iv')];
+      if (im) {
+        document.getElementById('map').scrollIntoView({behavior: 'smooth'});
+        map.flyTo(im.getLatLng(), 16, {duration: 1.0});
+        setTimeout(function() { im.openPopup(); }, 1100);
+      }
+    } else if (a.hasAttribute('data-rv')) {
+      var rm = rvMarkers[a.getAttribute('data-rv')];
+      if (rm) {
+        document.getElementById('map').scrollIntoView({behavior: 'smooth'});
+        map.flyTo(rm.getLatLng(), 16, {duration: 1.0});
+        setTimeout(function() { rm.openPopup(); }, 1100);
+      }
     } else if (shell) {
       shell.crShow(a.getAttribute('data-tab'), {lat: +a.getAttribute('data-lat'), lon: +a.getAttribute('data-lon')});
     }
   });
+
+  // ── views: the plan, or only what you wrote / checked (nothing is replanned: it only switches what is shown) ──
+  var R = D.review || [], current = 'plan', rvMarkers = {}, rvLayer = L.layerGroup();
+  var nNotes = R.filter(function(r) { return r.note; }).length, nVisits = R.filter(function(r) { return r.visit; }).length;
+  var A = D.issues || [], planCode = {};       // every issue the checks flag, before any plan filter; planCode = where it sits in the current plan
+  D.days.forEach(function(d) { d.stops.forEach(function(s) { s.items.forEach(function(it) { planCode[it.key] = s.code; }); }); });
+  var VIEWS = [['plan', 'Plan (' + nItems + ')', 'The days, as planned'],
+               ['issues', 'All issues (' + A.length + ')', 'Every sensor the checks flag, before any plan filter. Filter by reason or group here without replanning'],
+               ['notes', 'My notes (' + nNotes + ')', 'Every sensor you wrote a note on, with the notes, wherever it is in the plan'],
+               ['visited', 'Visited / checked (' + nVisits + ')', 'Every sensor you marked visited or imported findings for'],
+               ['all', 'Notes + visits (' + R.length + ')', 'Everything you wrote or checked']];
+  var vbar = document.getElementById('views'), rvHost = document.getElementById('review'), ovHost = document.getElementById('overview');
+  vbar.innerHTML = '<span class="grp">View:</span>' + VIEWS.map(function(v) { return '<button data-v="' + v[0] + '" title="' + esc(v[2]) + '">' + esc(v[1]) + '</button>'; }).join('') +
+    '<input id="rvq" placeholder="Search my notes and visits..." style="display:none;min-width:230px;padding:5px">' +
+    '<span id="rvkey" style="display:none;color:#555"><span class="nbadge">N</span> note &middot; <span class="rv ok">&#10003;</span> visited &middot; <span class="rv both">N&#10003;</span> both</span>';
+  function rvMatch(r) {
+    if (current === 'notes' && !r.note) return false;
+    if (current === 'visited' && !r.visit) return false;
+    var q = (document.getElementById('rvq').value || '').toLowerCase().trim();
+    return !q || [r.name, r.id, r.site_code, r.group, r.note, r.visit && r.visit.summary, r.visit && r.visit.action_text].join(' ').toLowerCase().indexOf(q) >= 0;
+  }
+  function rvPopup(r) {
+    var h = '<b>' + esc(r.name) + '</b><br>' + esc(r.group) + (r.id ? ' ' + esc(r.id) : '') + (r.site_code ? ' (site ' + esc(r.site_code) + ')' : '');
+    if (r.note) h += '<div class="note"><b>Your note</b> (' + esc(r.note_at) + '): ' + esc(r.note) + '</div>';
+    if (r.visit) h += '<div class="visit">' + (r.visit.done ? '&#10003; Visited ' : 'Visit recorded ') + esc(r.visit.at) + (r.visit.summary ? ': ' + esc(r.visit.summary) : '') +
+                      (r.visit.action_label ? '<br><b>' + esc(r.visit.action_label) + '</b>' : '') + '</div>';
+    return h + '<br><a href="' + nav({lat: r.lat, lon: r.lon}) + '" target="_blank">navigate</a>';
+  }
+  function drawReview(fit) {
+    var rows = R.filter(rvMatch), b = [], h = '';
+    rvLayer.clearLayers(); rvMarkers = {};
+    rows.forEach(function(r) {
+      var cls = r.note && r.visit ? 'both' : r.note ? 'note' : 'ok', glyph = r.note && r.visit ? 'N&#10003;' : r.note ? 'N' : '&#10003;';
+      if (r.lat != null) {
+        rvMarkers[r.key] = L.marker([r.lat, r.lon], {icon: L.divIcon({className: '', html: '<div class="rv ' + cls + '">' + glyph + '</div>', iconSize: [26, 22], iconAnchor: [13, 11]})})
+          .bindPopup(rvPopup(r), {maxWidth: 340}).bindTooltip(esc(r.name), {direction: 'top', offset: [0, -10]}).addTo(rvLayer);
+        b.push([r.lat, r.lon]);
+      }
+      h += '<tr><td><b>' + esc(r.name) + '</b><br><small>' + esc(r.group) + (r.id ? ' ' + esc(r.id) : '') + (r.site_code ? ' (site ' + esc(r.site_code) + ')' : '') + '</small></td>' +
+           '<td>' + (r.note ? '<div class="note">' + esc(r.note) + '</div><small>' + esc(r.note_at) + '</small>' : '') + '</td>' +
+           '<td>' + (r.visit ? (r.visit.done ? '&#10003; ' : '') + esc(r.visit.summary || 'visited, no answers yet') +
+                      (r.visit.action_label ? '<br><b>' + esc(r.visit.action_label) + '</b>: ' + esc(r.visit.action_text) : '') + '<br><small>' + esc(r.visit.at) + '</small>' : '') + '</td>' +
+           '<td class="noprint" style="white-space:nowrap">' + (r.lat != null ? '<a data-rv="' + esc(r.key) + '">show on map</a><br><a href="' + nav({lat: r.lat, lon: r.lon}) + '" target="_blank">navigate</a>' : '') +
+           (shell && r.lat != null ? '<br><a data-tab="' + esc(r.slug) + '" data-lat="' + r.lat + '" data-lon="' + r.lon + '">' + esc(r.group) + ' tab</a>' : '') + '</td></tr>';
+    });
+    var what = {notes: 'with a note', visited: 'visited or checked', all: 'with a note or a visit'}[current];
+    rvHost.innerHTML = rows.length
+      ? '<div class="rvwrap"><div class="rvh">' + rows.length + ' sensor' + (rows.length === 1 ? '' : 's') + ' ' + what + '. This is a view only: the plan is not changed.</div><table><tr><th>Sensor</th><th>Your note</th><th>What was found on site</th><th class="noprint"></th></tr>' + h + '</table></div>'
+      : '<div class="empty">' + (R.length ? 'Nothing matches.' : 'You have not written any notes or recorded any visits yet. Write a note in a sensor\'s popup on the Traffic Detection, Bluetooth or VMS tab, or import a filled-in field sheet.') + '</div>';
+    if (fit && b.length) map.fitBounds(b, {padding: [40, 40], maxZoom: 16});
+  }
+  // ── the All issues view: the overview table (reasons x groups) is also the filter; nothing is replanned ──
+  var KCOL = {far_apart: '#e67e22', pair: '#d35400', api_only: '#2e86c1', ref_only: '#8e44ad', retired: '#7f8c8d', faulty: '#c0392b', note: '#f39c12'};
+  var iLayer = L.layerGroup(), iMarkers = {}, onK = {}, onG = {}, incDone = true;
+  Object.keys(D.kinds).forEach(function(k) { onK[k] = true; });
+  Object.keys(D.groups).forEach(function(g) { onG[g] = true; });
+  function isDone(it) { return !!(it.visit && it.visit.done); }
+  function iMatch(it) {
+    if (!onG[it.slug] || (!incDone && isDone(it)) || !it.kinds.some(function(k) { return onK[k]; })) return false;
+    var q = (document.getElementById('rvq').value || '').toLowerCase().trim();
+    return !q || [it.name, it.ref_name, it.id, it.site_code, it.group, it.project, it.note, it.why.join(' '), it.status && it.status.text].join(' ').toLowerCase().indexOf(q) >= 0;
+  }
+  function dot(k) { return '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + KCOL[k] + ';margin-right:5px"></span>'; }
+  function drawIssues(fit) {
+    var rows = A.filter(iMatch), b = [], kinds = Object.keys(D.kinds), slugs = Object.keys(D.groups);
+    var pool = A.filter(function(it) { return incDone || !isDone(it); });
+    var cnt = function(k, g) { return pool.filter(function(it) { return (!k || it.kinds.indexOf(k) >= 0) && (!g || it.slug === g); }).length; };
+    iLayer.clearLayers(); iMarkers = {};
+    var m = '<div class="rvwrap"><div class="rvh">Overview: what the checks flag, by reason and group. Tick or untick a reason or a group, or click a number to see just those. ' +
+            '<label style="font-weight:normal;margin-left:10px"><input type="checkbox" id="incdone"' + (incDone ? ' checked' : '') + '> include visited</label> ' +
+            '<a data-iall="1" style="font-weight:normal;margin-left:8px">tick everything</a></div><table><tr><th>Reason</th>' +
+            slugs.map(function(g) { return '<th><label><input type="checkbox" data-ig="' + esc(g) + '"' + (onG[g] ? ' checked' : '') + '> ' + esc(D.groups[g]) + '</label></th>'; }).join('') + '<th>All groups</th></tr>';
+    kinds.forEach(function(k) {
+      m += '<tr><td><label>' + '<input type="checkbox" data-ik="' + k + '"' + (onK[k] ? ' checked' : '') + '> ' + dot(k) + '<b>' + esc(D.kinds[k]) + '</b></label></td>' +
+           slugs.map(function(g) { var n = cnt(k, g); return '<td' + (onK[k] && onG[g] ? '' : ' style="opacity:.4"') + '>' + (n ? '<a data-cell="' + k + '|' + esc(g) + '">' + n + '</a>' : '<span style="color:#aaa">0</span>') + '</td>'; }).join('') +
+           '<td><a data-cell="' + k + '|">' + cnt(k) + '</a></td></tr>';
+    });
+    m += '<tr><td><b>Sensors (one can have several reasons)</b></td>' + slugs.map(function(g) { return '<td><a data-cell="|' + esc(g) + '">' + cnt(null, g) + '</a></td>'; }).join('') + '<td><b>' + cnt() + '</b></td></tr></table></div>';
+    var h = '';
+    rows.forEach(function(it) {
+      var p = it.points[0];
+      if (p) {
+        iMarkers[it.key] = L.circleMarker([p.lat, p.lon], {radius: 8, color: '#fff', weight: 2, fillColor: KCOL[it.kinds[0]], fillOpacity: .95})
+          .bindPopup(itemHtml(it), {maxWidth: 340}).bindTooltip(esc(it.name || it.ref_name) + ': ' + it.kinds.map(function(k) { return esc(D.kinds[k]); }).join(', '), {direction: 'top', offset: [0, -8]}).addTo(iLayer);
+        b.push([p.lat, p.lon]);
+      }
+      h += '<tr><td><b>' + esc(it.name || it.ref_name) + '</b><br><small>' + esc(it.group) + (it.id ? ' ' + esc(it.id) : '') + (it.site_code ? ' (site ' + esc(it.site_code) + ')' : '') +
+           (it.project ? ' &middot; ' + esc(it.project) : '') + '</small>' + (it.note ? '<div class="note">' + esc(it.note) + '</div>' : '') + '</td>' +
+           '<td>' + it.kinds.map(function(k) { return '<span class="k">' + dot(k) + esc(D.kinds[k]) + '</span>'; }).join('') + '<div class="why">' + it.why.map(esc).join(' ') + '</div>' +
+           (it.status ? '<div class="mon"><b>The monitor says:</b> ' + esc(it.status.text) + '</div>' : '') + '</td>' +
+           '<td style="white-space:nowrap">' + (isDone(it) ? '&#10003; visited ' + esc(it.visit.at) : planCode[it.key] ? esc(planCode[it.key]) : '<span style="color:#888">not in the current plan</span>') + '</td>' +
+           '<td class="noprint" style="white-space:nowrap">' + (p ? '<a data-iv="' + esc(it.key) + '">show on map</a><br><a href="' + nav(p) + '" target="_blank">navigate</a>' : '') +
+           (shell && p ? '<br><a data-tab="' + esc(it.slug) + '" data-lat="' + p.lat + '" data-lon="' + p.lon + '">' + esc(it.group) + ' tab</a>' : '') + '</td></tr>';
+    });
+    ovHost.innerHTML = m;       // the overview sits at the top, under the View buttons; the list is under the map
+    rvHost.innerHTML = rows.length
+      ? '<div class="rvwrap"><div class="rvh">' + rows.length + ' of ' + A.length + ' issues shown. This is a view only: the plan is not changed. "Plan stop" says where it sits in the current plan.</div>' +
+        '<table><tr><th>Sensor</th><th>Why it is on the list</th><th>Plan stop</th><th class="noprint"></th></tr>' + h + '</table></div>'
+      : '<div class="empty">' + (A.length ? 'Nothing matches the ticked reasons, groups and search.' : 'The checks flag nothing right now.') + '</div>';
+    if (fit && b.length) map.fitBounds(b, {padding: [40, 40], maxZoom: 16});
+  }
+  function setView(v) {
+    current = v;
+    try { localStorage.setItem('svView', v); } catch (e) {}
+    var plan = v === 'plan', issues = v === 'issues';
+    ['bar', 'explain', 'findings', 'days'].forEach(function(id) { document.getElementById(id).style.display = plan ? '' : 'none'; });
+    rvHost.style.display = plan ? 'none' : '';
+    ovHost.style.display = issues ? '' : 'none';
+    document.getElementById('rvq').style.display = plan ? 'none' : '';
+    document.getElementById('rvkey').style.display = (plan || issues) ? 'none' : '';
+    [rvLayer, iLayer].forEach(function(l) { if (map.hasLayer(l)) map.removeLayer(l); });
+    if (plan) {
+      if (!map.hasLayer(planLayer)) map.addLayer(planLayer);
+      if (bounds.length) map.fitBounds(bounds, {padding: [30, 30]});
+    } else {
+      if (map.hasLayer(planLayer)) map.removeLayer(planLayer);
+      map.addLayer(issues ? iLayer : rvLayer);
+      if (issues) drawIssues(true); else drawReview(true);
+    }
+    Array.prototype.forEach.call(vbar.querySelectorAll('button[data-v]'), function(b) { b.className = b.getAttribute('data-v') === v ? 'go' : ''; });
+  }
+  Array.prototype.forEach.call(vbar.querySelectorAll('button[data-v]'), function(b) { b.onclick = function() { setView(b.getAttribute('data-v')); }; });
+  document.getElementById('rvq').addEventListener('input', function() { if (current === 'issues') drawIssues(false); else drawReview(false); });
+  ovHost.addEventListener('change', function(e) {     // the overview's tick boxes: filters only, no replanning
+    var t = e.target;
+    if (t.hasAttribute('data-ik')) onK[t.getAttribute('data-ik')] = t.checked;
+    else if (t.hasAttribute('data-ig')) onG[t.getAttribute('data-ig')] = t.checked;
+    else if (t.id === 'incdone') incDone = t.checked;
+    else return;
+    drawIssues(true);
+  });
+  var startView = 'plan';
+  try { var sv0 = localStorage.getItem('svView'); if (VIEWS.some(function(v) { return v[0] === sv0; })) startView = sv0; } catch (e) {}
+  setView(startView);
 
   // ── why these sensors are recommended (for colleagues) ──
   (function() {
@@ -1514,10 +1685,11 @@ details.find.exp{border-left:5px solid #2e86c1}
 </script></body></html>"""
 
 
-def build_visits_page(items, days, kinds, groups, per_day, views, message="", visits=None, n_done=0, show_done=False, start=""):
+def build_visits_page(items, days, kinds, groups, per_day, views, message="", visits=None, n_done=0, show_done=False, start="", review=None,
+                      issues=None):
     import site_visits as sv
     kind_counts, group_counts = sv.counts(items)
-    data = {"days": days, "start": start, "explain": sv.explanation(per_day=per_day), "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
+    data = {"days": days, "start": start, "explain": sv.explanation(per_day=per_day), "review": review or [], "issues": issues or [], "kinds": sv.KINDS, "kind_counts": kind_counts, "groups": {s: v[0] for s, v in views.items()},
             "group_counts": group_counts, "message": message, "n_done": n_done, "findings": sv.findings_list(visits or {}),
             "sel": {"kinds": kinds, "groups": groups, "per_day": per_day, "done": show_done}}
     return VISITS_PAGE.replace("__DATA__", json.dumps(data).replace("</", "<\\/"))
@@ -1614,11 +1786,13 @@ class Handler(BaseHTTPRequestHandler):
                 kinds, groups, per_day, show_done = visit_params(parts.query, self.server.views)
                 inputs = self.server.visits(force)
                 visits = load_visits(self.server.visits_file)
-                items, days, n_done = visit_plan(inputs, load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done,
-                                                 self.server.visit_start)
+                items, days, n_done, every = visit_plan(inputs, load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done,
+                                                        self.server.visit_start)
                 msg = "" if inputs else "QA Locations.xlsx was not found in the repo folder, so there is nothing to compare."
+                import site_visits as sv
+                review = sv.review_rows(inputs, load_sensor_notes(self.server.notes_file), visits)
                 page = build_visits_page(items, days, kinds, groups, per_day, self.server.views, msg, visits, n_done, show_done,
-                                         self.server.visit_start[2] if self.server.visit_start else "")
+                                         self.server.visit_start[2] if self.server.visit_start else "", review, every)
             except Exception as exc:
                 return self._send(500, f"Could not build the page: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
@@ -1774,8 +1948,8 @@ class Handler(BaseHTTPRequestHandler):
                                                               ",".join(map(str, body.get("groups") or [])), body.get("per_day"),
                                                               1 if body.get("done") else 0)
                 kinds, groups, per_day, show_done = visit_params(q, self.server.views)
-                _items, days, _n = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done,
-                                              self.server.visit_start)
+                _items, days, _n, _every = visit_plan(self.server.visits(), load_sensor_notes(self.server.notes_file), visits, kinds, groups, per_day, show_done,
+                                                      self.server.visit_start)
                 if not days:
                     return self._send(400, {"error": "nothing to visit for the ticked options"})
             folder = Path(self.server.downloads_dir or DOWNLOADS)
