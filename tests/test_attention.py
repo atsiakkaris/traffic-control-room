@@ -134,6 +134,52 @@ def _node_run(js_body, tmp_path):
     return r.stdout.strip()
 
 
+def _local_ctx():
+    r = build([S("Bluetooth Paths", "1", 1, 1, 1), S("Bluetooth Paths", "2", 1, 1, 1), S("Bluetooth Paths", "3", 1, 1, 1)])
+    bt_now = {"sensors": {"A": {"verdict": "working", "reason": "ok", "name": "Alpha", "paths": [{"id": 1, "name": "x"}], "lat": 35.1, "lon": 33.2},
+                          "B": {"verdict": "working", "reason": "ok", "name": "Beta", "paths": [{"id": 1, "name": "x"}], "lat": 35.2, "lon": 33.3}},
+              "paths": {"1": {"a": "A", "b": "B"}, "2": {"a": "A", "b": None}, "3": {"a": "B", "b": "A"}}}
+    ctx = attention.live_context(r, "17/11/26 06:02", bt_now, None, "2026-11-17T04:02:16Z")
+    sensors = {"A": {"name": "Alpha", "site_code": "1001"}, "B": {"name": "Beta", "site_code": "1002"}}
+    projects = {"Bluetooth": {"A": {"project": "Contract A"}, "B": {"project": "Contract B"}}}
+    return ctx, projects, bt_now, sensors
+
+
+def test_local_copy_adds_projects_to_bluetooth_sensors_and_to_the_ends_of_each_path():
+    ctx, projects, bt_now, sensors = _local_ctx()
+    assert "show_projects" not in ctx and "proj" not in ctx["bt"]["A"]                         # the published page never has them
+    attention.add_projects(ctx, projects, {"Contract A": "supported", "Contract B": "out_of_support"}, bt_now, sensors, note="check this")
+    assert ctx["show_projects"] is True and ctx["projects_note"] == "check this"
+    assert (ctx["bt"]["A"]["proj"], ctx["bt"]["A"]["acct"]) == ("Contract A", "supported")
+    assert (ctx["bt"]["B"]["proj"], ctx["bt"]["B"]["acct"]) == ("Contract B", "out_of_support")
+    ends = ctx["paths"]["1"]["projs"]
+    assert [(e["c"], e["n"], e["proj"], e["acct"]) for e in ends] == [("1001", "Alpha", "Contract A", "supported"), ("1002", "Beta", "Contract B", "out_of_support")]
+    assert [e["c"] for e in ctx["paths"]["2"]["projs"]] == ["1001"]                              # a path with one resolved end lists that end only
+    assert [e["c"] for e in ctx["paths"]["3"]["projs"]] == ["1002", "1001"]
+    ctx2, _p, bt2, s2 = _local_ctx()
+    attention.add_projects(ctx2, {}, {}, bt2, s2)                                                 # no stored projects: "no contract", never a crash
+    assert ctx2["bt"]["A"]["proj"] is None and "projects_note" not in ctx2
+
+
+def test_the_page_names_the_contract_in_every_case_and_only_on_the_local_copy(tmp_path):
+    import re
+    ctx, projects, bt_now, sensors = _local_ctx()
+    attention.add_projects(ctx, projects, {"Contract A": "supported", "Contract B": "out_of_support"}, bt_now, sensors)
+    page = live_ui.render(ctx)
+    assert '"show_projects": true' in page and '"show_projects"' not in live_ui.render(_local_ctx()[0])
+    fn = re.search(r"function projOf\(u\)\{.*?\n\}\n", page, re.S).group(0)
+    out = _node_run("var C = {show_projects: true};\n" + fn + "\n" +
+                    "var one = {kind:'bt', c:{proj:'Contract A', acct:'supported'}};\n"
+                    "console.log(JSON.stringify([projOf(one), projOf({kind:'vms', c:{proj:'X', acct:'out_of_support'}}), projOf({kind:'bt', c:{proj:null}}),\n"
+                    "  projOf({kind:'path', c:{projs:[{c:'1001', proj:'Contract A', acct:'supported'}, {c:'1002', proj:'Contract A', acct:'supported'}]}}),\n"
+                    "  projOf({kind:'path', c:{projs:[{c:'1001', proj:'Contract A', acct:'supported'}, {c:'1002', proj:'Contract B', acct:'out_of_support'}]}}),\n"
+                    "  projOf({kind:'path', c:{projs:[]}}), (C.show_projects = false, projOf(one))]));", tmp_path)
+    if out is not None:
+        import json
+        assert json.loads(out) == ["Contract A", "X (contract ended)", "no contract on record", "Contract A (both ends)",
+                                   "1001: Contract A / 1002: Contract B (contract ended)", None, None]
+
+
 def test_live_page_script_parses_and_its_clock_shows_the_date_only_when_it_is_not_today(tmp_path):
     import json
     import re

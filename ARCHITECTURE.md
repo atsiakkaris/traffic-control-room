@@ -477,6 +477,13 @@ address and log: `plan_renames` / `apply_renames` / `undo_renames` send only the
 OMNIA afterwards because the answer text of that call is not relied on. In `tools/control_room.py`:
 `POST /api/edit/plan` (reads OMNIA live, sends nothing, returns a single-use token) and `POST /api/edit/apply` (needs
 `CONTROL_ROOM_ALLOW_EDIT`, the typed YES, the token, and re-reads OMNIA to refuse paths edited since the preview).
+**Local Live tab** (`/live`, `runner/live_local.py`): the published Live page's data now comes from `report.live_page_ctx` (shared by
+`_write_live_page` and the Control Room); `live_local.build` gathers the same inputs from the database, calls it, and only when
+`QA Locations.xlsx` exists adds `attention.add_projects` (the contract of each Bluetooth sensor and, per path, of its two end sensors;
+VMS already carries its own) and switches `show_projects` on, which is what makes `live_ui`'s `projOf` print Contract lines. The published
+build never calls `add_projects`, so no project name can reach the public page from this path. `stale_note` compares the workbook's
+modified time with the newest `sensor_projects.updated_at`. The page is cached on the database and workbook mtimes.
+
 **Popup sentence** (`runner/sensor_status.py`, pure): `qa.load_api_sensors` now also reads each sensor's run history and merges
 `history_fields()` (current state, fault age, last status, 20-run window, lifetime tier, all taken from `stability.py`) into the
 sensor dict; `generate_html` turns each sensor into `status_sentence()` -> `status` + `tone` in `apiMarkers`, and the popup

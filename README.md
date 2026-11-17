@@ -87,6 +87,15 @@ print-ready pages; *Save for Google My Maps (KML)* can be imported into Google M
 prints the day lists. Click a day's heading to fold or unfold it (*Fold all days* / *Unfold all days* do all at once; folded days still print open). Each day also has *Open in Google Maps* links that drive through its stops. The order uses straight-line
 distance and nothing is sent anywhere until you open a Google link.
 
+**Live tab with contracts (Control Room, *Live*).** The Control Room has its own copy of the dashboard's Live tab (it reads the same public
+live feed, every 5 minutes) with one addition the published page never has: each sensor's **contract (project)**. A VMS sign, a
+Bluetooth sensor and, for a Bluetooth path, the sensors at its two ends show a *Contract* line in the side panel (with *(contract ended)*
+for an out-of-support project and *no contract on record* where the spreadsheet has none), a small project line under each name in the
+lists, and the contract in *Copy summary*. It is shown only when `QA Locations.xlsx` is on this PC (nothing in `.env` is needed; without
+the file the tab says so and shows no contracts), and the project names come from the `sensor_projects` table that `update_projects.bat`
+fills from the workbook: if you saved the workbook after the last update the tab warns you to run `update_projects.bat`. The published
+`docs/live.html` is built without any of this, because the repo and the site are public and CI never has the workbook.
+
 **A general view of the issues, filtered without replanning (*All issues*).** The *All issues* view lists everything the checks
 flag, before any plan filter, with an overview table of reasons by group (for example how many Bluetooth sensors have a position
 that differs) at the top, right under the View buttons, and the map and the list below it. Tick or untick a reason or a group, or click a number to see just those; *include visited* and *tick everything*

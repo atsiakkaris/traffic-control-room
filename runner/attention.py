@@ -185,6 +185,37 @@ def _utc_z(iso):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def add_projects(ctx, sensor_projects, project_acct, bt_now, bt_sensors, note=None):
+    """The Control Room's LOCAL copy of the Live page only: put each Bluetooth sensor's contract (project) into the
+    page data, and for each path the contracts of the two sensors it ends at (a path is not owned equipment, so it has
+    none of its own). The published page never gets this: it is built without it. `ctx["show_projects"]` switches the
+    page's Contract lines on; `note` (optional) is shown as a warning, e.g. that the workbook is newer than the stored
+    projects. Returns ctx."""
+    sp = (sensor_projects or {}).get("Bluetooth", {})
+    acct = project_acct or {}
+
+    def info(sid):
+        proj = (sp.get(str(sid)) or {}).get("project")
+        return proj, (acct.get(proj) if proj else None)
+
+    ctx["show_projects"] = True
+    for sid, b in ctx["bt"].items():
+        b["proj"], b["acct"] = info(sid)
+    paths = (bt_now or {}).get("paths") or {}
+    for pid, p in ctx["paths"].items():
+        ends = []
+        for sid in ((paths.get(pid) or {}).get("a"), (paths.get(pid) or {}).get("b")):
+            if sid is None:
+                continue
+            proj, a = info(sid)
+            s = (bt_sensors or {}).get(sid) or {}
+            ends.append({"c": str(s.get("site_code") or ""), "n": s.get("name") or str(sid), "proj": proj, "acct": a})
+        p["projs"] = ends
+    if note:
+        ctx["projects_note"] = note
+    return ctx
+
+
 def live_context(attn, built_label, bt_now=None, all_coords=None, built_iso=None):
     """What the Live page needs from the last stored run, as plain JSON-able data.
 

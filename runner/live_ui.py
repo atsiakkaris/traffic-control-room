@@ -66,6 +66,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-sys
 #list .it:hover{background:var(--subsurf)}
 #list .it div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #list .it .tag,#list .it .rs{font-size:12px;color:var(--muted)}
+#list .it .pj{font-size:11px;color:var(--muted);margin-top:1px}
 #list .more{padding:8px 14px;font-size:12px;color:var(--muted)}
 .abadge{font-size:11px;padding:2px 8px;border-radius:8px;white-space:nowrap;text-align:center}
 .abadge.down{background:#fcebeb;color:#a32d2d}.abadge.never{background:#f09595;color:#501313}
@@ -242,6 +243,7 @@ function drawNotes(){
     var lag = Math.round((Date.now() - Date.parse(live.common_measurement_timestamp || live.generated_at)) / 60000);
     if (lag > 20){ var w = el('div', 'note'); w.textContent = "The feed's own measurement time is " + lag + ' minutes old, so what you see may not be current.'; n.appendChild(w); }
   }
+  if (C.projects_note){ var pn = el('div', 'note'); pn.textContent = C.projects_note; n.appendChild(pn); }
   C.feeds.forEach(function(f){
     var w = el('div', 'note'); var unit = f.group === 'Traffic Detection' ? 'loops' : (f.group === 'VMS' ? 'signs' : 'units');
     w.textContent = f.label + ' down ' + (f.days ? f.days + 'd' : 'under a day') + ' - ' + f.down + ' of ' + f.total + ' ' + unit + ' report no good data (as of the ' + C.built + ' check). Treated as one outage and not counted below.';
@@ -276,7 +278,8 @@ function drawList(){
   if (!keys.length) box.appendChild(el('div', 'more', 'Nothing here.'));
   keys.slice(0, SHOW).forEach(function(key){
     var u = M.U[key], b = badge(u, open.k), row = el('div', 'it');
-    row.appendChild(el('div', null, u.name)); row.appendChild(el('div', 'tag', u.glabel));
+    var nm = el('div', null, u.name), pj = projOf(u); if (pj){ var pe = el('div', 'pj', pj); pe.title = pj; nm.appendChild(pe); }
+    row.appendChild(nm); row.appendChild(el('div', 'tag', u.glabel));
     var rs = el('div', 'rs', u.reason); rs.title = u.reason; row.appendChild(rs);
     row.appendChild(el('span', 'abadge ' + b[0], b[1])); row.onclick = function(){ openPanel(key); };
     var pin = el('span', 'pin', '\ud83d\udccd'); pin.title = 'Show on map';
@@ -400,10 +403,20 @@ function showOnMap(u){
 
 /* ---- panel ---- */
 function dl(p, label, v){ if (v == null || v === '') return; p.appendChild(el('dt', null, label)); var d = el('dd'); if (v.nodeType) d.appendChild(v); else d.textContent = v; p.appendChild(d); }
+// The contract (project) line. Only the Control Room's local copy switches C.show_projects on; the published page never has it.
+function projOf(u){
+  if (!C.show_projects) return null;
+  function one(x){ return x.proj ? x.proj + (x.acct === 'out_of_support' ? ' (contract ended)' : '') : 'no contract on record'; }
+  if (u.kind !== 'path') return one(u.c);
+  var e = u.c.projs || []; if (!e.length) return null;
+  var same = e.every(function(x){ return one(x) === one(e[0]); });
+  return same ? one(e[0]) + (e.length > 1 ? ' (both ends)' : '') : e.map(function(x){ return (x.c || x.n) + ': ' + one(x); }).join(' / ');
+}
 function summary(u){
   var s = u.glabel + ' ' + u.name + (u.state === 'up' ? ' is reporting' : ' has no live reading') + ' (' + u.reason + ') as of ' + clock(lastOk);
   if (u.state === 'never') s += '; it has never worked since monitoring began';
-  if (u.c.proj) s += ' - contract: ' + u.c.proj;
+  var pj = C.show_projects ? projOf(u) : (u.c.proj || null);
+  if (pj) s += ' - contract: ' + pj;
   return s;
 }
 function copy(text, btn){
@@ -426,13 +439,14 @@ function openPanel(key, keep){
       if (u.live.free_flow_kmh != null) dl(d, 'Free flow', Math.round(u.live.free_flow_kmh) + ' km/h');
     }
     if (!u.rep) dl(d, 'Down since', u.c.sn ? u.c.sn + ' (stored check)' : null);
+    dl(d, 'Contract', projOf(u));
     if (u.quiet) dl(d, 'Pattern', 'Goes silent on a regular pattern, so this is probably not a fault');
     if (u.c.t) dl(d, 'Lifetime', u.c.t + ' (' + u.c.g + ' of ' + u.c.tot + ' runs good)');
     if (u.c.r){ var bars = el('div', 'bars'); u.c.r.split('').forEach(function(ch){ var i = el('i'); i.style.background = ch === '1' ? '#1d9e75' : '#e24b4a'; bars.appendChild(i); }); dl(d, 'Last ' + u.c.r.length + ' checks', bars); }
   } else if (u.kind === 'bt'){
-    dl(d, 'Triangulation', u.c.why);
+    dl(d, 'Triangulation', u.c.why); dl(d, 'Contract', projOf(u));
   } else {
-    dl(d, 'Since', u.c.sn); dl(d, 'Contract', u.c.proj || 'No contract on record');
+    dl(d, 'Since', u.c.sn); dl(d, 'Contract', C.show_projects ? projOf(u) : (u.c.proj || 'No contract on record'));
     if (u.c.t) dl(d, 'Lifetime', u.c.t + ' (' + u.c.g + ' of ' + u.c.tot + ' runs good)');
   }
   p.appendChild(d);

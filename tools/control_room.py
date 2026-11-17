@@ -1069,8 +1069,8 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #stage iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;visibility:hidden}
 #stage iframe.on{visibility:visible}
 </style></head><body>
-<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><a data-t="visits" title="Plan on-site checks of sensors whose position or existence is in doubt">Site visits</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
-<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe><iframe id="f-visits"></iframe>__FRAMES__</div>
+<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><a data-t="visits" title="Plan on-site checks of sensors whose position or existence is in doubt">Site visits</a><a data-t="live" title="The Live tab of the dashboard, with each sensor's contract added (only here, never on the published page)">Live</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe><iframe id="f-visits"></iframe><iframe id="f-live" allow="fullscreen"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
 function frame(t) { return document.getElementById('f-' + t); }
@@ -1086,7 +1086,7 @@ function render() {
 window.crShow = function(t, o) {
   o = o || {};
   var f = frame(t);
-  if (t === 'wiring' || t === 'visits') {
+  if (t === 'wiring' || t === 'visits' || t === 'live') {
     if (!f.getAttribute('src')) f.src = '/' + t;
   } else if (t !== 'paths') {
     var q = o.lat != null ? '?lat=' + o.lat + '&lon=' + o.lon + (o.path ? '&path=' + encodeURIComponent(o.path) : '') : '';
@@ -1816,6 +1816,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (result or {"paths": {}})["paths"].get(pid, {}))
             except Exception as exc:
                 return self._send(500, {"error": str(exc)})
+        if path == "/live":
+            try:
+                page = self.server.live_page(force)
+            except Exception as exc:
+                return self._send(500, f"Could not build the Live page: {exc}".encode("utf-8"), "text/plain")
+            return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
         if path == "/visits":
             try:
                 kinds, groups, per_day, show_done = visit_params(parts.query, self.server.views)
@@ -2430,6 +2436,11 @@ class Server(ThreadingHTTPServer):
                 self._details = (page, sensor_details(page))
             return self._details[1]
 
+    def live_page(self, force=False):
+        """The local Live page, rebuilt when the database or QA Locations.xlsx changes (or is added or removed)."""
+        wb = ROOT / "QA Locations.xlsx"
+        return self.cached("live:%s" % (os.stat(wb).st_mtime if wb.exists() else 0), self.live_builder, force)
+
     def visits(self, force=False):
         """The Site visits inputs, rebuilt when the database or QA Locations.xlsx changes (notes are read per request)."""
         files = (self.db_file, ROOT / "QA Locations.xlsx")
@@ -2456,7 +2467,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
                 page_builder=None, paths_provider=None, post=None,
                 sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path,
-                visit_inputs=None, visits_file=None, choose_open=choose_open_path, visit_start="env"):
+                visit_inputs=None, visits_file=None, choose_open=choose_open_path, visit_start="env", live_builder=None):
     srv = Server(("127.0.0.1", port), Handler)
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
@@ -2488,6 +2499,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake
     srv.on_quit = None   # set by the app-window launcher to close the window
     srv.visit_inputs = visit_inputs or (lambda: globals()["visit_inputs"](srv.views))   # tests pass a fake
+    srv.live_builder = live_builder or (lambda: __import__("live_local").build())      # tests pass a fake
     srv.visits_file = visits_file or SITE_VISITS_FILE
     srv.visit_start = visit_start_setting() if visit_start == "env" else visit_start      # (lat, lon, name) or None
     srv.visits_lock = threading.Lock()

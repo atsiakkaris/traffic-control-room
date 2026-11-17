@@ -339,8 +339,8 @@ def test_sensor_pages_talk_to_the_app_shell_not_a_second_tab():
 
 def test_shell_has_one_frame_per_view_and_a_refresh_button(tmp_path):
     shell = cr.build_shell(cr.sensor_views(), "?path=7")
-    assert shell.count("<iframe") == 3 + len(cr.sensor_views())        # paths + wiring + site visits + sensor tabs
-    assert 'data-t="wiring"' in shell and 'data-t="visits"' in shell
+    assert shell.count("<iframe") == 4 + len(cr.sensor_views())        # paths + wiring + site visits + live + sensor tabs
+    assert 'data-t="wiring"' in shell and 'data-t="visits"' in shell and 'data-t="live"' in shell
     assert 'src="/map?path=7"' in shell and 'id="rf"' in shell and "crShow" in shell
 
 

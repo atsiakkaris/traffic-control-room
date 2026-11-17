@@ -853,22 +853,30 @@ def build_sensor_stability_html(sensors, bt_path_names=None, all_sensor_coords=N
     </script>"""
 
 
+def live_page_ctx(active_sensors, all_coords, all_bt_paths, sensor_projects, project_acct, built_label, built_iso=None):
+    """The data the Live page is built from. Shared by the published page (below) and the Control Room's local copy.
+    Returns (ctx, bt_now): ctx for live_ui.render, bt_now the Bluetooth triangulation it was built from."""
+    import attention, bt_sensor_suspects
+    bt_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
+    live = {(g, sid) for g, d in all_coords.items() for sid in d}
+    live |= {("Bluetooth Paths", pid) for pid in all_bt_paths}
+    names = {(g, sid): _sensor_display_name(g, sid, bt_names, all_coords) for g, sid in live}
+    bt_sensors = all_coords.get("Bluetooth", {})
+    bt_now = bt_sensor_suspects.analyse(paths=all_bt_paths, sensors=bt_sensors)
+    bt_prev = bt_sensor_suspects.analyse(paths=all_bt_paths, sensors=bt_sensors, skip_runs=1)
+    attn = attention.build_attention(active_sensors, live, sensor_projects, names, project_acct, bt_now, bt_prev)
+    return attention.live_context(attn, built_label, bt_now, all_coords, built_iso), bt_now
+
+
 def _write_live_page(active_sensors, all_coords, all_bt_paths, sensor_projects, project_acct, built_label, built_iso=None):
     """Build docs/live.html (the Live tab). Never allowed to break the dashboard: if
     anything in it fails, the dashboard is still built and the failure is logged."""
     try:
-        import attention, live_ui, bt_sensor_suspects
-        bt_names = {pid: p["name"] for pid, p in all_bt_paths.items()}
-        live = {(g, sid) for g, d in all_coords.items() for sid in d}
-        live |= {("Bluetooth Paths", pid) for pid in all_bt_paths}
-        names = {(g, sid): _sensor_display_name(g, sid, bt_names, all_coords) for g, sid in live}
-        bt_sensors = all_coords.get("Bluetooth", {})
-        bt_now = bt_sensor_suspects.analyse(paths=all_bt_paths, sensors=bt_sensors)
-        bt_prev = bt_sensor_suspects.analyse(paths=all_bt_paths, sensors=bt_sensors, skip_runs=1)
-        attn = attention.build_attention(active_sensors, live, sensor_projects, names, project_acct, bt_now, bt_prev)
+        import live_ui
+        ctx, _bt_now = live_page_ctx(active_sensors, all_coords, all_bt_paths, sensor_projects, project_acct, built_label, built_iso)
         out = REPORT_PATH.parent.parent / "docs" / "live.html"
         out.parent.mkdir(exist_ok=True)
-        out.write_text(live_ui.render(attention.live_context(attn, built_label, bt_now, all_coords, built_iso)), encoding="utf-8")
+        out.write_text(live_ui.render(ctx), encoding="utf-8")
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Live page could not be built; dashboard continues without it")
