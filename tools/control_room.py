@@ -618,6 +618,7 @@ h2{font-size:15px;margin:22px 0 8px}
 .edit .row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:4px 0}
 .edit label{display:inline-flex;gap:5px;align-items:center}
 .pv td.ch{font-family:Consolas,monospace}
+.nid{color:var(--dim);font-size:11px}
 .del{color:var(--high)}.add{color:#27ae60}
 .selbar{position:sticky;bottom:0;margin:10px -20px -40px;padding:9px 20px;background:var(--card);border-top:1px solid var(--line);font-weight:bold;z-index:5}
 .selbar.over{background:var(--high);color:#fff}
@@ -632,6 +633,20 @@ h2{font-size:15px;margin:22px 0 8px}
   var D = __DATA__;
   var shell = (window.parent !== window && window.parent.crShow) ? window.parent : null;
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  var CODES = D.node_codes || {}, NAMES = D.node_names || {};
+  // A node is shown the way you think of it: the site code and the sensor name first, OMNIA's node id small and grey underneath.
+  // The node id is what OMNIA's edit call needs (and the only way to tell look-alike nodes apart), so it never disappears.
+  function nodeHtml(id, name) {
+    if (id == null || id === '') return '-';
+    var nm = name || NAMES[id] || '', code = CODES[id];
+    return (code ? '<b>' + esc(code) + '</b> ' + esc(nm)
+                 : (nm ? esc(nm) + ' <span class="nid" title="No API sensor matches this node, so it has no site code">(no sensor)</span>' : '<span class="nid">(unknown node)</span>'))
+           + '<br><small class="nid">node ' + esc(id) + '</small>';
+  }
+  function nodeShort(id) {            // for "before -> after": the site code when there is one, else the node id (hover shows the other)
+    if (id == null || id === '') return '-';
+    return CODES[id] ? '<span title="node ' + esc(id) + '">' + esc(CODES[id]) + '</span>' : '<span title="no site code: no API sensor matches this node">node ' + esc(id) + '</span>';
+  }
   function localTime(iso) {
     var d = new Date(iso);
     if (isNaN(d)) return iso;
@@ -671,15 +686,18 @@ h2{font-size:15px;margin:22px 0 8px}
   };
 
   var code = '', q = '', selected = {}, sortKey = 'severity', sortDesc = false;
-  var SORTS = [['severity', 'Severity (worst first)'], ['id', 'Path ID'], ['name', 'Path name'], ['start', 'Start node'], ['end', 'End node'],
+  var SORTS = [['severity', 'Severity (worst first)'], ['id', 'Path ID'], ['name', 'Path name'], ['start', 'Start (site code)'], ['end', 'End (site code)'],
                ['speed_min', 'Speed min'], ['speed_max', 'Speed max'], ['count', 'Number of findings']];
   var SEV = {high: 0, medium: 1, low: 2};
   function sortVal(p, k) {
     if (k === 'severity') return SEV[p.severity] == null ? 3 : SEV[p.severity];
     if (k === 'id') return +p.id;
     if (k === 'name') return String(p.name || '').toLowerCase();
-    if (k === 'start') return p.start_node == null ? null : +p.start_node;
-    if (k === 'end') return p.end_node == null ? null : +p.end_node;
+    // by site code; a node without a sensor has none, so it goes after the coded ones (by node id)
+    if (k === 'start' || k === 'end') {
+      var nid = k === 'start' ? p.start_node : p.end_node;
+      return nid == null ? null : (CODES[nid] != null && !isNaN(+CODES[nid]) ? +CODES[nid] : 1000000 + +nid);
+    }
     if (k === 'count') return p.findings.length;
     return p[k] == null ? null : +p[k];
   }
@@ -693,7 +711,7 @@ h2{font-size:15px;margin:22px 0 8px}
   body.innerHTML = '<div class="edit" id="edit"></div><div class="bar"><input id="q" placeholder="Search path, name or node...">'
     + '<label>Sort by <select id="sk">' + SORTS.map(function(s) { return '<option value="' + s[0] + '">' + s[1] + '</option>'; }).join('') + '</select></label>'
     + '<button class="sec" id="sd" title="Reverse the order"></button></div><div class="chips" id="chips"></div>'
-    + '<table id="pt"><thead><tr><th><input type="checkbox" id="all" title="Select all shown"></th><th>Path ID</th><th>Path name</th><th>Start node</th><th>End node</th><th>Speed</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
+    + '<table id="pt"><thead><tr><th><input type="checkbox" id="all" title="Select all shown"></th><th>Path ID</th><th>Path name</th><th title="Site code and sensor name first; the small grey number is OMNIA\'s node id">Start (site code, sensor)</th><th title="Site code and sensor name first; the small grey number is OMNIA\'s node id">End (site code, sensor)</th><th>Speed</th><th>Findings</th><th></th></tr></thead><tbody id="rows"></tbody></table>'
     + '<h2>Nodes that need attention (' + D.nodes.length + ')</h2><table><thead><tr><th>Node</th><th>Status</th><th>Detail</th></tr></thead><tbody id="nodes"></tbody></table>'
     + '<h2>API sensors no node stands for (' + D.sensors_without_node.length + ')</h2><div class="note" id="swn"></div>'
     + '<div class="selbar" id="selbar"></div>';
@@ -712,7 +730,8 @@ h2{font-size:15px;margin:22px 0 8px}
       if (code === '__all') { /* every path */ }
       else if (code === '') { if (!p.findings.length) return false; }
       else if (!p.findings.some(function(f) { return f.code === code; })) return false;
-      var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ')).toLowerCase();
+      var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' node ' + (p.start_node || '') + ' node ' + (p.end_node || '') + ' ' +
+                 (CODES[p.start_node] || '') + ' ' + (CODES[p.end_node] || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ')).toLowerCase();
       return !q || hay.indexOf(q) >= 0;
     });
   }
@@ -736,8 +755,8 @@ h2{font-size:15px;margin:22px 0 8px}
     list.forEach(function(p) {
       var tr = document.createElement('tr'); tr.setAttribute('data-row', p.id);
       var speed = p.speed_min == null ? '-' : p.speed_min + '-' + p.speed_max;
-      tr.innerHTML = '<td><input type="checkbox" data-sel="' + esc(p.id) + '"' + (selected[p.id] ? ' checked' : '') + '></td><td><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + esc(p.start_node || '-') + '<br>' + esc(p.start_name || '') + '</td><td>'
-        + esc(p.end_node || '-') + '<br>' + esc(p.end_name || '') + '</td><td>' + esc(speed) + '</td><td class="fd">'
+      tr.innerHTML = '<td><input type="checkbox" data-sel="' + esc(p.id) + '"' + (selected[p.id] ? ' checked' : '') + '></td><td><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + nodeHtml(p.start_node, p.start_name) + '</td><td>'
+        + nodeHtml(p.end_node, p.end_name) + '</td><td>' + esc(speed) + '</td><td class="fd">'
         + p.findings.map(function(f) { return '<span class="f ' + esc(f.severity) + '">' + esc(f.text) + '</span>'; }).join('')
         + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '">show on map</a>' : '') + '</td>';
       rows.appendChild(tr);
@@ -796,7 +815,7 @@ h2{font-size:15px;margin:22px 0 8px}
 
   // ---- bulk edit ------------------------------------------------------------
   var preview = null;          // the last preview answer {items, refused, token}
-  function nodeLabel(v) { return v && D.node_names[v] ? D.node_names[v] : ''; }
+  function nodeLabel(v) { return v && NAMES[v] ? (CODES[v] ? CODES[v] + ' ' : '') + NAMES[v] + (CODES[v] ? '' : ' (no sensor)') : (v ? 'not a known node id' : ''); }
   function drawEdit() {
     var el = document.getElementById('edit');
     var keep = {};
@@ -805,7 +824,7 @@ h2{font-size:15px;margin:22px 0 8px}
     h += '<div class="row"><label>Speed min <input type="number" id="smin" min="1" step="1"></label><label>Speed max <input type="number" id="smax" min="1" step="1"></label>'
       + '<label><input type="checkbox" id="swap"> swap start and end node</label>'
       + '<label title="For a missing or unknown node, and for a node on a different sensor than the one the path is drawn to (the drawing is trusted). Only when one node is clearly the nearest to the drawn end (within 150 m, no close rival). Needs a speed range if the path has none."><input type="checkbox" id="sugg"> fill missing or wrong nodes with the nearest one</label>'
-      + '<label>Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label>End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
+      + '<label title="OMNIA\'s node id (the small grey number in the table), NOT the site code: the two number ranges overlap, so a site code would pick the wrong node. The text next to the box shows the site code and sensor of the node you typed.">Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label title="OMNIA\'s node id, not the site code (see the start box)">End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
       + '<div class="row"><b>Rename:</b><label>Find <input id="rfind" size="9"></label><label>Replace with <input id="rrep" size="9"></label><label>Prefix <input id="rpre" size="6"></label><label>Suffix <input id="rsuf" size="6"></label>'
       + '<label>New name (one path) <input id="rnew" size="14"></label><label><input type="checkbox" id="rstd"> name from its nodes (site codes)</label></div>'
       + '<div class="row"><button id="pv">Preview changes</button><button class="sec" id="pvr">Preview rename</button><button class="sec" id="pvu">Preview undo of last batch</button><button class="sec" id="pvru">Preview undo of last rename</button><button class="sec" id="clr">Clear selection</button>' + (D.can_delete ? '<button class="danger" id="del">Delete selected paths...</button>' : '') + '<span class="note" id="pvs"></span></div>'
@@ -855,6 +874,7 @@ h2{font-size:15px;margin:22px 0 8px}
       preview = r; s.textContent = ''; drawPreview();
     }).catch(function(e) { s.textContent = 'Could not preview: ' + e; });
   }
+  function chgN(a, b) { return a === b ? nodeShort(a) : '<span class="del">' + nodeShort(a) + '</span> &rarr; <span class="add">' + nodeShort(b) + '</span>'; }
   function chg(a, b) { return a === b ? esc(a == null ? '-' : a) : '<span class="del">' + esc(a == null ? '-' : a) + '</span> &rarr; <span class="add">' + esc(b == null ? '-' : b) + '</span>'; }
   function drawPreview() {
     var box = document.getElementById('pvbox'); if (!box) return;
@@ -868,14 +888,14 @@ h2{font-size:15px;margin:22px 0 8px}
       h += '<table class="pv"><thead><tr><th>Path ID (to DELETE)</th><th>Path name</th><th>Speed</th><th>Start node</th><th>End node</th></tr></thead><tbody>';
       preview.items.forEach(function(it) {
         h += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td>' + esc(it.before.speed_min == null ? '-' : it.before.speed_min + '-' + it.before.speed_max) + '</td><td>'
-          + esc(it.before.start || '-') + ' ' + esc(it.start_name) + '</td><td>' + esc(it.before.end || '-') + ' ' + esc(it.end_name) + '</td></tr>';
+          + nodeShort(it.before.start) + ' ' + esc(it.start_name) + '</td><td>' + nodeShort(it.before.end) + ' ' + esc(it.end_name) + '</td></tr>';
       });
       h += '</tbody></table>';
     } else if (preview.items.length) {
       h += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name</th><th>Speed min</th><th>Speed max</th><th>Start node</th><th>End node</th></tr></thead><tbody>';
       preview.items.forEach(function(it) {
         h += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td class="ch">' + chg(it.before.speed_min, it.after.speed_min) + '</td><td class="ch">' + chg(it.before.speed_max, it.after.speed_max)
-          + '</td><td class="ch">' + chg(it.before.start, it.after.start) + ' ' + esc(it.start_name) + '</td><td class="ch">' + chg(it.before.end, it.after.end) + ' ' + esc(it.end_name) + '</td></tr>';
+          + '</td><td class="ch">' + chgN(it.before.start, it.after.start) + ' ' + esc(it.start_name) + '</td><td class="ch">' + chgN(it.before.end, it.after.end) + ' ' + esc(it.end_name) + '</td></tr>';
       });
       h += '</tbody></table>';
     }
@@ -924,12 +944,12 @@ h2{font-size:15px;margin:22px 0 8px}
   var nodes = document.getElementById('nodes');
   D.nodes.forEach(function(n) {
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td><b>' + esc(n.id) + '</b> ' + esc(n.name) + '</td><td>' + esc(n.status_text) + '</td><td>' + esc(n.detail) + '</td>';
+    tr.innerHTML = '<td>' + nodeHtml(n.id, n.name) + '</td><td>' + esc(n.status_text) + '</td><td>' + esc(n.detail) + '</td>';
     nodes.appendChild(tr);
   });
   if (!D.nodes.length) nodes.innerHTML = '<tr><td colspan="3" class="note">Every node matches a sensor.</td></tr>';
   document.getElementById('swn').textContent = D.sensors_without_node.length
-    ? D.sensors_without_node.map(function(s) { return s[1] + ' (id ' + s[0] + ')'; }).join(', ') : 'None.';
+    ? D.sensors_without_node.map(function(s) { var c = (D.sensor_codes || {})[s[0]]; return (c ? c + ' ' : '') + s[1]; }).join(', ') : 'None.';
   draw();
 })();
 </script></body></html>
@@ -942,6 +962,8 @@ def build_wiring_page(result, snapshot, can_fetch, can_edit=False, can_delete=Fa
     import omnia_edit
     data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "can_edit": bool(can_edit), "can_delete": bool(can_delete), "labels": bw.FINDINGS, "max_batch": omnia_edit.MAX_BATCH, "max_delete": omnia_edit.MAX_DELETE,
             "node_names": {n["id"]: n["name"] for n in (snapshot or {}).get("nodes", [])},
+            "node_codes": {nid: m["site_code"] for nid, m in (result or {}).get("nodes", {}).items() if m.get("site_code")},
+            "sensor_codes": (result or {}).get("sensor_codes", {}),
             "fetched_at": (snapshot or {}).get("fetched_at", ""), "meta": {}, "paths": [], "nodes": [],
             "sensors_without_node": [], "csv": []}
     if result:

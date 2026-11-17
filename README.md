@@ -142,7 +142,11 @@ and paths whose name doesn't match where they really end are left out rather tha
 **Is a path wired to the right sensors? (Wiring tab).** In OMNIA every path has a start and an end *logical node*,
 chosen by hand. The tab compares those with the API sensors (exact, case-sensitive names) and with where the path is
 drawn, and lists wrong, swapped or missing nodes; it can export a CSV, and the Paths inspector and sensor popups carry
-the same findings. **Fetch from OMNIA** reads the node and path lists (read-only, needs the internal network, up to a
+the same findings. Nodes are shown the way you think of them: the sensor's **site code and name** first and OMNIA's **node id small and grey** underneath
+(a node no API sensor matches shows its name, "(no sensor)" and the node id). The node id is what OMNIA's edit call needs and the only way
+to tell look-alike nodes apart, so it stays, in the edit boxes (which take node ids, not site codes: the two number ranges overlap, and the
+text next to each box shows the site code and sensor of the node you typed), in the previews and in the logs; sorting and searching work on
+site codes, and the CSV has two extra columns with the start and end site code. **Fetch from OMNIA** reads the node and path lists (read-only, needs the internal network, up to a
 minute) and keeps `results/omnia_snapshot.json`, which is git-ignored. The OMNIA addresses come from the git-ignored `.env`.
 Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md).
 

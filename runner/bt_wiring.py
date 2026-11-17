@@ -78,13 +78,13 @@ def match_nodes(nodes, sensors):
     for n in nodes:
         here = (n["lat"], n["lon"])
         m = {"id": n["id"], "name": n["name"], "lat": n["lat"], "lon": n["lon"], "status": "no_sensor",
-             "sensor": None, "sensor_name": None, "distance_m": None, "similar": [], "notes": []}
+             "sensor": None, "sensor_name": None, "site_code": None, "distance_m": None, "similar": [], "notes": []}
         out[n["id"]] = m
         exact = sorted((_dist(here, (sensors[s]["lat"], sensors[s]["lon"])), s) for s in by_name.get(n["name"], []))
         if exact:
             d, sid = exact[0]
             m.update(status="ok" if d <= SAME_PLACE_M else "name_only", sensor=sid,
-                     sensor_name=sensors[sid]["name"], distance_m=round(d, 1))
+                     sensor_name=sensors[sid]["name"], site_code=_code(sensors, sid), distance_m=round(d, 1))
             if len(exact) > 1:
                 m["notes"].append("%d sensors share this name; the one at the node was taken" % len(exact))
             continue
@@ -96,7 +96,8 @@ def match_nodes(nodes, sensors):
                       if s.get("lat") is not None)
         if near and near[0][0] <= SAME_PLACE_M:
             d, sid = near[0]
-            m.update(status="location_only", sensor=sid, sensor_name=sensors[sid]["name"], distance_m=round(d, 1))
+            m.update(status="location_only", sensor=sid, sensor_name=sensors[sid]["name"], site_code=_code(sensors, sid),
+                     distance_m=round(d, 1))
     used = defaultdict(list)
     for m in out.values():
         if m["sensor"] is not None:
@@ -118,6 +119,12 @@ def sensors_without_node(matches, sensors):
 
 def _site(sensors, sid):
     return str(sensors[sid].get("site_code")) if sid in sensors else None
+
+
+def _code(sensors, sid):
+    """The sensor's site code as text, or None when it has none (never the text 'None')."""
+    code = (sensors.get(sid) or {}).get("site_code")
+    return None if code is None or str(code).strip() == "" else str(code)
 
 
 def close_neighbours(sensors):
@@ -309,8 +316,9 @@ def analyse(snapshot, feed_paths, sensors):
     by_status = defaultdict(int)
     for m in matches.values():
         by_status[m["status"]] += 1
+    swn = sensors_without_node(matches, sensors)
     return {"nodes": matches, "paths": paths,
-            "sensors_without_node": sensors_without_node(matches, sensors),
+            "sensors_without_node": swn, "sensor_codes": {sid: _code(sensors, sid) for sid, _name in swn},
             "meta": {"fetched_at": snapshot.get("fetched_at"), "paths": len(paths),
                      "paths_with_findings": sum(1 for p in paths.values() if p["findings"]),
                      "paths_ok": sum(1 for p in paths.values() if not p["findings"]),
@@ -327,12 +335,14 @@ def wiring_for_sensor(result, sid):
 
 def csv_rows(result):
     """Rows for an export: paths with findings, worst first."""
-    head = ["Path ID", "Path name", "Worst severity", "Findings", "Details", "Start node", "End node"]
+    head = ["Path ID", "Path name", "Worst severity", "Findings", "Details", "Start node", "End node", "Start site code", "End site code"]
     rows = []
+    nodes = result.get("nodes") or {}
     for p in sorted((p for p in result["paths"].values() if p["findings"]),
                     key=lambda p: (-SEVERITY.get(p["severity"], 0), int(p["id"]) if str(p["id"]).isdigit() else 0)):
         rows.append([p["id"], p["name"], p["severity"], ", ".join(f["code"] for f in p["findings"]),
                      " | ".join(f["text"] for f in p["findings"]),
                      "%s %s" % (p["start_node"] or "", p["start_name"] or ""),
-                     "%s %s" % (p["end_node"] or "", p["end_name"] or "")])
+                     "%s %s" % (p["end_node"] or "", p["end_name"] or ""),
+                     (nodes.get(p["start_node"]) or {}).get("site_code") or "", (nodes.get(p["end_node"]) or {}).get("site_code") or ""])
     return [head] + rows

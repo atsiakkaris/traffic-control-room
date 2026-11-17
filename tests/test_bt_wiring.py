@@ -196,11 +196,22 @@ def test_descriptive_path_names_are_not_compared_with_site_codes():
     assert codes(r, "10") == []
 
 
+def test_nodes_carry_the_site_code_of_their_sensor_and_never_the_text_none():
+    sensors = dict(SENSORS, **{"5": {"name": "Epsilon", "lat": 35.04, "lon": 33.0, "site_code": None}})
+    m = bw.match_nodes(NODES + [node(5, "Epsilon", 35.04), node(6, "Nowhere", 36.0), node(7, "Renamed", 35.0101)], sensors)
+    assert m[1]["site_code"] == "1001" and m[2]["site_code"] == "1002"
+    assert m[7]["status"] == "location_only" and m[7]["site_code"] == "1002"          # matched by place only: still Beta's code
+    assert m[5]["site_code"] is None and m[6]["site_code"] is None                     # a sensor without a code, a node without a sensor
+    r = run([opath(10, "1001->1002", 1, 2)], {"10": drawn("1", "2")}, nodes=NODES[:3], sensors=SENSORS)
+    assert r["sensor_codes"] == {"4": "1004"}                                         # the sensor no node stands for, with its code
+
+
 def test_csv_lists_worst_first_and_sensor_wiring_summary():
     r = run([opath(10, "1001->1003", 1, 2), opath(11, "1001->1002", 1, 2)],
             {"10": drawn("1", "3"), "11": drawn("1", "2")})
     rows = bw.csv_rows(r)
     assert rows[0][0] == "Path ID" and [x[0] for x in rows[1:]] == ["10"]
+    assert rows[0][-2:] == ["Start site code", "End site code"] and rows[1][-2:] == ["1001", "1002"]      # site codes beside the node ids
     assert bw.wiring_for_sensor(r, "1") == {"nodes": [{"id": 1, "name": "Alpha", "status": "ok", "distance_m": 0.0}], "paths": 2}
 
 

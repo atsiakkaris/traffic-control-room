@@ -617,6 +617,13 @@ def test_wiring_page_asks_for_a_fetch_until_a_snapshot_exists_then_shows_results
         assert code == 200 and w["findings"] == [] and w["start_name"] == "A"
         page = urllib.request.urlopen(base + "/wiring").read().decode("utf-8")
         assert '"has_snapshot": true' in page
+        assert '"node_codes": {"' in page and "nodeHtml(p.start_node, p.start_name)" in page and "node ' + esc(id)" in page   # site code first, node id small
+        import shutil
+        import subprocess
+        if shutil.which("node"):                                          # the page's own script must at least parse
+            (tmp_path / "w.js").write_text(page.split("<script>", 1)[1].rsplit("</script>", 1)[0], encoding="utf-8")
+            chk = subprocess.run([shutil.which("node"), "--check", str(tmp_path / "w.js")], capture_output=True, text=True)
+            assert chk.returncode == 0, chk.stderr
     finally:
         srv.shutdown()
 
