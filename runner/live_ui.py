@@ -124,7 +124,9 @@ var C = __CTX__, URL_ = "__URL__", EVERY = __EVERY__;
 var live = null, err = null, lastOk = null, nextAt = Date.now() + EVERY * 1000, open = null, sel = null, SHOW = 40, busy = false;
 var KIND = {down:'Down now', new:'New since last check', recovered:'Back up', never:'Never worked', quiet:'Often silent'};
 function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
-function clock(d){ return d ? new Date(d).toLocaleTimeString('en-GB', {timeZone:'Asia/Nicosia', hour:'2-digit', minute:'2-digit'}) : '-'; }
+function nicDay(ms){ return new Date(ms).toLocaleDateString('en-GB', {timeZone:'Asia/Nicosia', day:'2-digit', month:'2-digit'}); }
+function clock(d){ var ms = d ? new Date(d).getTime() : NaN; if (isNaN(ms)) return '-'; var t = new Date(ms).toLocaleTimeString('en-GB', {timeZone:'Asia/Nicosia', hour:'2-digit', minute:'2-digit'}); return nicDay(ms) === nicDay(Date.now()) ? t : nicDay(ms) + ' ' + t; }
+function ago(ms){ var m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; }
 function ttext(s){ if (s == null) return ''; s = Math.round(s); return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + (s % 60 ? (s % 60) + ' s' : ''); }
 function reading(q){ return q ? (Math.round(q.speed_kmh * 10) / 10) + ' km/h' + (q.travel_time_s != null ? ', ' + ttext(q.travel_time_s) : '') : ''; }
 function tip(title, sub){ var s = document.createElement('span'); s.className = 'tip'; var a = document.createElement('div'); a.appendChild(document.createElement('b')).textContent = title; s.appendChild(a); if (sub){ var b = document.createElement('div'); b.textContent = sub; s.appendChild(b); } return s; }
@@ -292,8 +294,15 @@ function draw(){
   drawRow('paths', 'Bluetooth paths', T.reporting + ' of ' + T.paths + ' reporting');
   drawMap();
   drawList();
-  document.getElementById('foot').textContent = 'History context (never worked, often silent, last 20 runs) is from the 6-hourly check of ' + C.built + '. Nothing is stored by this page.';
+  drawFoot();
   if (sel && M.U[sel]) openPanel(sel, true);
+}
+// The history behind the badges is the last stored 6-hourly check, not the live feed: say how old it is (the dashboard calls 9 h too old).
+function drawFoot(){
+  var at = C.built_iso ? Date.parse(C.built_iso) : NaN, age = isNaN(at) ? null : Date.now() - at;
+  document.getElementById('foot').textContent = 'History context (never worked, often silent, last 20 runs) is from the 6-hourly check of ' + C.built +
+    (age == null ? '' : ' (' + ago(at) + ')') + (age != null && age > 9 * 3600000 ? ' - older than the usual 6 hours, so the monitor may have stopped' : '') +
+    '. Nothing is stored by this page.';
 }
 
 /* ---- map ---- */
@@ -451,7 +460,7 @@ function poll(){
     .then(function(){ clearTimeout(t); busy = false; nextAt = Date.now() + EVERY * 1000; draw();
       var m = /#s=(.+)$/.exec(location.hash); if (m && !sel && M){ var k = decodeURIComponent(m[1]); if (M.U[k]) openPanel(k); } });
 }
-setInterval(function(){ if (Date.now() >= nextAt) poll(); else drawBar(); }, 1000);
+setInterval(function(){ if (Date.now() >= nextAt) poll(); else { drawBar(); if (live) drawFoot(); } }, 1000);
 document.addEventListener('visibilitychange', function(){ if (!document.hidden && Date.now() >= nextAt) poll(); });
 draw(); poll();
 })();

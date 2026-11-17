@@ -111,6 +111,56 @@ def test_live_context_lists_every_bluetooth_sensor_and_places_vms():
     assert (ctx["vms"][0]["lat"], ctx["vms"][0]["lon"]) == (35.0, 33.4)
 
 
+def test_live_context_carries_the_build_time_as_a_safe_utc_string():
+    r = build([S("Bluetooth Paths", "1", 1, 1, 1)])
+    ctx = lambda iso: attention.live_context(r, "17/11/26 06:02", built_iso=iso)
+    assert ctx("2026-11-17T04:02:16.410380+00:00")["built_iso"] == "2026-11-17T04:02:16Z"        # whole seconds, every browser parses it
+    assert ctx("2026-11-17T06:02:16+02:00")["built_iso"] == "2026-11-17T04:02:16Z"               # converted to UTC
+    assert ctx("2026-11-17T04:02:16")["built_iso"] == "2026-11-17T04:02:16Z"                      # no offset: taken as UTC
+    assert ctx("not a time")["built_iso"] is None and ctx(None)["built_iso"] is None
+    assert attention.live_context(r, "x")["built"] == "x"                                          # the old call still works
+
+
+def _node_run(js_body, tmp_path):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        return None
+    f = tmp_path / "t.js"
+    f.write_text(js_body, encoding="utf-8")
+    r = subprocess.run([node, str(f)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
+def test_live_page_script_parses_and_its_clock_shows_the_date_only_when_it_is_not_today(tmp_path):
+    import json
+    import re
+    ctx = attention.live_context(build([S("Bluetooth Paths", "1", 1, 1, 1)]), "17/11/26 06:02", built_iso="2026-11-17T04:02:16Z")
+    page = live_ui.render(ctx)
+    assert '"built_iso": "2026-11-17T04:02:16Z"' in page and "drawFoot()" in page
+    main = next(s for s in re.findall(r"<script>(.*?)</script>", page, re.S) if "function poll" in s)
+    import shutil
+    import subprocess
+    if shutil.which("node"):                                                                        # the whole page script must at least parse
+        (tmp_path / "live.js").write_text(main, encoding="utf-8")
+        chk = subprocess.run([shutil.which("node"), "--check", str(tmp_path / "live.js")], capture_output=True, text=True)
+        assert chk.returncode == 0, chk.stderr
+    funcs = "\n".join(re.findall(r"^function (?:nicDay|clock|ago)\(.*$", page, re.M))
+    assert funcs.count("function") == 3
+    # now = 17 Nov 2026, 10:30 in Cyprus (UTC+2)
+    out = _node_run("var NOW = Date.parse('2026-11-17T08:30:00Z'); Date.now = function(){ return NOW; };\n" + funcs + "\n" +
+                    "var t = function(s){ return Date.parse(s); };\n"
+                    "console.log(JSON.stringify([clock(t('2026-11-17T07:10:00Z')), clock(t('2026-11-16T20:05:00Z')), clock(t('2026-11-16T22:30:00Z')),\n"
+                    "  clock(null), clock('garbage'), ago(NOW - 20000), ago(NOW - 25 * 60000), ago(NOW - 3 * 3600000), ago(NOW - 47 * 3600000), ago(NOW - 72 * 3600000)]));", tmp_path)
+    if out is not None:
+        assert json.loads(out) == ["09:10",              # today, Cyprus time (08:30 UTC = 10:30 there)
+                                   "16/11 22:05",        # yesterday: the date comes first
+                                   "00:30",              # 22:30 UTC is already after midnight in Cyprus: still today
+                                   "-", "-", "just now", "25 min ago", "3 h ago", "47 h ago", "3 days ago"]
+
+
 def test_live_page_data_cannot_break_out_of_the_script_tag():
     r = build([S("Bluetooth Paths", "1", 1, 0), S("VMS", "5", 1, 0)])
     ctx = attention.live_context(r, "16/11/26 06:02")

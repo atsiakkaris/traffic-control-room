@@ -174,7 +174,18 @@ def build_attention(sensors, live_keys, sensor_projects, names, project_acct=Non
             "units": {u["key"]: u for u in sensor_units + path_units}}
 
 
-def live_context(attn, built_label, bt_now=None, all_coords=None):
+def _utc_z(iso):
+    """'2026-11-17T04:02:16.410380+00:00' -> '2026-11-17T04:02:16Z' (UTC, whole seconds, safe for every browser); None if unusable."""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def live_context(attn, built_label, bt_now=None, all_coords=None, built_iso=None):
     """What the Live page needs from the last stored run, as plain JSON-able data.
 
     The live page checks each Bluetooth path against the live feed itself; this is the
@@ -199,5 +210,6 @@ def live_context(attn, built_label, bt_now=None, all_coords=None):
     for sid, v in ((bt_now or {}).get("sensors") or {}).items():
         bt[str(sid)] = {"n": v.get("name") or str(sid), "v": v["verdict"], "why": v["reason"],
                         "p": [str(q["id"]) for q in v["paths"]], "lat": v.get("lat"), "lon": v.get("lon")}
-    return {"built": built_label, "feeds": [f for f in attn["feeds"] if f["group"] != PATH_GROUP],
+    return {"built": built_label, "built_iso": _utc_z(built_iso) if built_iso else None,
+            "feeds": [f for f in attn["feeds"] if f["group"] != PATH_GROUP],
             "paths": paths, "bt": bt, "vms": vms}
