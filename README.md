@@ -150,7 +150,7 @@ site codes, and the CSV has two extra columns with the start and end site code. 
 minute) and keeps `results/omnia_snapshot.json`, which is git-ignored. The OMNIA addresses come from the git-ignored `.env`.
 Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md).
 
-**Changing many OMNIA paths at once (Wiring tab -> Bulk edit).** Tick paths (click a row to select only it, shift+click a range, ctrl+click adds or removes one, or tick a whole filter; up to 100 per batch, 50 for deleting; a counter at the bottom shows how many are selected), then set a
+**Changing many OMNIA paths at once (Wiring tab -> Bulk edit).** Tick paths (click a row to select only it, shift+click a range, ctrl+click adds or removes one, or tick a whole filter; up to 100 per batch, 50 for deleting; a counter at the bottom shows how many are selected; the first chip, **Show selected**, lists just the ticked paths so you can check them before editing, and keeps them in the list while you click around in it; the selection also survives switching filters), then set a
 speed range, swap start and end node, set the nodes (or fill missing or wrong ones with the nearest node to the drawn end, clear matches only), and press *Preview changes*: OMNIA is read live and every path is
 shown old value -> new value, nothing is sent. OMNIA needs all of
 speed min, speed max, start and end node for every call, so a path with no nodes only changes once both nodes are given;

@@ -618,6 +618,7 @@ def test_wiring_page_asks_for_a_fetch_until_a_snapshot_exists_then_shows_results
         page = urllib.request.urlopen(base + "/wiring").read().decode("utf-8")
         assert '"has_snapshot": true' in page
         assert '"node_codes": {"' in page and "nodeHtml(p.start_node, p.start_name)" in page and "node ' + esc(id)" in page   # site code first, node id small
+        assert "chip('Show selected', '__selected'" in page and "selView[p.id]" in page                                   # only the ticked paths, before editing
         import shutil
         import subprocess
         if shutil.which("node"):                                          # the page's own script must at least parse

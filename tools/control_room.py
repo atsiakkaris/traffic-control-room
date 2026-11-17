@@ -619,6 +619,7 @@ h2{font-size:15px;margin:22px 0 8px}
 .edit label{display:inline-flex;gap:5px;align-items:center}
 .pv td.ch{font-family:Consolas,monospace}
 .nid{color:var(--dim);font-size:11px}
+.chip.sel{font-weight:bold;border-style:dashed}
 .del{color:var(--high)}.add{color:#27ae60}
 .selbar{position:sticky;bottom:0;margin:10px -20px -40px;padding:9px 20px;background:var(--card);border-top:1px solid var(--line);font-weight:bold;z-index:5}
 .selbar.over{background:var(--high);color:#fff}
@@ -685,7 +686,7 @@ h2{font-size:15px;margin:22px 0 8px}
     }).catch(function(e) { status.textContent = 'Could not save: ' + e; });
   };
 
-  var code = '', q = '', selected = {}, sortKey = 'severity', sortDesc = false;
+  var code = '', q = '', selected = {}, selView = null, sortKey = 'severity', sortDesc = false;   // selView: the paths that were ticked when "Show selected" was pressed
   var SORTS = [['severity', 'Severity (worst first)'], ['id', 'Path ID'], ['name', 'Path name'], ['start', 'Start (site code)'], ['end', 'End (site code)'],
                ['speed_min', 'Speed min'], ['speed_max', 'Speed max'], ['count', 'Number of findings']];
   var SEV = {high: 0, medium: 1, low: 2};
@@ -728,6 +729,7 @@ h2{font-size:15px;margin:22px 0 8px}
   function shown() {
     return D.paths.filter(function(p) {
       if (code === '__all') { /* every path */ }
+      else if (code === '__selected') { if (!selView || !selView[p.id]) return false; }     // search and sort still apply
       else if (code === '') { if (!p.findings.length) return false; }
       else if (!p.findings.some(function(f) { return f.code === code; })) return false;
       var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' node ' + (p.start_node || '') + ' node ' + (p.end_node || '') + ' ' +
@@ -738,16 +740,25 @@ h2{font-size:15px;margin:22px 0 8px}
   function chip(label, c, n) {
     var el = document.createElement('span');
     el.className = 'chip' + (code === c ? ' on' : ''); el.textContent = label + ' (' + n + ')';
-    el.onclick = function() { code = c; draw(); };
+    if (c === '__selected') el.className += ' sel';
+    el.title = c === '__selected' ? 'Show only the paths ticked right now (before editing them). The list keeps those paths while you click around in it; press this again to pick up a changed selection.' : '';
+    el.onclick = function() {
+      if (c === '__selected') { selView = {}; Object.keys(selected).forEach(function(id) { selView[id] = true; }); }      // freeze what is shown now
+      code = c; draw();
+    };
     return el;
   }
-  function draw() {
+  function drawChips() {
     var cs = document.getElementById('chips'); cs.innerHTML = '';
+    cs.appendChild(chip('Show selected', '__selected', countSelected()));
     cs.appendChild(chip('All with findings', '', withFindings));
     Object.keys(D.meta.by_code).sort(function(a, b) { return D.meta.by_code[b] - D.meta.by_code[a]; }).forEach(function(c) {
       cs.appendChild(chip(D.labels[c] ? D.labels[c][1] : c, c, D.meta.by_code[c]));
     });
     cs.appendChild(chip('All paths', '__all', D.paths.length));
+  }
+  function draw() {
+    drawChips();
     var rows = document.getElementById('rows'); rows.innerHTML = '';
     var list = shown().sort(cmp);
     lastList = list;
@@ -761,7 +772,8 @@ h2{font-size:15px;margin:22px 0 8px}
         + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '">show on map</a>' : '') + '</td>';
       rows.appendChild(tr);
     });
-    if (!rows.children.length) rows.innerHTML = '<tr><td colspan="8" class="note">Nothing matches.</td></tr>';
+    if (!rows.children.length) rows.innerHTML = '<tr><td colspan="8" class="note">' + (code === '__selected' && !(selView && Object.keys(selView).length)
+      ? 'No paths were selected. Tick or click some paths first, then press Show selected.' : 'Nothing matches.') + '</td></tr>';
     document.getElementById('all').checked = list.length > 0 && list.every(function(p) { return selected[p.id]; });
     drawEdit();
     updateCounter();
@@ -784,7 +796,8 @@ h2{font-size:15px;margin:22px 0 8px}
     var t = e.target, onBox = t.getAttribute && t.getAttribute('data-sel');
     var row = t.closest && t.closest('tr[data-row]');
     if (!row) {                                            // a click on the empty page clears the selection
-      if (t.closest && !t.closest('#pt, #edit, #selbar, .bar, .chips, a, button, input, select, label') && countSelected()) { selected = {}; preview = null; lastIdx = null; draw(); }
+      // (a control that redrew itself during this very click, like a filter chip, is no longer in the page: that is not a click on empty space)
+      if (document.body.contains(t) && t.closest && !t.closest('#pt, #edit, #selbar, .bar, .chips, a, button, input, select, label') && countSelected()) { selected = {}; preview = null; lastIdx = null; draw(); }
       return;
     }
     if (t.closest('td.fd') || (!onBox && t.closest('a, button, input, select, label'))) return;      // the findings text stays free for copying
@@ -810,7 +823,7 @@ h2{font-size:15px;margin:22px 0 8px}
   });
   document.addEventListener('change', function(e) {
     var c = e.target.getAttribute && e.target.getAttribute('data-sel');
-    if (c) { if (e.target.checked) selected[c] = true; else delete selected[c]; drawEdit(); updateCounter(); }
+    if (c) { if (e.target.checked) selected[c] = true; else delete selected[c]; drawEdit(); updateCounter(); drawChips(); }
   });
 
   // ---- bulk edit ------------------------------------------------------------
