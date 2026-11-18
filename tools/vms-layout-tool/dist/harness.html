@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VMS Layout Tool – offline harness</title>
+<body style="margin:0;background:#222;color:#ccc;font:14px system-ui">
+<p style="padding:12px">Offline harness: fetch is mocked with data captured from OMNIA. Nothing leaves this page.</p>
+<script>
+  const vu = (id, vid, type, x1, y1, x2, y2) => ({ mainId: id, lUnitId: '01', vUnitId: String(vid), Name: vid + '-' + type, StartX: x1, StartY: y1, EndX: x2, EndY: y2, custom: { Type: type, FontName: null, FontSize: 0, Chars: 0, AbsStartX: 0, AbsStartY: 0, LinkedVuIDs: [] }, leaf: true, children: null });
+  const layout = (id, name, asStyle, vus, W, H) => ({ mainId: id, Name: name, useLayoutAsStyle: asStyle, isLayoutDefault: false, children: [{ mainId: id, lUnitId: '01', EndX: W, EndY: H, children: vus }] });
+  const styles = { children: [
+    { mainId: 4, Name: '144x72', children: [{ lUnitId: '01', EndX: 144, EndY: 72 }] },
+    { mainId: 5, Name: 'FG 136x64', children: [{ lUnitId: '01', EndX: 136, EndY: 64 }] },
+    { mainId: 2, Name: 'FG 272x96', children: [{ lUnitId: '01', EndX: 272, EndY: 96 }] },
+    { mainId: 1, Name: 'TEXT', children: [] } ] };
+  const layouts = { children: [
+    layout(18, '4L Text', true, [vu(18, 1, 'Text', 5, 5, 268, 23), vu(18, 2, 'Text', 5, 27, 268, 45), vu(18, 3, 'Text', 5, 50, 268, 68), vu(18, 4, 'Text', 5, 73, 268, 91)], 272, 96),
+    layout(3, 'Pitto 96x96 4L', false, [vu(3, 1, 'Graphic', 1, 1, 96, 96), vu(3, 2, 'Text', 97, 1, 272, 24), vu(3, 3, 'Text', 97, 25, 272, 48)], 272, 96) ] };
+  window.__calls = [];
+  window.fetch = async (u) => {
+    const fn = new URL(u, location.href).searchParams.get('function');
+    window.__calls.push(fn);
+    const body = fn === 'GetStyles' ? styles : fn === 'GetLayouts' ? layouts : fn === 'GetLinks' ? (() => { const v = new URL(u, location.href).searchParams.get('virtualUnitID'); return v === '1' ? [{ VirtualUnitID: 2, IsDirectLink: true }] : v === '2' ? [{ VirtualUnitID: 1, IsDirectLink: true }] : []; })() : null;
+    const text = location.search.includes('fail') ? '<html>Login</html>' : body ? JSON.stringify(body) : (fn === 'SaveLayout' ? '77' : fn === 'SaveVU' ? '5' : '');
+    return { ok: true, status: 200, text: async () => text };
+  };
+</script>
+<script src="layout-tool.js"></script>
