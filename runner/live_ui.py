@@ -102,6 +102,11 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-sys
 .leaflet-container a.mapbtn:hover{background:#f4f6f9}
 .leaflet-container a.mapbtn i{font-size:16px}
 .tip b{font-weight:600}.tip div{white-space:nowrap}
+/* anything with a hover note shows the help cursor (? pointer), as in the dashboard; clickable things keep their own pointer */
+:where([title]){cursor:help}
+.ctr,.ctr[title]{cursor:pointer}
+.leaflet-bar a,.leaflet-bar a[title]{cursor:pointer}
+#list .it{cursor:pointer}
 @media (max-width:1000px){.row{grid-template-columns:repeat(4,minmax(0,1fr))}.rowlabel{grid-column:1/-1}.sub{margin-left:0}}
 </style>
 """
@@ -207,6 +212,50 @@ function model(){
 var M = null;
 
 /* ---- drawing ---- */
+var BADGE_TIP = {
+  never: {path: 'This path has never reported a reading since monitoring began. It may be new, switched off, or never configured properly.',
+          sensor: 'This has never worked since monitoring began. It may be new, not yet powered on, or never set up properly.',
+          bt: 'Every path through this sensor has failed since monitoring began, so there is no proof it ever worked.'},
+  down: {path: 'No speed reading in the live feed right now. If the number of days is shown, it has been failing at every stored check since then.',
+         sensor: 'Its latest check failed. The number of days is how long it has been failing.',
+         bt: 'Judged faulty from how its paths behave: it has no working path while its failing paths lead to sensors that are proven alive.'},
+  new: {path: 'This path worked at the check before the latest and is silent now.',
+        sensor: 'This worked at the check before the latest and has failed since.',
+        bt: 'This sensor was not judged faulty at the check before the latest and is now.'},
+  up: {path: 'The live feed gives this path a speed reading, so it is working.',
+       sensor: 'Its latest check passed.',
+       bt: 'At least one of its paths works, which proves the sensor itself is alive.'},
+  quiet: {path: 'This path goes silent on a regular pattern (for example every night, when there is little traffic), so it is probably not a fault. It is left out of the counters.',
+          sensor: '', bt: ''}
+};
+function badgeTip(u, cls, label){
+  var kind = u.kind === 'path' ? 'path' : (u.kind === 'bt' ? 'bt' : 'sensor');
+  var t = (BADGE_TIP[cls] || {})[kind] || '';
+  if (cls === 'up' && label === 'Back up') t = 'It was down at the check before the latest and is working again now.';
+  if (cls === 'down' && label === 'Silent') t = 'No speed reading in the live feed right now. It has not failed for long enough, or has not failed at the stored checks, to count the days.';
+  return t;
+}
+function tipBadge(u, b){ var s = el('span', 'abadge ' + b[0], b[1]); var tp = badgeTip(u, b[0], b[1]); if (tp) s.title = tp; return s; }
+var LEGEND_TIP = {
+  'Reporting': 'The live feed gives this path a speed right now, or the sign or sensor is working.',
+  'Silent': 'A path with no speed reading right now.',
+  'Never worked': 'Has never reported since monitoring began.',
+  'Often silent': 'A path that goes quiet on a regular pattern, for example every night. Probably not a fault.',
+  'Not enough evidence': 'A Bluetooth sensor with too few usable paths to judge. Not counted.'
+};
+var DL_TIP = {
+  'Now': 'The latest state, from the live feed or the last stored check.',
+  'Speed': 'Current average speed on the path, from the live feed.',
+  'Travel time': 'Current time to drive the whole path.',
+  'Typical now': 'The usual speed on this path at this time of day. Compare it with the speed to see if traffic is unusual.',
+  'Free flow': 'The speed on this path when the road is empty.',
+  'Down since': 'When the stored checks began to fail without a good one in between.',
+  'Since': 'When the stored checks began to fail without a good one in between.',
+  'Pattern': 'Why this path is not counted as a fault.',
+  'Contract': 'The project responsible for this sensor, from QA Locations.xlsx. Shown on this PC only.',
+  'Lifetime': 'The stability tier: the share of all stored checks that passed since monitoring began.',
+  'Triangulation': 'How the sensor was judged from its paths: a working path proves both end sensors alive.'
+};
 function badge(u, k){
   if (k === 'new') return ['new', 'New']; if (k === 'recovered') return ['up', 'Back up']; if (k === 'quiet') return ['quiet', 'Often silent'];
   if (u.state === 'never') return ['never', 'Never worked'];
@@ -250,18 +299,35 @@ function drawNotes(){
     n.appendChild(w);
   });
 }
+var TIPS = {
+  sensors: {
+    row: 'Traffic Detection loops, VMS signs and Bluetooth sensors. A Bluetooth sensor has no status of its own: it is judged from how its paths behave (triangulation), as of the last stored run.',
+    down: 'Sensors failing right now: loops and signs whose latest check failed, and Bluetooth sensors judged faulty.',
+    new: 'Sensors that were fine at the check before the latest one and are down now. Sensors that keep failing and recovering are not listed as new.',
+    recovered: 'Sensors that were down at the check before the latest one and are working now.',
+    never: 'Sensors that have never once worked since monitoring began. Also counted in Down now.'
+  },
+  paths: {
+    row: 'Bluetooth paths, each on its own. A path is reporting when the live feed gives it a speed of 0 or more.',
+    down: 'Paths with no speed reading in the live feed right now. Updated every 5 minutes.',
+    new: 'Paths that worked at the last stored run and are silent now. Paths that go quiet on a regular pattern are not listed as new.',
+    recovered: 'Paths that were silent at the last stored run and are reporting now.',
+    never: 'Paths that have never reported a reading. Also counted in Down now.'
+  }
+};
 function drawRow(sec, title, subtitle){
   var row = document.getElementById('row-' + sec); row.textContent = '';
-  var lab = el('div', 'rowlabel', title); lab.appendChild(el('span', null, subtitle)); row.appendChild(lab);
+  var lab = el('div', 'rowlabel', title); lab.appendChild(el('span', null, subtitle)); lab.title = TIPS[sec].row; row.appendChild(lab);
   [['down','Down now','bad'],['new','New since last check','warn'],['recovered','Back up','ok'],['never','Never worked','dead']].forEach(function(k){
     var n = M.L[sec][k[0]].length, b = el('button', 'ctr ' + k[2] + (n ? '' : ' zero') + (open && open.sec === sec && open.k === k[0] ? ' on' : ''));
-    b.appendChild(el('div', 'n', String(n))); b.appendChild(el('div', 'l', k[1]));
+    b.title = TIPS[sec][k[0]]; b.appendChild(el('div', 'n', String(n))); b.appendChild(el('div', 'l', k[1]));
     b.onclick = function(){ toggle(sec, k[0]); }; row.appendChild(b);
   });
   var sub = document.getElementById('sub-' + sec); sub.textContent = '';
   var q = M.L[sec].quiet.length;
   if (sec === 'paths' && q){
     var qb = el('button', null, q + ' path' + (q > 1 ? 's are' : ' is') + ' often silent and not counted above - show');
+    qb.title = 'These paths go silent on a regular pattern (for example every night), so they are probably not faults. They are left out of the counters.';
     qb.onclick = function(){ toggle('paths', 'quiet'); }; sub.appendChild(qb);
   } else if (sec === 'sensors'){
     sub.textContent = 'Bluetooth sensors are judged live from their paths (an inference). ' + (M.L.vmsLive ? 'VMS is live.' : 'VMS is as of the ' + C.built + ' check (the live feed does not carry signs yet).');
@@ -281,7 +347,7 @@ function drawList(){
     var nm = el('div', null, u.name), pj = projOf(u); if (pj){ var pe = el('div', 'pj', pj); pe.title = pj; nm.appendChild(pe); }
     row.appendChild(nm); row.appendChild(el('div', 'tag', u.glabel));
     var rs = el('div', 'rs', u.reason); rs.title = u.reason; row.appendChild(rs);
-    row.appendChild(el('span', 'abadge ' + b[0], b[1])); row.onclick = function(){ openPanel(key); };
+    row.appendChild(tipBadge(u, b)); row.onclick = function(){ openPanel(key); };
     var pin = el('span', 'pin', '\ud83d\udccd'); pin.title = 'Show on map';
     if (SHAPES[key]) pin.onclick = function(ev){ ev.stopPropagation(); showOnMap(u); }; else pin.style.visibility = 'hidden';
     row.appendChild(pin); box.appendChild(row);
@@ -325,7 +391,7 @@ function drawMapHead(){
   sb.onclick = function(){ satOn = !satOn; if (satOn){ MAP.removeLayer(STREETS); SAT.addTo(MAP); } else { MAP.removeLayer(SAT); STREETS.addTo(MAP); if (STREETS.getContainer) STREETS.getContainer().style.zIndex = 0; } drawMapHead(); };
   h.appendChild(sb);
   [['Reporting', COL.up], ['Silent', COL.down], ['Never worked', COL.never], ['Often silent', COL.quiet], ['Not enough evidence', COL.none]].forEach(function(k){
-    var s = el('span', 'lg'); var i = el('i', 'dot'); i.style.background = k[1]; s.appendChild(i); s.appendChild(document.createTextNode(k[0])); h.appendChild(s);
+    var s = el('span', 'lg'); var i = el('i', 'dot'); i.style.background = k[1]; s.appendChild(i); s.appendChild(document.createTextNode(k[0])); s.title = LEGEND_TIP[k[0]] || ''; h.appendChild(s);
   });
 }
 function toggleFull(){
@@ -402,7 +468,7 @@ function showOnMap(u){
 }
 
 /* ---- panel ---- */
-function dl(p, label, v){ if (v == null || v === '') return; p.appendChild(el('dt', null, label)); var d = el('dd'); if (v.nodeType) d.appendChild(v); else d.textContent = v; p.appendChild(d); }
+function dl(p, label, v){ if (v == null || v === '') return; var dt = el('dt', null, label); var tp = DL_TIP[label] || (/^Last \d+ checks$/.test(label) ? 'Green is a good check, red a failed one. Oldest on the left, newest on the right.' : ''); if (tp) dt.title = tp; p.appendChild(dt); var d = el('dd'); if (v.nodeType) d.appendChild(v); else d.textContent = v; p.appendChild(d); }
 // The contract (project) line. Only the Control Room's local copy switches C.show_projects on; the published page never has it.
 function projOf(u){
   if (!C.show_projects) return null;
@@ -429,7 +495,7 @@ function openPanel(key, keep){
   var p = document.getElementById('sp'); p.textContent = '';
   var x = el('button', 'x', '\u00d7'); x.setAttribute('aria-label', 'Close'); x.onclick = closePanel; p.appendChild(x);
   p.appendChild(el('h3', null, u.name)); p.appendChild(el('div', 'sub2', u.glabel + ' - id ' + u.id));
-  var b = badge(u, u.isNew ? 'new' : (u.quiet ? 'quiet' : null)); p.appendChild(el('span', 'abadge ' + b[0], b[1]));
+  var b = badge(u, u.isNew ? 'new' : (u.quiet ? 'quiet' : null)); p.appendChild(tipBadge(u, b));
   var d = el('dl'); dl(d, 'Now', u.reason);
   if (u.kind === 'path'){
     if (u.rep){

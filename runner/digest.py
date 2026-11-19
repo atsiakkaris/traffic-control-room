@@ -498,8 +498,8 @@ def _note_section(note):
         return ""
     return f"""
     <div class="dg-note" style="background:#fff8e6;border:1px solid #fac775;border-radius:8px;padding:14px 18px;margin-bottom:24px">
-      <div class="dg-note-title" style="font-size:14px;font-weight:700;color:#633806;margin-bottom:2px">Editor's Note</div>
-      <div class="dg-note-title" style="font-size:12px;font-weight:600;color:#633806;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">📌 Last week</div>
+      <div class="dg-note-title" style="font-size:17px;font-weight:700;color:#633806;margin-bottom:2px">Editor's Note</div>
+      <div class="dg-note-sub" style="font-size:15px;font-weight:600;color:#9a5b13;margin-bottom:12px">📌 From last week</div>
       <div style="font-size:13px;color:#374151;line-height:1.5">{_render_note_html(note)}</div>
     </div>"""
 
@@ -578,6 +578,8 @@ def build_html(d):
          explicit dg-c-good/warn/bad classes instead, only on the two
          neutral-background spots (small per-group table) where a literal
          override would otherwise go dark-on-dark. */
+      /* Headings typed inside the editor's note: keep them clearly below the note's own title */
+      .dg-note h3, .dg-note h4 {{ font-size:14px; margin:14px 0 6px; }}
       @media (prefers-color-scheme: dark) {{
         body {{ background:#111318 !important; color:#f0f2f5 !important; }}
         [style*="color:#111827"], [style*="color:#374151"] {{ color:#f0f2f5 !important; }}
@@ -588,6 +590,7 @@ def build_html(d):
         [style*="background:#e5e7eb"] {{ background:#30363d !important; }}
         .dg-note {{ background:#241e0d !important; border-color:#7c5a15 !important; }}
         .dg-note-title {{ color:#fbbf24 !important; }}
+        .dg-note-sub {{ color:#d9a441 !important; }}
         .dg-c-good {{ color:#34d399 !important; }}
         .dg-c-warn {{ color:#fbbf24 !important; }}
         .dg-c-bad  {{ color:#f87171 !important; }}
