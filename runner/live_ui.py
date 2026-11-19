@@ -55,9 +55,9 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-sys
 .rowlabel span{font-size:11px;font-weight:400;color:var(--muted);margin-top:2px}
 .ctr{background:var(--surface);border:0.5px solid var(--border);border-radius:10px;padding:10px 14px;text-align:left;cursor:pointer;font:inherit;color:inherit}
 .ctr:hover{border-color:var(--muted)} .ctr.on{border-color:#378add;box-shadow:0 0 0 1px #378add inset}
-.ctr .n{font-size:26px;font-weight:500;line-height:1.1}.ctr .l{font-size:12px;color:var(--muted);margin-top:2px}
+.ctr .n{font-size:26px;font-weight:500;line-height:1.1}.ctr .l{font-size:12px;color:var(--muted);margin-top:2px}.ctr .s{font-size:11px;color:var(--muted);opacity:.8;margin-top:1px}
 .ctr.bad .n{color:#e24b4a}.ctr.warn .n{color:#ba7517}.ctr.ok .n{color:#1d9e75}.ctr.dead .n{color:#a32d2d}.ctr.zero .n{color:var(--muted)}
-.sub{font-size:12px;color:var(--muted);margin:0 0 14px 180px}
+.sub{font-size:12px;color:var(--muted);margin:0 0 14px 180px}.sub .cmp{color:var(--text);margin-bottom:3px}.sub .cmp b{font-weight:600}
 .sub button{background:none;border:none;color:#378add;cursor:pointer;font:inherit;padding:0}
 #list{background:var(--surface);border:0.5px solid var(--border);border-radius:10px;overflow:hidden;display:none;margin-top:6px}
 #list .hd{padding:8px 14px;font-size:12px;color:var(--muted);border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between}
@@ -101,6 +101,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-sys
 .leaflet-container a.mapbtn{display:flex;align-items:center;justify-content:center;width:30px;height:30px;color:#333;background:#fff;text-decoration:none}
 .leaflet-container a.mapbtn:hover{background:#f4f6f9}
 .leaflet-container a.mapbtn i{font-size:16px}
+.ep{width:22px;height:22px;border-radius:50%;background:#facc15;color:#111;font:700 12px/18px Arial,sans-serif;text-align:center;border:2px solid #fff;box-sizing:border-box}
 .tip b{font-weight:600}.tip div{white-space:nowrap}
 /* anything with a hover note shows the help cursor (? pointer), as in the dashboard; clickable things keep their own pointer */
 :where([title]){cursor:help}
@@ -128,7 +129,7 @@ _JS = r"""
 (function(){
 var C = __CTX__, URL_ = "__URL__", EVERY = __EVERY__;
 var live = null, err = null, lastOk = null, nextAt = Date.now() + EVERY * 1000, open = null, sel = null, SHOW = 40, busy = false;
-var KIND = {down:'Down now', new:'New since last check', recovered:'Back up', never:'Never worked', quiet:'Often silent'};
+var KIND = {down:'Down now', new:'Just went down', recovered:'Back up', never:'Never worked', quiet:'Often silent'};
 function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function nicDay(ms){ return new Date(ms).toLocaleDateString('en-GB', {timeZone:'Asia/Nicosia', day:'2-digit', month:'2-digit'}); }
 function clock(d){ var ms = d ? new Date(d).getTime() : NaN; if (isNaN(ms)) return '-'; var t = new Date(ms).toLocaleTimeString('en-GB', {timeZone:'Asia/Nicosia', hour:'2-digit', minute:'2-digit'}); return nicDay(ms) === nicDay(Date.now()) ? t : nicDay(ms) + ' ' + t; }
@@ -219,9 +220,9 @@ var BADGE_TIP = {
   down: {path: 'No speed reading in the live feed right now. If the number of days is shown, it has been failing at every stored check since then.',
          sensor: 'Its latest check failed. The number of days is how long it has been failing.',
          bt: 'Judged faulty from how its paths behave: it has no working path while its failing paths lead to sensors that are proven alive.'},
-  new: {path: 'This path worked at the check before the latest and is silent now.',
-        sensor: 'This worked at the check before the latest and has failed since.',
-        bt: 'This sensor was not judged faulty at the check before the latest and is now.'},
+  new: {path: 'This path worked at the last stored check ({check}) and has no speed reading now. That check is up to 6 hours old, so it may have stopped at any time since.',
+        sensor: 'This worked at the last stored check ({check}) and is failing now. That check is up to 6 hours old.',
+        bt: 'None of the paths of this sensor reports now, and it was not judged faulty at the last stored check ({check}).'},
   up: {path: 'The live feed gives this path a speed reading, so it is working.',
        sensor: 'Its latest check passed.',
        bt: 'At least one of its paths works, which proves the sensor itself is alive.'},
@@ -231,9 +232,9 @@ var BADGE_TIP = {
 function badgeTip(u, cls, label){
   var kind = u.kind === 'path' ? 'path' : (u.kind === 'bt' ? 'bt' : 'sensor');
   var t = (BADGE_TIP[cls] || {})[kind] || '';
-  if (cls === 'up' && label === 'Back up') t = 'It was down at the check before the latest and is working again now.';
+  if (cls === 'up' && label === 'Back up') t = 'It was down at the last stored check ({check}) and is working again now.';
   if (cls === 'down' && label === 'Silent') t = 'No speed reading in the live feed right now. It has not failed for long enough, or has not failed at the stored checks, to count the days.';
-  return t;
+  return t.replace('{check}', C.built);
 }
 function tipBadge(u, b){ var s = el('span', 'abadge ' + b[0], b[1]); var tp = badgeTip(u, b[0], b[1]); if (tp) s.title = tp; return s; }
 var LEGEND_TIP = {
@@ -245,6 +246,7 @@ var LEGEND_TIP = {
 };
 var DL_TIP = {
   'Now': 'The latest state, from the live feed or the last stored check.',
+  'Compared with': 'The last stored check this state is compared with. It runs every 6 hours, so the change may have happened at any time since.',
   'Speed': 'Current average speed on the path, from the live feed.',
   'Travel time': 'Current time to drive the whole path.',
   'Typical now': 'The usual speed on this path at this time of day. Compare it with the speed to see if traffic is unusual.',
@@ -257,7 +259,7 @@ var DL_TIP = {
   'Triangulation': 'How the sensor was judged from its paths: a working path proves both end sensors alive.'
 };
 function badge(u, k){
-  if (k === 'new') return ['new', 'New']; if (k === 'recovered') return ['up', 'Back up']; if (k === 'quiet') return ['quiet', 'Often silent'];
+  if (k === 'new') return ['new', 'Just went down']; if (k === 'recovered') return ['up', 'Back up']; if (k === 'quiet') return ['quiet', 'Often silent'];
   if (u.state === 'never') return ['never', 'Never worked'];
   if (u.state === 'down') return ['down', u.c.d ? 'Down ' + u.c.d + 'd' : (u.kind === 'path' && !u.isNew ? 'Silent' : 'Down')];
   return ['up', 'Working'];
@@ -303,27 +305,32 @@ var TIPS = {
   sensors: {
     row: 'Traffic Detection loops, VMS signs and Bluetooth sensors. A Bluetooth sensor has no status of its own: it is judged from how its paths behave (triangulation), as of the last stored run.',
     down: 'Sensors failing right now: loops and signs whose latest check failed, and Bluetooth sensors judged faulty.',
-    new: 'Sensors that were fine at the check before the latest one and are down now. Sensors that keep failing and recovering are not listed as new.',
-    recovered: 'Sensors that were down at the check before the latest one and are working now.',
+    new: 'Sensors that were fine at the last stored check ({check}) and are down now. That check is up to 6 hours old, so this may have happened at any time since. Sensors that keep failing and recovering are not listed here.',
+    recovered: 'Sensors that were down at the last stored check ({check}) and are working now.',
     never: 'Sensors that have never once worked since monitoring began. Also counted in Down now.'
   },
   paths: {
     row: 'Bluetooth paths, each on its own. A path is reporting when the live feed gives it a speed of 0 or more.',
     down: 'Paths with no speed reading in the live feed right now. Updated every 5 minutes.',
-    new: 'Paths that worked at the last stored run and are silent now. Paths that go quiet on a regular pattern are not listed as new.',
-    recovered: 'Paths that were silent at the last stored run and are reporting now.',
+    new: 'Paths that worked at the last stored check ({check}) and have no speed reading now. That check is up to 6 hours old, so the path may have stopped at any time since. Not a new path. Paths that go quiet on a regular pattern are not listed here.',
+    recovered: 'Paths that were silent at the last stored check ({check}) and are reporting now.',
     never: 'Paths that have never reported a reading. Also counted in Down now.'
   }
 };
+function checkAt(){ return clock(C.built_iso || null) !== '-' ? clock(C.built_iso) : C.built; }
+function checkAge(){ var at = C.built_iso ? Date.parse(C.built_iso) : NaN; if (isNaN(at)) return ''; var m = Math.max(0, Math.round((Date.now() - at) / 60000)); return ' (' + (m < 90 ? m + ' min' : Math.round(m / 60) + ' h') + ' ago)'; }
 function drawRow(sec, title, subtitle){
   var row = document.getElementById('row-' + sec); row.textContent = '';
   var lab = el('div', 'rowlabel', title); lab.appendChild(el('span', null, subtitle)); lab.title = TIPS[sec].row; row.appendChild(lab);
-  [['down','Down now','bad'],['new','New since last check','warn'],['recovered','Back up','ok'],['never','Never worked','dead']].forEach(function(k){
+  [['down','Down now','bad','right now'],['new','Just went down','warn','since the ' + checkAt() + ' check'],['recovered','Back up','ok','since the ' + checkAt() + ' check'],['never','Never worked','dead','since monitoring began']].forEach(function(k){
     var n = M.L[sec][k[0]].length, b = el('button', 'ctr ' + k[2] + (n ? '' : ' zero') + (open && open.sec === sec && open.k === k[0] ? ' on' : ''));
-    b.title = TIPS[sec][k[0]]; b.appendChild(el('div', 'n', String(n))); b.appendChild(el('div', 'l', k[1]));
+    b.title = TIPS[sec][k[0]].replace('{check}', C.built); b.appendChild(el('div', 'n', String(n))); b.appendChild(el('div', 'l', k[1])); b.appendChild(el('div', 's', k[3]));
     b.onclick = function(){ toggle(sec, k[0]); }; row.appendChild(b);
   });
   var sub = document.getElementById('sub-' + sec); sub.textContent = '';
+  var cmp = el('div', 'cmp'); cmp.appendChild(el('b', null, 'Just went down')); cmp.appendChild(document.createTextNode(' and ')); cmp.appendChild(el('b', null, 'Back up'));
+  cmp.appendChild(document.createTextNode(' compare the live feed with the ' + checkAt() + ' check' + checkAge() + '. A change may have happened any time since.')); sub.appendChild(cmp);
+  var more = el('div'); sub.appendChild(more); sub = more;
   var q = M.L[sec].quiet.length;
   if (sec === 'paths' && q){
     var qb = el('button', null, q + ' path' + (q > 1 ? 's are' : ' is') + ' often silent and not counted above - show');
@@ -376,6 +383,7 @@ function drawFoot(){
 
 /* ---- map ---- */
 var HOME = {center:[34.95, 33.15], zoom:9};
+var HLKEY = null, EPS = null;
 var MAP = null, LAY = {}, SHAPES = {}, ON = {paths:true, bt:true, vms:true}, SAT = null, STREETS = null, satOn = false;
 var COL = {up:'#1d9e75', down:'#e24b4a', never:'#a32d2d', quiet:'#e58e0a', none:'#9ca3af'};
 function colorOf(u){ return u.state === 'up' ? COL.up : (u.quiet ? COL.quiet : (u.state === 'never' ? COL.never : COL.down)); }
@@ -415,6 +423,7 @@ function initMap(){
       L.DomEvent.disableClickPropagation(box); L.DomEvent.on(a, 'click', function(e){ L.DomEvent.preventDefault(e); fn(a); }); return box; }});
     MAP.addControl(new Ctl());
   }
+  MAP.on('click', function(){ if (HLKEY) highlight(null); });   // a click on empty map clears the highlighted path
   btn('ti-arrows-maximize', 'Toggle full screen', toggleFull);
   btn('ti-crosshair', 'Reset the map view', function(){ MAP.setView(HOME.center, HOME.zoom); });
   L.control.zoom({position:'topright'}).addTo(MAP);
@@ -434,11 +443,11 @@ function drawMap(){
     var u = M.U[key], s = SHAPES[key], col = colorOf(u);
     if (u.kind === 'path'){
       var src = u.live && Array.isArray(u.live.coords) && u.live.coords.length > 1 ? u.live.coords : null;
-      if (!s && src){ s = L.polyline(src, {weight:3}); s.on('click', function(){ openPanel(key); }); s.bindTooltip(tip(u.name), {sticky:true}); s.addTo(LAY.paths); SHAPES[key] = s; }
+      if (!s && src){ s = L.polyline(src, {weight:3, bubblingMouseEvents:false}); s.on('click', function(){ openPanel(key); }); s.bindTooltip(tip(u.name), {sticky:true}); s.addTo(LAY.paths); SHAPES[key] = s; }
       if (s) s.setTooltipContent(tip(u.name, u.rep ? reading(u.live) : (u.quiet ? 'No reading (often silent)' : 'No reading')));
-      if (s){ s.setStyle({color:col, weight: u.state === 'up' ? 3 : 5, opacity: u.state === 'up' ? 0.7 : 0.95, dashArray: u.state === 'never' ? '6,6' : null}); if (u.state !== 'up') s.bringToFront(); }
+      if (s){ if (key === HLKEY) s.setStyle({color:'#facc15', weight:7, opacity:1, dashArray:null}); else s.setStyle({color:col, weight: u.state === 'up' ? 3 : 5, opacity: u.state === 'up' ? 0.7 : 0.95, dashArray: u.state === 'never' ? '6,6' : null}); if (u.state !== 'up' && key !== HLKEY) s.bringToFront(); }
     } else if (u.kind === 'bt' && u.lat != null){
-      if (!s){ s = L.circleMarker([u.lat, u.lon], {radius:7, weight:2, color:'#fff', fillOpacity:1}); s.on('click', function(){ openPanel(key); }); s.bindTooltip(tip(u.name)); s.addTo(LAY.bt); SHAPES[key] = s; }
+      if (!s){ s = L.circleMarker([u.lat, u.lon], {radius:7, weight:2, color:'#fff', fillOpacity:1, bubblingMouseEvents:false}); s.on('click', function(){ openPanel(key); }); s.bindTooltip(tip(u.name)); s.addTo(LAY.bt); SHAPES[key] = s; }
       s.setTooltipContent(tip(u.name, u.reason));
       s.setStyle({fillColor:col});
     } else if (u.kind === 'vms' && u.lat != null){
@@ -453,6 +462,15 @@ function drawMap(){
     s.bindTooltip(tip(c.n, 'Not enough evidence')); s.addTo(LAY.bt); SHAPES[key] = s;
   });
 }
+function endMark(latlng, letter){ return L.marker(latlng, {icon:L.divIcon({className:'', html:'<div class="ep">' + letter + '</div>', iconSize:[22, 22], iconAnchor:[11, 11]}), interactive:false, keyboard:false}); }
+// Highlight one path like the dashboard does: thick yellow line on top, A and B at its ends. null clears.
+function highlight(key){
+  HLKEY = key; if (EPS && MAP){ MAP.removeLayer(EPS); } EPS = null;
+  drawMap();
+  var s = key && SHAPES[key]; if (!s || !MAP) return;
+  s.bringToFront();
+  var pts = s.getLatLngs(); if (pts.length > 1){ EPS = L.layerGroup([endMark(pts[0], 'A'), endMark(pts[pts.length - 1], 'B')]).addTo(MAP); }
+}
 function showOnMap(u){
   closePanel(); drawMap(); if (!MAP) return;
   var layer = u.kind === 'path' ? 'paths' : (u.kind === 'bt' ? 'bt' : 'vms');
@@ -460,10 +478,12 @@ function showOnMap(u){
   document.getElementById('mapwrap').scrollIntoView({behavior:'smooth', block:'start'});
   setTimeout(function(){
     MAP.invalidateSize(); var s = SHAPES[u.key]; if (!s) return; var centre;
-    if (s.getBounds){ MAP.fitBounds(s.getBounds(), {maxZoom:15, padding:[40, 40]}); centre = s.getBounds().getCenter(); }
-    else { centre = s.getLatLng(); MAP.flyTo(centre, 15, {duration:0.8}); }
-    var ring = L.circleMarker(centre, {radius:20, color:'#facc15', weight:5, fill:false, interactive:false}).addTo(MAP);
-    setTimeout(function(){ MAP.removeLayer(ring); }, 3000);
+    if (s.getBounds){ MAP.fitBounds(s.getBounds(), {maxZoom:15, padding:[40, 40]}); highlight(u.key); }
+    else {
+      highlight(null); centre = s.getLatLng(); MAP.flyTo(centre, 15, {duration:0.8});
+      var ring = L.circleMarker(centre, {radius:20, color:'#facc15', weight:5, fill:false, interactive:false}).addTo(MAP);
+      setTimeout(function(){ MAP.removeLayer(ring); }, 3000);
+    }
   }, 450);
 }
 
@@ -492,11 +512,14 @@ function copy(text, btn){
 }
 function openPanel(key, keep){
   var u = M && M.U[key]; if (!u) return; sel = key;
+  if (MAP && !keep) highlight(u.kind === 'path' ? key : null);
   var p = document.getElementById('sp'); p.textContent = '';
   var x = el('button', 'x', '\u00d7'); x.setAttribute('aria-label', 'Close'); x.onclick = closePanel; p.appendChild(x);
   p.appendChild(el('h3', null, u.name)); p.appendChild(el('div', 'sub2', u.glabel + ' - id ' + u.id));
   var b = badge(u, u.isNew ? 'new' : (u.quiet ? 'quiet' : null)); p.appendChild(tipBadge(u, b));
   var d = el('dl'); dl(d, 'Now', u.reason);
+  if (u.isNew) dl(d, 'Compared with', 'Worked at the ' + C.built + ' check (up to 6 hours ago), no reading now');
+  if (u.isRec) dl(d, 'Compared with', 'Was down at the ' + C.built + ' check (up to 6 hours ago), reporting now');
   if (u.kind === 'path'){
     if (u.rep){
       dl(d, 'Speed', (Math.round(u.live.speed_kmh * 10) / 10) + ' km/h');
