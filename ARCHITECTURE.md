@@ -480,6 +480,16 @@ the edit via `name_for`, a path that changes both goes out as one call to the ed
 rename-only path uses the rename address, and both logs get the same batch id (kind `combined` in the plan/apply tokens). In `tools/control_room.py`:
 `POST /api/edit/plan` (reads OMNIA live, sends nothing, returns a single-use token) and `POST /api/edit/apply` (needs
 `CONTROL_ROOM_ALLOW_EDIT`, the typed YES, the token, and re-reads OMNIA to refuse paths edited since the preview).
+**Reverse preview** (`runner/omnia_reverse.py`, `POST /api/reverse/plan`): read-only. the arcs call (`iPathId=`) gives a path's
+arc chain (each arc has a direction code arrowN: 0 east, counter-clockwise in 45 degree steps). At the forward path's two ends
+(the drawn route's first/last point, or estimated from the first/last arc) the nearest-arcs call (`x=lon&y=lat`) lists nearby arcs;
+`end_candidates` keeps the opposite direction (code + 4) and scores how well the arc starts/finishes at that point
+(|distance to its centre - half its length|, within 30 m). The route calculation with just the two end arcs returns OMNIA's own
+route (it saves nothing), and `check_reverse` accepts it only within 10% of the forward length and with both ends in place.
+Passing items (also not `duplicate_of` an existing path) get a single-use token; `POST /api/reverse/apply` (allow-edit switch,
+typed YES, token) re-reads OMNIA and calls `create_reverse` per path: the new-id call (refused if the id is already in the live
+list, so nothing is overwritten) -> the build call (the two end arcs, flipped name) -> the path's arcs read back must equal the previewed
+route -> the edit call with the forward speeds and nodes swapped. Stops at the first failure; `results/omnia_create_log.csv`.
 **Local Live tab** (`/live`, `runner/live_local.py`): the published Live page's data now comes from `report.live_page_ctx` (shared by
 `_write_live_page` and the Control Room); `live_local.build` gathers the same inputs from the database, calls it, and only when
 `QA Locations.xlsx` exists adds `attention.add_projects` (the contract of each Bluetooth sensor and, per path, of its two end sensors;

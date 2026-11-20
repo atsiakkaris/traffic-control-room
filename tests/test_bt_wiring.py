@@ -296,3 +296,15 @@ def test_a_node_on_the_wrong_sensor_is_replaced_by_the_node_nearest_the_drawn_en
     p = r["paths"]["10"]
     assert [f["code"] for f in p["findings"]] == ["wrong_node"] and "'Gamma' (id 3)" in p["findings"][0]["text"]
     assert bw.usable_suggestions(r["paths"]) == {"10": {"end": 3, "end_replace": True}}
+
+
+def test_reverse_pairs_by_swapped_nodes_or_by_the_drawn_route():
+    omnia = [{"id": 1, "start": 5, "end": 6}, {"id": 2, "start": 6, "end": 5},            # a node pair
+             {"id": 3, "start": None, "end": None}, {"id": 4, "start": None, "end": None},  # no nodes: found by the drawn route
+             {"id": 7, "start": 8, "end": 9}]                                              # alone (a one-way street, say)
+    feed = {"3": {"coords": [(35.0, 33.0), (35.0, 33.01)]}, "4": {"coords": [(35.0, 33.0101), (35.0001, 33.0001)]},
+            "7": {"coords": [(35.1, 33.1), (35.1, 33.11)]}}
+    pairs = bw.reverse_pairs(omnia, feed)
+    assert pairs == {"1": "2", "2": "1", "3": "4", "4": "3", "7": None}
+    far = {"3": feed["3"], "4": {"coords": [(35.0, 33.0101), (35.01, 33.0)]}}                # the other end is 1 km off: not a pair
+    assert bw.reverse_pairs(omnia[2:4], far) == {"3": None, "4": None}

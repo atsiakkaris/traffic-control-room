@@ -175,6 +175,26 @@ and only the speeds and nodes are changed. After sending, the names are read bac
 changed, and *Preview undo of last rename* restores the old ones (`results/omnia_rename_log.csv`; the edit undo button
 reverts only the speeds and nodes, each part has its own log).
 
+**No reverse pair (Wiring tab chip).** Lists the OMNIA paths that have nothing running the other way: no path between the
+same two nodes reversed, and none drawn from this path's end back to its start (within 30 m, which also finds reverses that
+have no nodes yet). One-way streets have no reverse by design, so they are listed too. With *Sort by Path ID, descending*
+the newest paths come first, so freshly made paths are easy to tick and send to *Preview reverse path*.
+
+**Preview reverse path, then create it (Wiring tab).** OMNIA stores a path as a chain of directed road arcs, and the
+other direction of a road is a separate set of arcs (sometimes the same id + 500,000,000, often unrelated ids). Select a
+path and press *Preview reverse path*: at each end of the path the tool asks OMNIA for the nearest arcs and keeps the one
+running the opposite way that starts (or finishes) right at that end, then lets OMNIA's own router calculate the route
+between those two arcs (it saves nothing). The reverse is accepted only if its length is within 10% of the forward path and
+it starts and ends where the forward path ends and starts; a one-way street or a different route is reported instead.
+Checked against a reverse made by hand in OMNIA (687 / 690): the tool found exactly the same arcs both ways. A path whose
+reverse already seems to exist (two nodes swapped, or the flipped `B->A` name) is refused too.
+For the paths that pass, typing YES and *Create in OMNIA* does what OMNIA's own editor does on Save: asks OMNIA for a new path
+id (never one an existing path has), builds the path from the two end arcs with the flipped name (`7052->7053` becomes
+`7053->7052`), reads the new path's arcs back and stops if they differ from the preview, then copies the forward path's speed
+range and its two nodes swapped. Needs `CONTROL_ROOM_ALLOW_EDIT=1`; every attempt is logged in `results/omnia_create_log.csv`,
+and a wrong one is removed with *Delete selected paths*. The five OMNIA addresses it uses are full addresses in the
+git-ignored `.env` (`CONTROL_ROOM_OMNIA_ARCS_URL`, `_CALC_URL`, `_NEAREST_URL`, `_NEWID_URL`, `_BUILD_URL`), never in the code.
+
 **A path was re-created under a new id? (history merge).** OMNIA cannot turn a path into another geometry and never gives a
 deleted id out again, so a re-drawn path gets a new id and starts with an empty history. `python tools/merge_path_history.py 250=661`
 (OLD=NEW, several pairs allowed) shows a dry run; with `--apply` it first backs up `results/history.db`, then re-keys the old

@@ -92,13 +92,16 @@ def allow_edit_setting(env=None, env_file=ROOT / ".env"):
     return (_setting("CONTROL_ROOM_ALLOW_EDIT", env, env_file) or "").lower() in ("1", "true", "yes")
 
 
+REVERSE_MAX = 10        # paths per reverse preview (two OMNIA calls each)
+
+
 def omnia_urls_setting(env=None, env_file=ROOT / ".env"):
     """The OMNIA addresses from .env, each a full address: {nodes, paths, edit} (None for one that is not set).
 
     CONTROL_ROOM_OMNIA_NODES_URL / _PATHS_URL read the lists, CONTROL_ROOM_OMNIA_EDIT_URL changes speeds and nodes,
     CONTROL_ROOM_OMNIA_RENAME_URL renames; deleting uses CONTROL_ROOM_DELETE_URL. None of them is in the code: the repo is public.
     """
-    return {k: _setting("CONTROL_ROOM_OMNIA_%s_URL" % k.upper(), env, env_file) for k in ("nodes", "paths", "edit", "rename")}
+    return {k: _setting("CONTROL_ROOM_OMNIA_%s_URL" % k.upper(), env, env_file) for k in ("nodes", "paths", "edit", "rename", "arcs", "calc", "nearest", "newid", "build")}
 
 
 # ── review file ──────────────────────────────────────────────────────────────
@@ -730,6 +733,7 @@ h2{font-size:15px;margin:22px 0 8px}
     return D.paths.filter(function(p) {
       if (code === '__all') { /* every path */ }
       else if (code === '__selected') { if (!selView || !selView[p.id]) return false; }     // search and sort still apply
+      else if (code === '__nopair') { if (!p.in_omnia || p.pair) return false; }
       else if (code === '') { if (!p.findings.length) return false; }
       else if (!p.findings.some(function(f) { return f.code === code; })) return false;
       var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' node ' + (p.start_node || '') + ' node ' + (p.end_node || '') + ' ' +
@@ -755,6 +759,9 @@ h2{font-size:15px;margin:22px 0 8px}
     Object.keys(D.meta.by_code).sort(function(a, b) { return D.meta.by_code[b] - D.meta.by_code[a]; }).forEach(function(c) {
       cs.appendChild(chip(D.labels[c] ? D.labels[c][1] : c, c, D.meta.by_code[c]));
     });
+    var np = chip('No reverse pair', '__nopair', D.meta.no_pair || 0);
+    np.title = 'Paths with no path running the other way: none between the same two nodes reversed, and none drawn from this path\'s end back to its start (within 30 m). One-way streets have no reverse by design, so they are listed too.';
+    cs.appendChild(np);
     cs.appendChild(chip('All paths', '__all', D.paths.length));
   }
   function draw() {
@@ -840,7 +847,7 @@ h2{font-size:15px;margin:22px 0 8px}
       + '<label title="OMNIA\'s node id (the small grey number in the table), NOT the site code: the two number ranges overlap, so a site code would pick the wrong node. The text next to the box shows the site code and sensor of the node you typed.">Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label title="OMNIA\'s node id, not the site code (see the start box)">End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
       + '<div class="row"><b>Rename:</b><label>Find <input id="rfind" size="9"></label><label>Replace with <input id="rrep" size="9"></label><label>Prefix <input id="rpre" size="6"></label><label>Suffix <input id="rsuf" size="6"></label>'
       + '<label>New name (one path) <input id="rnew" size="14"></label><label><input type="checkbox" id="rstd"> name from its nodes (site codes)</label></div>'
-      + '<div class="row"><button id="pv">Preview changes</button><button class="sec" id="cnl" title="Empty the edit boxes and close the preview. Your selected paths stay selected.">Cancel</button><button class="sec" id="pvu">Preview undo of last batch</button><button class="sec" id="pvru">Preview undo of last rename</button><button class="sec" id="clr">Clear selection</button>' + (D.can_delete ? '<button class="danger" id="del">Delete selected paths...</button>' : '') + '<span class="note" id="pvs"></span></div>'
+      + '<div class="row"><button id="pv">Preview changes</button><button class="sec" id="cnl" title="Empty the edit boxes and close the preview. Your selected paths stay selected.">Cancel</button><button class="sec" id="rvp" title="Shows the reverse of the selected path(s), checked against OMNIA\'s own route calculation. Reads only; creating needs a typed YES afterwards.">Preview reverse path</button><button class="sec" id="pvu">Preview undo of last batch</button><button class="sec" id="pvru">Preview undo of last rename</button><button class="sec" id="clr">Clear selection</button>' + (D.can_delete ? '<button class="danger" id="del">Delete selected paths...</button>' : '') + '<span class="note" id="pvs"></span></div>'
       + '<div id="pvbox"></div>';
     el.innerHTML = h;
     Object.keys(keep).forEach(function(id) { var x = document.getElementById(id); if (x) { if (x.type === 'checkbox') x.checked = keep[id]; else x.value = keep[id]; } });
@@ -887,6 +894,15 @@ h2{font-size:15px;margin:22px 0 8px}
       runPreview(req);
     };
     document.getElementById('pvu').onclick = function() { runPreview({undo: true}); };
+    document.getElementById('rvp').onclick = function() {
+      var s = document.getElementById('pvs');
+      if (!countSelected()) { s.textContent = 'Select at least one path first.'; return; }
+      s.textContent = 'Asking OMNIA for the arcs of each path (reads only)...';
+      post('/api/reverse/plan', {ids: Object.keys(selected)}).then(function(r) {
+        if (r.error) { s.textContent = r.error; return; }
+        preview = r; drawEdit();
+      }).catch(function(e) { s.textContent = 'Could not preview: ' + e; });
+    };
     document.getElementById('pvru').onclick = function() { runPreview({undo_rename: true}); };
     if (preview) drawPreview();
   }
@@ -901,6 +917,54 @@ h2{font-size:15px;margin:22px 0 8px}
   function chg(a, b) { return a === b ? esc(a == null ? '-' : a) : '<span class="del">' + esc(a == null ? '-' : a) + '</span> &rarr; <span class="add">' + esc(b == null ? '-' : b) + '</span>'; }
   function drawPreview() {
     var box = document.getElementById('pvbox'); if (!box) return;
+    if (preview.kind === 'reverse') {
+      var rh = '<div class="note">Read from OMNIA. Nothing has been created or changed yet.</div>';
+      var nOk = preview.items.filter(function(it) { return it.ok; }).length;
+      if (preview.items.length) {
+        rh += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name</th><th>Forward</th><th>Reverse route (OMNIA\'s calculation)</th><th>New path would be</th><th>Result</th></tr></thead><tbody>';
+        preview.items.forEach(function(it) {
+          var c = it.copy || {}, full = c.speed_min && c.speed_max && c.start && c.end;
+          var will = it.ok ? '<b>' + esc(it.new_name) + '</b><br>' + (full && preview.can_set ? 'speed ' + esc(c.speed_min) + '-' + esc(c.speed_max) + ', start ' + nodeShort(c.end) + ', end ' + nodeShort(c.start) + ' (swapped)'
+                                                                   : '<span class="note">no speeds or nodes to copy: set them with Bulk edit afterwards</span>') : '-';
+          rh += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td>' + it.forward.arcs + ' arcs, ' + it.forward.length + ' m</td><td>'
+            + (it.reverse.arcs ? it.reverse.arcs + ' arcs, ' + it.reverse.length + ' m' + (it.timing_points.length ? '<br><span class="note">from arc ' + it.timing_points.join(' to arc ') + '</span>' : '') : '-')
+            + '</td><td>' + will + '</td><td>'
+            + (it.ok ? '<span class="add">Reverse found and checked</span>' : '<span class="del">' + it.problems.map(esc).join('; ') + '</span>') + '</td></tr>';
+        });
+        rh += '</tbody></table>';
+      }
+      if (preview.refused.length) rh += '<div class="msg err"><b>' + preview.refused.length + ' path(s) could not be checked:</b><br>' + preview.refused.map(function(r) { return esc(r.id) + ': ' + esc(r.reason); }).join('<br>') + '</div>';
+      if (nOk && preview.token && preview.allowed) {
+        rh += '<div class="row"><b>' + nOk + ' reverse path(s) will be CREATED in OMNIA.</b> Type YES: <input id="ryes" size="5" autocomplete="off"> <button class="danger" id="rcreate" disabled>Create in OMNIA</button></div>';
+      } else if (nOk) {
+        rh += '<div class="note">Creating paths is switched off on this PC, so this is a preview only.</div>';
+      }
+      rh += '<div id="res"></div>';
+      box.innerHTML = rh;
+      var ry = document.getElementById('ryes'), rc = document.getElementById('rcreate');
+      if (rc) {
+        ry.oninput = function() { rc.disabled = ry.value.trim() !== 'YES'; };
+        rc.onclick = function() {
+          rc.disabled = true; ry.disabled = true;
+          document.getElementById('res').innerHTML = '<div class="note">Creating in OMNIA one path at a time...</div>';
+          post('/api/reverse/apply', {token: preview.token, confirm: 'YES'}).then(function(r) {
+            var res = document.getElementById('res');
+            if (r.__status !== 200) { res.innerHTML = '<div class="msg err">' + esc(r.error || 'failed') + '</div>'; return; }
+            var lines = r.results.map(function(x) {
+              return esc(x.forward_id) + ' &rarr; ' + (x.new_id ? '<b>new path ' + esc(x.new_id) + '</b> ' + esc(x.name) : 'not created')
+                + (x.built ? (x.arcs_match ? ', arcs checked' : ', <span class="del">arcs differ</span>') : '')
+                + (x.speeds_nodes_set ? ', speeds and nodes set' : x.note ? ', ' + esc(x.note) : '') + (x.error ? ' <span class="del">' + esc(x.error) + '</span>' : '');
+            });
+            var made = r.results.filter(function(x) { return x.built; }).length;
+            res.innerHTML = '<div class="msg' + (r.error ? ' err' : '') + '"><b>' + made + ' of ' + nOk + ' reverse path(s) created.</b> ' + esc(r.error || '') + '<br>' + lines.join('<br>')
+              + '<br>Logged in results/omnia_create_log.csv. A wrong one can be removed with Delete selected paths. <button id="rl">Reload with the new data</button></div>';
+            document.getElementById('rl').onclick = function() { location.reload(); };
+            preview = null;
+          }).catch(function(e) { document.getElementById('res').innerHTML = '<div class="msg err">Could not create: ' + esc(e) + '</div>'; });
+        };
+      }
+      return;
+    }
     var h = '<div class="note">Read from OMNIA at ' + esc(localTime(preview.fetched_at)) + '. Nothing has been changed yet.</div>';
     var isDel = preview.kind === 'delete';
     if (preview.kind === 'rename' && preview.items.length) {
@@ -1913,6 +1977,122 @@ class Handler(BaseHTTPRequestHandler):
         feed, sensors = self.server.wiring_inputs()
         return bt_wiring.usable_suggestions(bt_wiring.analyse(snap, feed, sensors)["paths"])
 
+    def _reverse_plan(self):
+        """Preview of the reverse of the selected paths. Only READS OMNIA (arcs of the path, OMNIA's own route calculation)."""
+        import omnia_fetch
+        import omnia_reverse
+        srv = self.server
+        try:
+            body = self._body()
+            ids = [str(i).strip() for i in dict.fromkeys(body.get("ids") or []) if str(i).strip()]
+            if not ids:
+                raise ValueError("No paths selected.")
+            if len(ids) > REVERSE_MAX:
+                raise ValueError("Preview at most %d paths at a time (you selected %d)." % (REVERSE_MAX, len(ids)))
+            urls = omnia_reverse.derive_urls(srv.omnia)
+            if not all(urls):
+                return self._send(400, {"error": "The OMNIA addresses for this are not set on this PC (CONTROL_ROOM_OMNIA_ARCS_URL, _CALC_URL and _NEAREST_URL in .env)."})
+            post, get = srv.omnia_post, srv.omnia_get
+            if post is None or get is None:
+                import httpx
+                post, get = post or httpx.post, get or httpx.get
+            snap = omnia_fetch.load_snapshot(srv.snapshot_file) or {"paths": []}
+            by_id = {str(p["id"]): p for p in snap["paths"]}
+            try:
+                feed = srv.wiring_inputs()[0] or {}
+            except Exception:
+                feed = {}
+            items, refused = [], []
+            for pid in ids:
+                coords = (feed.get(pid) or {}).get("coords") or []
+                fwd = by_id.get(pid) or {"id": pid}
+                try:
+                    it = omnia_reverse.plan_reverse(pid, fwd.get("name") or "", urls, post, get,
+                                                    (coords[0], coords[-1]) if len(coords) >= 2 else None)
+                except ValueError as exc:
+                    refused.append({"id": pid, "reason": str(exc)})
+                    continue
+                it["new_name"] = omnia_reverse.reverse_name(fwd.get("name"), pid)
+                it["copy"] = {k: fwd.get(k) for k in ("speed_min", "speed_max", "start", "end")}
+                dup = omnia_reverse.duplicate_of(fwd, snap["paths"], it["new_name"]) \
+                    or omnia_reverse.duplicate_by_route(pid, (coords[0], coords[-1]) if len(coords) >= 2 else None, feed)
+                if dup:
+                    it["ok"] = False
+                    it["problems"] = ["a reverse seems to exist already: " + dup] + it["problems"]
+                items.append(it)
+            create_urls = omnia_reverse.derive_create_urls(srv.omnia)
+            allowed = bool(srv.allow_edit and all(create_urls))
+            ok_items = [it for it in items if it["ok"]]
+            token = None
+            if ok_items:
+                token = secrets.token_hex(8)
+                srv.edit_tokens = {token: ("reverse", ok_items)}       # only the newest preview can be applied
+            return self._send(200, {"kind": "reverse", "items": items, "refused": refused, "token": token, "allowed": allowed,
+                                    "can_set": bool(srv.omnia.get("edit"))})
+        except (ValueError, TypeError, AttributeError) as exc:
+            return self._send(400, {"error": str(exc)})
+        except Exception as exc:
+            return self._send(500, {"error": "could not complete: " + type(exc).__name__})
+
+    def _reverse_apply(self):
+        """Create the previewed reverse paths in OMNIA. WRITES: needs CONTROL_ROOM_ALLOW_EDIT, the preview's token and a typed YES."""
+        import omnia_fetch
+        import omnia_reverse
+        import time as _time
+        srv = self.server
+        try:
+            body = self._body()
+            urls = omnia_reverse.derive_urls(srv.omnia)
+            newid_url, build_url = omnia_reverse.derive_create_urls(srv.omnia)
+            if not (srv.allow_edit and newid_url and build_url and urls[0]):
+                return self._send(403, {"error": "Creating paths is switched off on this PC (CONTROL_ROOM_ALLOW_EDIT=1 and the OMNIA addresses in .env)."})
+            if body.get("confirm") != "YES":
+                return self._send(400, {"error": "Type YES to confirm."})
+            held = srv.edit_tokens.get(body.get("token"))
+            if not held or held[0] != "reverse":
+                return self._send(400, {"error": "Preview the reverse first (the preview can be applied once)."})
+            items = srv.edit_tokens.pop(body.get("token"))[1]
+            post, get = srv.omnia_post, srv.omnia_get
+            if post is None or get is None:
+                import httpx
+                post, get = post or httpx.post, get or httpx.get
+            fetch = srv.fetch_omnia or omnia_fetch.fetch_snapshot
+            snap = fetch(srv.omnia)                                  # the live list: new ids are checked against it
+            by_id = {str(p["id"]): p for p in snap["paths"]}
+            results, error = [], None
+            for i, it in enumerate(items):
+                fwd = by_id.get(str(it["id"]))
+                if fwd is None:
+                    error = "Path %s is no longer in OMNIA; nothing more was created." % it["id"]
+                    break
+                dup = omnia_reverse.duplicate_of(fwd, snap["paths"], it["new_name"])
+                if dup:
+                    error = "Not created for path %s: a reverse seems to exist already (%s). Nothing more was created." % (it["id"], dup)
+                    break
+                res = omnia_reverse.create_reverse(it, fwd, set(by_id), (newid_url, build_url, urls[0]), srv.omnia.get("edit"),
+                                                   post, get, srv.create_log)
+                results.append(res)
+                if res["new_id"]:
+                    by_id[str(res["new_id"])] = {"id": res["new_id"], "name": res["name"]}
+                if res["error"]:
+                    error = res["error"] + (" Nothing more was created." if i < len(items) - 1 else "")
+                    break
+                if i < len(items) - 1:
+                    _time.sleep(srv.create_delay)
+            try:
+                after = fetch(srv.omnia)
+                omnia_fetch.save_snapshot(after, srv.snapshot_file)
+            except Exception:
+                pass                                               # the paths exist anyway; Fetch from OMNIA shows them later
+            srv.page_cache.clear()
+            return self._send(200, {"kind": "reverse", "results": results, "error": error})
+        except omnia_fetch.OmniaError as exc:
+            return self._send(502, {"error": str(exc)})
+        except (ValueError, TypeError, AttributeError) as exc:
+            return self._send(400, {"error": str(exc)})
+        except Exception as exc:
+            return self._send(500, {"error": "could not complete: " + type(exc).__name__})
+
     def _edit(self, action):
         """Bulk edit of OMNIA paths: 'plan' previews (reads OMNIA live, sends nothing), 'apply' writes."""
         import omnia_edit
@@ -2154,6 +2334,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ("/api/edit/plan", "/api/edit/apply") and self._same_origin():
             return self._edit(self.path.rsplit("/", 1)[1])
+        if self.path == "/api/reverse/plan" and self._same_origin():
+            return self._reverse_plan()
+        if self.path == "/api/reverse/apply" and self._same_origin():
+            return self._reverse_apply()
         if self.path == "/api/restart" and self._same_origin():
             self._send(200, {"restarting": True})
             def go():
@@ -2345,6 +2529,7 @@ DOWNLOADS = Path.home() / "Downloads"
 SNAPSHOT_FILE = ROOT / "results" / "omnia_snapshot.json"
 EDIT_LOG = ROOT / "results" / "omnia_edit_log.csv"
 RENAME_LOG = ROOT / "results" / "omnia_rename_log.csv"
+CREATE_LOG = ROOT / "results" / "omnia_create_log.csv"
 EXPORT_NAMES = ("bt_sensor_suspects", "bt_wiring")   # the only files the page may ask the server to write
 
 
@@ -2504,7 +2689,7 @@ class Server(ThreadingHTTPServer):
 
 def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, delete_log=DELETE_LOG,
                 page_builder=None, paths_provider=None, post=None,
-                sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None,
+                sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None, omnia_get=None, create_log=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path,
                 visit_inputs=None, visits_file=None, choose_open=choose_open_path, visit_start="env", live_builder=None):
     srv = Server(("127.0.0.1", port), Handler)
@@ -2525,9 +2710,12 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.allow_edit = allow_edit_setting() if allow_edit is None else allow_edit
     srv.edit_log = edit_log or EDIT_LOG
     srv.rename_log = rename_log or RENAME_LOG
+    srv.create_log = create_log or CREATE_LOG
+    srv.create_delay = 0.3              # OMNIA struggles with back-to-back calls
     srv.edit_tokens = {}
     srv.omnia_post = omnia_post         # None = httpx.post; tests pass a fake
-    srv.omnia = dict({"nodes": None, "paths": None, "edit": None, "rename": None}, **(omnia_urls_setting() if omnia_urls is None else omnia_urls))
+    srv.omnia_get = omnia_get           # None = httpx.get (the nearest-arcs lookup)
+    srv.omnia = dict({"nodes": None, "paths": None, "edit": None, "rename": None, "arcs": None, "calc": None, "nearest": None, "newid": None, "build": None}, **(omnia_urls_setting() if omnia_urls is None else omnia_urls))
     srv.fetch_omnia = fetch_omnia      # None = the real OMNIA fetch; tests pass a fake
     srv.wiring_inputs = wiring_inputs or (lambda: (srv.paths_provider(), current_sensors()))
     srv.spawn = spawn_detached          # tests pass a fake

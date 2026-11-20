@@ -656,10 +656,10 @@ def test_sensor_endpoint_gets_a_wiring_line_after_a_snapshot(tmp_path):
 
 def test_omnia_addresses_come_only_from_the_environment_or_env_file(tmp_path):
     env_file = tmp_path / ".env"
-    assert cr.omnia_urls_setting(env={}, env_file=env_file) == {"nodes": None, "paths": None, "edit": None, "rename": None}
+    assert cr.omnia_urls_setting(env={}, env_file=env_file) == {"nodes": None, "paths": None, "edit": None, "rename": None, "arcs": None, "calc": None, "nearest": None, "newid": None, "build": None}
     env_file.write_text("CONTROL_ROOM_OMNIA_NODES_URL=http://x.test/a\nCONTROL_ROOM_OMNIA_EDIT_URL=http://x.test/c\n")
     got = cr.omnia_urls_setting(env={"CONTROL_ROOM_OMNIA_PATHS_URL": "http://y.test/b"}, env_file=env_file)
-    assert got == {"nodes": "http://x.test/a", "paths": "http://y.test/b", "edit": "http://x.test/c", "rename": None}
+    assert got == {"nodes": "http://x.test/a", "paths": "http://y.test/b", "edit": "http://x.test/c", "rename": None, "arcs": None, "calc": None, "nearest": None, "newid": None, "build": None}
 
 
 def test_refresh_runs_the_monitor_then_reads_omnia_and_reports_progress(tmp_path):

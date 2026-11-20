@@ -29,5 +29,6 @@ reports/omnia_paths_speeds.csv
 results/omnia_edit_log.csv
 results/history.db.bak-*
 results/omnia_rename_log.csv
+results/omnia_create_log.csv
 reports/swarco_meeting_questions.md
 reports/swarco_meeting_questions.docx

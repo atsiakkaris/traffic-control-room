@@ -305,10 +305,43 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
     return out
 
 
+PAIR_TOLERANCE_M = 30      # a reverse starts within this of the path's end and ends within this of its start
+
+
+def reverse_pairs(omnia_paths, feed_paths, tolerance_m=PAIR_TOLERANCE_M):
+    """{path id: id of its reverse, or None} for every OMNIA path. A reverse runs between the same two nodes the other way,
+    or is drawn from this path's end back to its start (both ends within `tolerance_m`); the drawn test also catches
+    reverses that have no nodes yet."""
+    by_nodes = defaultdict(list)
+    for p in omnia_paths:
+        if p.get("start") and p.get("end"):
+            by_nodes[(p["start"], p["end"])].append(str(p["id"]))
+    ends = {}
+    for pid, f in (feed_paths or {}).items():
+        c = (f or {}).get("coords") or []
+        if len(c) >= 2:
+            ends[str(pid)] = (c[0], c[-1])
+    out = {}
+    for p in omnia_paths:
+        pid = str(p["id"])
+        pair = None
+        if p.get("start") and p.get("end"):
+            pair = next((q for q in by_nodes.get((p["end"], p["start"]), []) if q != pid), None)
+        if pair is None and pid in ends:
+            s, e = ends[pid]
+            pair = next((q for q, (qs, qe) in ends.items() if q != pid and _dist(e, qs) <= tolerance_m and _dist(s, qe) <= tolerance_m), None)
+        out[pid] = pair
+    return out
+
+
 def analyse(snapshot, feed_paths, sensors):
     """Everything in one go: {nodes, paths, sensors_without_node, meta}."""
     matches = match_nodes(snapshot["nodes"], sensors)
     paths = check_paths(snapshot["paths"], matches, feed_paths, sensors)
+    pairs = reverse_pairs(snapshot["paths"], feed_paths)
+    for pid, p in paths.items():
+        p["in_omnia"] = str(pid) in pairs
+        p["pair"] = pairs.get(str(pid))
     by_code = defaultdict(int)
     for p in paths.values():
         for f in p["findings"]:
@@ -322,6 +355,7 @@ def analyse(snapshot, feed_paths, sensors):
             "meta": {"fetched_at": snapshot.get("fetched_at"), "paths": len(paths),
                      "paths_with_findings": sum(1 for p in paths.values() if p["findings"]),
                      "paths_ok": sum(1 for p in paths.values() if not p["findings"]),
+                     "no_pair": sum(1 for p in paths.values() if p["in_omnia"] and not p["pair"]),
                      "by_code": dict(by_code), "node_status": dict(by_status)}}
 
 
