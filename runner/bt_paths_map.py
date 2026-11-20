@@ -716,7 +716,27 @@ function _pushFlags(now) {
 })();
 
 /* -- Jumps from the sensor tabs: the app shell calls these (no reload) -- */
-window.crFocusPath = function(id) { if (FEATURE_BY_ID[id]) stepSelect(id); };
+var _crBack = null;
+window.crFocusPath = function(id, back) {
+  if (!FEATURE_BY_ID[id]) return;
+  stepSelect(id);
+  if (_crBack) { map.closePopup(_crBack); _crBack = null; }
+  if (!back || !window.parent || !window.parent.crShow) return;
+  /* a "Back to Wiring" bubble on the path itself, so the way back is right where you are looking */
+  var obj = pathObjs.filter(function(p) { return p.feature.id === id; })[0];
+  if (!obj) return;
+  var pts = obj.polyline.getLatLngs();
+  while (pts.length && Array.isArray(pts[0])) pts = [].concat.apply([], pts);
+  if (!pts.length) return;
+  var a = document.createElement('a');
+  a.textContent = String.fromCharCode(8592) + ' Back to ' + back.label;
+  a.title = 'Go back to where you were: the list keeps its filter, sort, scroll and ticked paths';
+  a.style.cssText = 'cursor:pointer;font-weight:bold;color:#2e86c1;white-space:nowrap';
+  a.onclick = function() { map.closePopup(_crBack); _crBack = null; window.parent.crShow(back.tab); };
+  _crBack = L.popup({autoClose: false, closeOnClick: false, autoPan: false, offset: [0, -4]})
+    .setLatLng(pts[Math.floor(pts.length / 2)]).setContent(a);
+  map.addLayer(_crBack);
+};
 window.crFocusLoc = function(lat, lon) { map.setView([lat, lon], 17); };
 (function() {
   var p = new URLSearchParams(location.search).get('path');

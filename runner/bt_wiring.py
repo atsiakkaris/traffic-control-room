@@ -305,43 +305,90 @@ def check_paths(omnia_paths, matches, feed_paths, sensors):
     return out
 
 
-PAIR_TOLERANCE_M = 30      # a reverse starts within this of the path's end and ends within this of its start
+PAIR_TOLERANCE_M = 30      # drawn route alone: a reverse starts within this of the path's end and ends within this of its start
+HINT_TOLERANCE_M = 150     # with swapped nodes or names as well: both drawn ends within this (each direction of a road usually
+                           # starts and ends on its own side of a junction, 30-150 m apart on the real data)
+_PAIR_NAME_RE = re.compile(r"^\s*(\S+)\s*->\s*(\S+)\s*$")
 
 
-def reverse_pairs(omnia_paths, feed_paths, tolerance_m=PAIR_TOLERANCE_M):
-    """{path id: id of its reverse, or None} for every OMNIA path. A reverse runs between the same two nodes the other way,
-    or is drawn from this path's end back to its start (both ends within `tolerance_m`); the drawn test also catches
-    reverses that have no nodes yet."""
-    by_nodes = defaultdict(list)
-    for p in omnia_paths:
-        if p.get("start") and p.get("end"):
-            by_nodes[(p["start"], p["end"])].append(str(p["id"]))
+def _name_key(name):
+    m = _PAIR_NAME_RE.match(name or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def reverse_status(omnia_paths, feed_paths, tolerance_m=PAIR_TOLERANCE_M):
+    """{path id: {"pair": id or None, "check": {id, why, gap} or None}} for every OMNIA path.
+
+    The DRAWN ROUTE decides, in two tiers:
+      * pair: another path is drawn from this path's end back to its start, both ends within `tolerance_m` (30 m); or its nodes
+        or its A->B name are swapped AND both drawn ends are within HINT_TOLERANCE_M (150 m);
+      * check: nodes or names are swapped, but a drawn end is further off, or one of the two is not in the API feed. Nodes and
+        names can be wrong, so they never count on their own.
+    `gap` is (metres between this end and its start, metres between this start and its end), or None without both drawn routes.
+    """
     ends = {}
     for pid, f in (feed_paths or {}).items():
         c = (f or {}).get("coords") or []
         if len(c) >= 2:
             ends[str(pid)] = (c[0], c[-1])
+    by_nodes, by_name = defaultdict(list), defaultdict(list)
+    for p in omnia_paths:
+        if p.get("start") and p.get("end"):
+            by_nodes[(p["start"], p["end"])].append(str(p["id"]))
+        key = _name_key(p.get("name"))
+        if key:
+            by_name[key].append(str(p["id"]))
     out = {}
     for p in omnia_paths:
         pid = str(p["id"])
         pair = None
-        if p.get("start") and p.get("end"):
-            pair = next((q for q in by_nodes.get((p["end"], p["start"]), []) if q != pid), None)
-        if pair is None and pid in ends:
+        if pid in ends:
             s, e = ends[pid]
             pair = next((q for q, (qs, qe) in ends.items() if q != pid and _dist(e, qs) <= tolerance_m and _dist(s, qe) <= tolerance_m), None)
-        out[pid] = pair
+        check = None
+        if pair is None:
+            why = defaultdict(list)
+            if p.get("start") and p.get("end"):
+                for q in by_nodes.get((p["end"], p["start"]), []):
+                    why[q].append("nodes swapped")
+            key = _name_key(p.get("name"))
+            if key:
+                for q in by_name.get((key[1], key[0]), []):
+                    why[q].append("names swapped")
+            why.pop(pid, None)
+            cands = []
+            for q in why:
+                gap = (round(_dist(ends[pid][1], ends[q][0])), round(_dist(ends[pid][0], ends[q][1]))) if pid in ends and q in ends else None
+                cands.append({"id": q, "why": " and ".join(why[q]), "gap": gap})
+            close = sorted((c for c in cands if c["gap"] and max(c["gap"]) <= HINT_TOLERANCE_M), key=lambda c: max(c["gap"]))
+            if close:
+                pair = close[0]["id"]
+            elif cands:
+                check = sorted(cands, key=lambda c: max(c["gap"]) if c["gap"] else 10 ** 9)[0]
+        out[pid] = {"pair": pair, "check": check}
     return out
+
+
+def check_text(check):
+    """'path 120: names swapped, but its drawn ends are 0 m / 69 m from this path's (not lined up)' and the like."""
+    if not check:
+        return ""
+    if check["gap"] is None:
+        return "possible reverse: path %s (%s), but one of the two is not in the API feed, so the routes cannot be compared" % (check["id"], check["why"])
+    return "possible reverse: path %s (%s), but the drawn routes do not line up (ends %d m and %d m apart, more than %d m)" % (
+        (check["id"], check["why"]) + tuple(check["gap"]) + (HINT_TOLERANCE_M,))
 
 
 def analyse(snapshot, feed_paths, sensors):
     """Everything in one go: {nodes, paths, sensors_without_node, meta}."""
     matches = match_nodes(snapshot["nodes"], sensors)
     paths = check_paths(snapshot["paths"], matches, feed_paths, sensors)
-    pairs = reverse_pairs(snapshot["paths"], feed_paths)
+    status = reverse_status(snapshot["paths"], feed_paths)
     for pid, p in paths.items():
-        p["in_omnia"] = str(pid) in pairs
-        p["pair"] = pairs.get(str(pid))
+        st = status.get(str(pid)) or {}
+        p["in_omnia"] = str(pid) in status
+        p["pair"] = st.get("pair")
+        p["pair_check"] = check_text(st.get("check")) or None
     by_code = defaultdict(int)
     for p in paths.values():
         for f in p["findings"]:
@@ -355,7 +402,8 @@ def analyse(snapshot, feed_paths, sensors):
             "meta": {"fetched_at": snapshot.get("fetched_at"), "paths": len(paths),
                      "paths_with_findings": sum(1 for p in paths.values() if p["findings"]),
                      "paths_ok": sum(1 for p in paths.values() if not p["findings"]),
-                     "no_pair": sum(1 for p in paths.values() if p["in_omnia"] and not p["pair"]),
+                     "no_pair": sum(1 for p in paths.values() if p["in_omnia"] and not p["pair"] and not p["pair_check"]),
+                     "pair_check": sum(1 for p in paths.values() if p["in_omnia"] and p["pair_check"]),
                      "by_code": dict(by_code), "node_status": dict(by_status)}}
 
 

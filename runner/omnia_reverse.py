@@ -218,33 +218,6 @@ def reverse_name(name, path_id):
     return (name + " reverse")[:NAME_MAX] if name else "Reverse of %s" % path_id
 
 
-def duplicate_of(forward, paths, new_name):
-    """An existing path that already looks like this reverse: same two nodes swapped, or already carrying the reverse name."""
-    fs, fe = forward.get("start"), forward.get("end")
-    for p in paths:
-        if str(p["id"]) == str(forward["id"]):
-            continue
-        if fs and fe and p.get("start") == fe and p.get("end") == fs:
-            return "path %s already runs between the same two nodes the other way" % p["id"]
-        if new_name and _NAME_RE.match(new_name) and (p.get("name") or "").strip() == new_name:
-            return "path %s is already called %s" % (p["id"], new_name)
-    return None
-
-
-def duplicate_by_route(path_id, ends, feed, tolerance_m=END_TOLERANCE_M):
-    """An existing drawn path that starts where this one ends and ends where it starts (catches reverses without nodes)."""
-    if not ends or not ends[0] or not ends[1]:
-        return None
-    (s_lat, s_lon), (e_lat, e_lon) = ends
-    for pid, p in (feed or {}).items():
-        c = (p or {}).get("coords") or []
-        if str(pid) == str(path_id) or len(c) < 2:
-            continue
-        if metres(e_lat, e_lon, c[0][0], c[0][1]) <= tolerance_m and metres(s_lat, s_lon, c[-1][0], c[-1][1]) <= tolerance_m:
-            return "path %s is already drawn the other way between the same two ends" % pid
-    return None
-
-
 def parse_new_id(resp):
     """The id in the new-id call's answer (a bare number, a JSON number, or {data|id|pathId: n}); ValueError if there is none."""
     if resp.status_code != 200:

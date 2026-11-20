@@ -152,8 +152,21 @@ def test_the_control_room_endpoint_previews_only_and_reports_per_path(tmp_path):
         assert {u for u, _ in log} <= set(URLS)                                              # nothing else was called
         assert call({"ids": []})[0] == 400
         assert call({"ids": [str(i) for i in range(cr.REVERSE_MAX + 1)]})[0] == 400
+        # the page previews one path per call and adds them up, so it can show "path 2 of 3"; the last token holds them all
+        _c, a = call({"ids": ["683"]})
+        _c, b = call({"ids": ["684"], "append_to": a["token"]})
+        _c, c = call({"ids": ["683"], "append_to": b["token"]})                    # the same path again is not counted twice
+        assert a["token"] not in srv.edit_tokens and [it["id"] for it in srv.edit_tokens[c["token"]][1]] == ["684", "683"]
+        _c, fresh = call({"ids": ["685"], "append_to": "stale-or-made-up"})          # an unknown token starts a new batch
+        assert [it["id"] for it in srv.edit_tokens[fresh["token"]][1]] == ["685"]
     finally:
         srv.shutdown()
+
+
+def test_the_page_previews_path_by_path_with_a_progress_line():
+    src = Path(cr.__file__).read_text(encoding="utf-8")
+    assert "append_to: acc.token" in src and "Checking path ' + (p.done + 1) + ' of ' + p.total" in src and "setInterval" in src
+    assert "if (preview !== acc) return;" in src                                   # Cancel stops the loop
 
 
 # ── creating (writes, so everything below runs against a pretend OMNIA) ─────
@@ -210,21 +223,19 @@ def _item(world):
 def test_reverse_name_duplicates_and_new_id_answers():
     assert orv.reverse_name("7052->7053", "1") == "7053->7052" and orv.reverse_name(" 1001 -> 1002 ", "1") == "1002->1001"
     assert orv.reverse_name("New Path", "9") == "New Path reverse" and orv.reverse_name("", "9") == "Reverse of 9"
-    fwd = {"id": 1, "start": 5, "end": 6}
-    assert "same two nodes" in orv.duplicate_of(fwd, [fwd, {"id": 2, "start": 6, "end": 5, "name": "x"}], "B->A")
-    assert "already called" in orv.duplicate_of(fwd, [{"id": 3, "name": "B->A"}], "B->A")
-    assert orv.duplicate_of(fwd, [{"id": 4, "start": 5, "end": 6, "name": "A->B"}], "B->A") is None      # the same direction is not a reverse
     assert orv.parse_new_id(Text("701")) == 701 and orv.parse_new_id(Text('{"data": 702}')) == 702 and orv.parse_new_id(Text('"703"')) == 703
     for bad in (Text("oops"), Text("0"), Text("5", 500)):
         with pytest.raises(ValueError):
             orv.parse_new_id(bad)
 
 
-def test_a_reverse_without_nodes_is_still_found_by_its_drawn_route():
-    back = {"coords": [(LAT, lon(201)), (LAT, lon(100)), (LAT, lon(2))]}          # drawn the other way, ends within a few metres
-    assert "already drawn the other way" in orv.duplicate_by_route("1", ENDS, {"1": {"coords": list(ENDS)}, "690": back})
-    same_way = {"coords": [(LAT, lon(0)), (LAT, lon(200))]}
-    assert orv.duplicate_by_route("1", ENDS, {"2": same_way}) is None and orv.duplicate_by_route("1", None, {"690": back}) is None
+def test_create_refuses_only_on_a_drawn_reverse_or_one_that_cannot_be_compared():
+    assert cr.existing_reverse({"pair": "690", "check": None})[0].startswith("path 690 is already drawn the other way")
+    block, warn = cr.existing_reverse({"pair": None, "check": {"id": "692", "why": "nodes swapped", "gap": None}})
+    assert "may already be its reverse" in block and "Refresh" in block and warn is None        # e.g. a reverse made a moment ago
+    block, warn = cr.existing_reverse({"pair": None, "check": {"id": "120", "why": "names swapped", "gap": (0, 69)}})
+    assert block is None and "not treated as the reverse" in warn and "same name as path 120" in warn
+    assert cr.existing_reverse(None) == (None, None)
 
 
 def test_create_gets_an_id_builds_from_the_end_arcs_checks_the_arcs_then_sets_swapped_nodes(tmp_path):
@@ -297,7 +308,7 @@ def test_the_control_room_creates_only_after_a_preview_and_yes_and_only_once(tmp
         assert code == 200 and out["error"] is None and out["results"][0]["new_id"] == 700 and out["results"][0]["speeds_nodes_set"]
         assert call("/api/reverse/apply", {"token": plan["token"], "confirm": "YES"})[0] == 400  # a preview works once
         code, again = call("/api/reverse/plan", {"ids": ["1"]})                                   # now the reverse exists: refused
-        assert not again["items"][0]["ok"] and "exist already" in again["items"][0]["problems"][0] and again["token"] is None
+        assert not again["items"][0]["ok"] and "may already be its reverse" in again["items"][0]["problems"][0] and again["token"] is None
     finally:
         srv.shutdown()
 

@@ -298,13 +298,26 @@ def test_a_node_on_the_wrong_sensor_is_replaced_by_the_node_nearest_the_drawn_en
     assert bw.usable_suggestions(r["paths"]) == {"10": {"end": 3, "end_replace": True}}
 
 
-def test_reverse_pairs_by_swapped_nodes_or_by_the_drawn_route():
-    omnia = [{"id": 1, "start": 5, "end": 6}, {"id": 2, "start": 6, "end": 5},            # a node pair
-             {"id": 3, "start": None, "end": None}, {"id": 4, "start": None, "end": None},  # no nodes: found by the drawn route
-             {"id": 7, "start": 8, "end": 9}]                                              # alone (a one-way street, say)
-    feed = {"3": {"coords": [(35.0, 33.0), (35.0, 33.01)]}, "4": {"coords": [(35.0, 33.0101), (35.0001, 33.0001)]},
-            "7": {"coords": [(35.1, 33.1), (35.1, 33.11)]}}
-    pairs = bw.reverse_pairs(omnia, feed)
-    assert pairs == {"1": "2", "2": "1", "3": "4", "4": "3", "7": None}
-    far = {"3": feed["3"], "4": {"coords": [(35.0, 33.0101), (35.01, 33.0)]}}                # the other end is 1 km off: not a pair
-    assert bw.reverse_pairs(omnia[2:4], far) == {"3": None, "4": None}
+def test_only_the_drawn_route_makes_a_pair_nodes_and_names_only_point_at_a_candidate():
+    omnia = [{"id": 1, "name": "A->B", "start": 5, "end": 6}, {"id": 2, "name": "x", "start": 6, "end": 5},     # nodes swapped
+             {"id": 3, "name": "1016->1006"}, {"id": 4, "name": "1006->1016"},                                  # names swapped
+             {"id": 7, "name": "C->D"}, {"id": 8, "name": "drawn back"},                                         # drawn back, no nodes
+             {"id": 9, "name": "alone"}]
+    there, back = [(35.0, 33.0), (35.0, 33.01)], [(35.0, 33.0101), (35.0001, 33.0001)]
+    feed = {"1": {"coords": there}, "2": {"coords": [(36.0, 33.0), (36.0, 33.01)]},       # 2 is drawn somewhere else entirely
+            "3": {"coords": there}, "4": {"coords": [(35.0, 33.0127), (35.0, 33.0)]},     # 4 ends 246 m off at one end
+            "7": {"coords": [(34.0, 33.0), (34.0, 33.01)]}, "8": {"coords": [(34.0, 33.0101), (34.0001, 33.0001)]},
+            "9": {"coords": [(34.5, 33.0), (34.5, 33.01)]}}
+    st = bw.reverse_status(omnia, feed)
+    assert st["7"] == {"pair": "8", "check": None} and st["8"]["pair"] == "7"                   # the drawn route decides
+    assert st["1"]["pair"] is None and st["1"]["check"]["id"] == "2" and st["1"]["check"]["why"] == "nodes swapped"
+    assert st["1"]["check"]["gap"][0] > 100000                                                 # swapped nodes, but drawn 111 km away
+    assert st["3"]["check"]["why"] == "names swapped" and st["3"]["check"]["gap"] == (246, 0)
+    near = dict(feed, **{"4": {"coords": [(35.0, 33.0107), (35.0, 33.0)]}})                    # 64 m off: names + route agree
+    assert bw.reverse_status(omnia, near)["3"] == {"pair": "4", "check": None}
+    alone = dict(near, **{"4": {"coords": [(35.0, 33.0107), (35.0, 33.0)]}})
+    assert bw.reverse_status([{"id": 3, "name": "a"}, {"id": 4, "name": "b"}], alone)["3"]["pair"] is None   # 64 m without a hint: no
+    assert st["9"] == {"pair": None, "check": None}
+    no_feed = bw.reverse_status(omnia[:2], {})
+    assert no_feed["1"]["check"]["gap"] is None and "not in the API feed" in bw.check_text(no_feed["1"]["check"])
+    assert "246 m and 0 m apart, more than 150 m" in bw.check_text(st["3"]["check"]) and bw.check_text(None) == ""

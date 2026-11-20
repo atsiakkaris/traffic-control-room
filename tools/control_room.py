@@ -92,7 +92,29 @@ def allow_edit_setting(env=None, env_file=ROOT / ".env"):
     return (_setting("CONTROL_ROOM_ALLOW_EDIT", env, env_file) or "").lower() in ("1", "true", "yes")
 
 
-REVERSE_MAX = 10        # paths per reverse preview (two OMNIA calls each)
+REVERSE_MAX = 10        # paths per reverse preview call (the page sends one at a time)
+REVERSE_TOTAL = 50      # paths per reverse batch: previewed one by one with a progress line, then created together
+
+
+def existing_reverse(status):
+    """(reason to refuse, warning) for creating a reverse, from bt_wiring.reverse_status of the forward path.
+
+    Only the drawn route proves a reverse exists, so that refuses. Swapped nodes or names alone are a warning when the drawn
+    routes show they do not line up, and a refusal when they cannot be compared (one of the two not in the API feed yet, e.g. a
+    reverse created a moment ago), because then nothing rules them out.
+    """
+    import bt_wiring
+    status = status or {}
+    if status.get("pair"):
+        return "path %s is already drawn the other way between the same two ends" % status["pair"], None
+    chk = status.get("check")
+    if not chk:
+        return None, None
+    if chk["gap"] is None:
+        return ("path %s may already be its reverse (%s), but one of the two is not in the API feed, so the routes cannot be "
+                "compared; press Refresh once OMNIA publishes it" % (chk["id"], chk["why"])), None
+    same_name = " The new path would get the same name as path %s." % chk["id"] if "names swapped" in chk["why"] else ""
+    return None, bt_wiring.check_text(chk) + ", so it is not treated as the reverse." + same_name
 
 
 def omnia_urls_setting(env=None, env_file=ROOT / ".env"):
@@ -614,6 +636,7 @@ td{padding:7px 9px;border-top:1px solid var(--line);vertical-align:top}
 .f{display:block;margin:0 0 3px;padding-left:8px;border-left:4px solid var(--low)}
 .f.high{border-color:var(--high)}.f.medium{border-color:var(--medium)}
 a.go{color:#2e86c1;cursor:pointer}
+.pin{font-size:16px;cursor:pointer;text-decoration:none}
 h2{font-size:15px;margin:22px 0 8px}
 .msg{padding:10px 12px;border-radius:6px;background:var(--card);border:1px solid var(--line);margin:0 0 12px}
 .err{border-color:var(--high);color:var(--high)}
@@ -733,11 +756,12 @@ h2{font-size:15px;margin:22px 0 8px}
     return D.paths.filter(function(p) {
       if (code === '__all') { /* every path */ }
       else if (code === '__selected') { if (!selView || !selView[p.id]) return false; }     // search and sort still apply
-      else if (code === '__nopair') { if (!p.in_omnia || p.pair) return false; }
+      else if (code === '__nopair') { if (!p.in_omnia || p.pair || p.pair_check) return false; }
+      else if (code === '__paircheck') { if (!p.in_omnia || !p.pair_check) return false; }
       else if (code === '') { if (!p.findings.length) return false; }
       else if (!p.findings.some(function(f) { return f.code === code; })) return false;
       var hay = (p.id + ' ' + p.name + ' ' + (p.start_name || '') + ' ' + (p.end_name || '') + ' node ' + (p.start_node || '') + ' node ' + (p.end_node || '') + ' ' +
-                 (CODES[p.start_node] || '') + ' ' + (CODES[p.end_node] || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ')).toLowerCase();
+                 (CODES[p.start_node] || '') + ' ' + (CODES[p.end_node] || '') + ' ' + p.findings.map(function(f) { return f.text; }).join(' ') + ' ' + (p.pair_check || '')).toLowerCase();
       return !q || hay.indexOf(q) >= 0;
     });
   }
@@ -760,8 +784,11 @@ h2{font-size:15px;margin:22px 0 8px}
       cs.appendChild(chip(D.labels[c] ? D.labels[c][1] : c, c, D.meta.by_code[c]));
     });
     var np = chip('No reverse pair', '__nopair', D.meta.no_pair || 0);
-    np.title = 'Paths with no path running the other way: none between the same two nodes reversed, and none drawn from this path\'s end back to its start (within 30 m). One-way streets have no reverse by design, so they are listed too.';
+    np.title = 'No path is drawn from this path\'s end back to its start, and no path has its nodes or its A->B name swapped either. One-way streets have no reverse by design, so they are listed too.';
     cs.appendChild(np);
+    var pc = chip('Reverse pair to check by hand', '__paircheck', D.meta.pair_check || 0);
+    pc.title = 'Another path has the nodes or the A->B name swapped, but a drawn end is more than 150 m off (or one of the two is not in the API feed). A pair needs the drawn routes to agree: ends within 30 m, or within 150 m when the nodes or names are swapped too.';
+    cs.appendChild(pc);
     cs.appendChild(chip('All paths', '__all', D.paths.length));
   }
   function draw() {
@@ -776,7 +803,8 @@ h2{font-size:15px;margin:22px 0 8px}
       tr.innerHTML = '<td><input type="checkbox" data-sel="' + esc(p.id) + '"' + (selected[p.id] ? ' checked' : '') + '></td><td><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + nodeHtml(p.start_node, p.start_name) + '</td><td>'
         + nodeHtml(p.end_node, p.end_name) + '</td><td>' + esc(speed) + '</td><td class="fd">'
         + p.findings.map(function(f) { return '<span class="f ' + esc(f.severity) + '">' + esc(f.text) + '</span>'; }).join('')
-        + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '">show on map</a>' : '') + '</td>';
+        + (p.pair_check && (code === '__paircheck' || code === '__all') ? '<span class="f low">' + esc(p.pair_check) + '</span>' : '')
+        + '</td><td>' + (shell ? '<a class="go" data-p="' + esc(p.id) + '" title="Show on map"><span class="pin" title="Show on map">&#128205;</span></a>' : '') + '</td>';
       rows.appendChild(tr);
     });
     if (!rows.children.length) rows.innerHTML = '<tr><td colspan="8" class="note">' + (code === '__selected' && !(selView && Object.keys(selView).length)
@@ -795,7 +823,7 @@ h2{font-size:15px;margin:22px 0 8px}
   };
   document.addEventListener('click', function(e) {
     var a = e.target.closest && e.target.closest('[data-p]');
-    if (a && shell) shell.crShow('paths', {path: a.getAttribute('data-p')});
+    if (a && shell) shell.crShow('paths', {path: a.getAttribute('data-p'), from: 'wiring'});
   });
   // Like a file list: plain click = only this row, shift+click = the range from the last click (replaces the selection),
   // ctrl+click = add or remove this row and keep the rest. The checkbox still toggles its own row on a plain click.
@@ -895,13 +923,26 @@ h2{font-size:15px;margin:22px 0 8px}
     };
     document.getElementById('pvu').onclick = function() { runPreview({undo: true}); };
     document.getElementById('rvp').onclick = function() {
-      var s = document.getElementById('pvs');
-      if (!countSelected()) { s.textContent = 'Select at least one path first.'; return; }
-      s.textContent = 'Asking OMNIA for the arcs of each path (reads only)...';
-      post('/api/reverse/plan', {ids: Object.keys(selected)}).then(function(r) {
-        if (r.error) { s.textContent = r.error; return; }
-        preview = r; drawEdit();
-      }).catch(function(e) { s.textContent = 'Could not preview: ' + e; });
+      var s = document.getElementById('pvs'), ids = Object.keys(selected);
+      if (!ids.length) { s.textContent = 'Select at least one path first.'; return; }
+      if (ids.length > D.reverse_max) { s.textContent = 'Preview at most ' + D.reverse_max + ' paths at a time (you selected ' + ids.length + ').'; return; }
+      var acc = {kind: 'reverse', items: [], refused: [], token: null, allowed: false, can_set: false, running: true, total: ids.length, done: 0, started: Date.now()};
+      preview = acc; drawEdit();
+      var tick = setInterval(function() {                        // the seconds keep moving while OMNIA answers
+        if (preview !== acc || !acc.running) { clearInterval(tick); return; }
+        var el = document.getElementById('rvprog'); if (el) el.innerHTML = rvProgress(acc);
+      }, 1000);
+      (function next(i) {
+        if (preview !== acc) return;                              // Cancel or another preview stopped it
+        if (i >= ids.length) { acc.running = false; drawEdit(); return; }
+        acc.current = ids[i]; drawEdit();
+        post('/api/reverse/plan', {ids: [ids[i]], append_to: acc.token}).then(function(r) {
+          if (preview !== acc) return;
+          if (r.error) acc.refused.push({id: ids[i], reason: r.error});
+          else { acc.items = acc.items.concat(r.items); acc.refused = acc.refused.concat(r.refused); acc.token = r.token; acc.allowed = r.allowed; acc.can_set = r.can_set; }
+          acc.done = i + 1; next(i + 1);
+        }).catch(function(e) { if (preview !== acc) return; acc.refused.push({id: ids[i], reason: 'Could not preview: ' + e}); acc.done = i + 1; next(i + 1); });
+      })(0);
     };
     document.getElementById('pvru').onclick = function() { runPreview({undo_rename: true}); };
     if (preview) drawPreview();
@@ -915,10 +956,16 @@ h2{font-size:15px;margin:22px 0 8px}
   }
   function chgN(a, b) { return a === b ? nodeShort(a) : '<span class="del">' + nodeShort(a) + '</span> &rarr; <span class="add">' + nodeShort(b) + '</span>'; }
   function chg(a, b) { return a === b ? esc(a == null ? '-' : a) : '<span class="del">' + esc(a == null ? '-' : a) + '</span> &rarr; <span class="add">' + esc(b == null ? '-' : b) + '</span>'; }
+  function rvProgress(p) {
+    var secs = Math.round((Date.now() - p.started) / 1000), per = p.done ? secs / p.done : 15, left = Math.max(0, Math.round(per * (p.total - p.done) - (p.done ? 0 : secs)));
+    return '<b>Checking path ' + (p.done + 1) + ' of ' + p.total + '</b> (path ' + esc(p.current) + ')... ' + secs + ' s so far, about '
+      + (left >= 90 ? Math.round(left / 60) + ' min' : left + ' s') + ' left. OMNIA takes about 15 s per path. Results so far are below; Cancel stops it.';
+  }
   function drawPreview() {
     var box = document.getElementById('pvbox'); if (!box) return;
     if (preview.kind === 'reverse') {
       var rh = '<div class="note">Read from OMNIA. Nothing has been created or changed yet.</div>';
+      if (preview.running) rh += '<div class="msg" id="rvprog">' + rvProgress(preview) + '</div>';
       var nOk = preview.items.filter(function(it) { return it.ok; }).length;
       if (preview.items.length) {
         rh += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name</th><th>Forward</th><th>Reverse route (OMNIA\'s calculation)</th><th>New path would be</th><th>Result</th></tr></thead><tbody>';
@@ -929,12 +976,15 @@ h2{font-size:15px;margin:22px 0 8px}
           rh += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td>' + it.forward.arcs + ' arcs, ' + it.forward.length + ' m</td><td>'
             + (it.reverse.arcs ? it.reverse.arcs + ' arcs, ' + it.reverse.length + ' m' + (it.timing_points.length ? '<br><span class="note">from arc ' + it.timing_points.join(' to arc ') + '</span>' : '') : '-')
             + '</td><td>' + will + '</td><td>'
-            + (it.ok ? '<span class="add">Reverse found and checked</span>' : '<span class="del">' + it.problems.map(esc).join('; ') + '</span>') + '</td></tr>';
+            + (it.ok ? '<span class="add">Reverse found and checked</span>' : '<span class="del">' + it.problems.map(esc).join('; ') + '</span>')
+            + ((it.warnings || []).length ? '<br><span class="note">Note: ' + it.warnings.map(esc).join('; ') + '</span>' : '') + '</td></tr>';
         });
         rh += '</tbody></table>';
       }
       if (preview.refused.length) rh += '<div class="msg err"><b>' + preview.refused.length + ' path(s) could not be checked:</b><br>' + preview.refused.map(function(r) { return esc(r.id) + ': ' + esc(r.reason); }).join('<br>') + '</div>';
-      if (nOk && preview.token && preview.allowed) {
+      if (preview.running) {
+        /* the Create button appears when every path has been checked */
+      } else if (nOk && preview.token && preview.allowed) {
         rh += '<div class="row"><b>' + nOk + ' reverse path(s) will be CREATED in OMNIA.</b> Type YES: <input id="ryes" size="5" autocomplete="off"> <button class="danger" id="rcreate" disabled>Create in OMNIA</button></div>';
       } else if (nOk) {
         rh += '<div class="note">Creating paths is switched off on this PC, so this is a preview only.</div>';
@@ -1047,7 +1097,7 @@ def build_wiring_page(result, snapshot, can_fetch, can_edit=False, can_delete=Fa
     """The Wiring tab: configured OMNIA nodes versus the API sensors and the drawn paths."""
     import bt_wiring as bw
     import omnia_edit
-    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "can_edit": bool(can_edit), "can_delete": bool(can_delete), "labels": bw.FINDINGS, "max_batch": omnia_edit.MAX_BATCH, "max_delete": omnia_edit.MAX_DELETE,
+    data = {"has_snapshot": bool(result), "can_fetch": bool(can_fetch), "can_edit": bool(can_edit), "can_delete": bool(can_delete), "labels": bw.FINDINGS, "max_batch": omnia_edit.MAX_BATCH, "max_delete": omnia_edit.MAX_DELETE, "reverse_max": REVERSE_TOTAL,
             "node_names": {n["id"]: n["name"] for n in (snapshot or {}).get("nodes", [])},
             "node_codes": {nid: m["site_code"] for nid, m in (result or {}).get("nodes", {}).items() if m.get("site_code")},
             "sensor_codes": (result or {}).get("sensor_codes", {}),
@@ -1142,8 +1192,13 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #stage{position:absolute;top:38px;left:0;right:0;bottom:0}
 #stage iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;visibility:hidden}
 #stage iframe.on{visibility:visible}
+#back{position:absolute;top:48px;left:50%;transform:translateX(-50%);z-index:10;display:none;background:#2e86c1;color:#fff;
+  border:0;border-radius:999px;padding:7px 16px;font:13px Arial,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.45)}
+#back.on{display:block}
+#back:hover{background:#3498db}
 </style></head><body>
 <div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><a data-t="visits" title="Plan on-site checks of sensors whose position or existence is in doubt">Site visits</a><a data-t="live" title="The Live tab of the dashboard, with each sensor's contract added (only here, never on the published page)">Live</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<button id="back" title="Go back to where you were: the list keeps its filter, sort, scroll and ticked paths"></button>
 <div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe><iframe id="f-visits"></iframe><iframe id="f-live" allow="fullscreen"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
@@ -1157,8 +1212,16 @@ function render() {
   });
 }
 // Called by the pages inside the frames: show a tab, optionally aimed at a path or a spot.
+var backTo = null, NAMES = {wiring: 'Wiring', visits: 'Site visits', live: 'Live', paths: 'Paths'};
+function showBack() {
+  var b = document.getElementById('back');
+  b.className = backTo && backTo !== cur ? 'on' : '';
+  b.innerHTML = backTo ? '&larr; Back to ' + (NAMES[backTo] || backTo) : '';
+}
+document.getElementById('back').onclick = function() { var t = backTo; backTo = null; window.crShow(t); };
 window.crShow = function(t, o) {
   o = o || {};
+  backTo = o.from || (t === backTo ? null : backTo);     // a jump from a page offers the way back; arriving there clears it
   var f = frame(t);
   if (t === 'wiring' || t === 'visits' || t === 'live') {
     if (!f.getAttribute('src')) f.src = '/' + t;
@@ -1167,11 +1230,15 @@ window.crShow = function(t, o) {
     if (q || !f.getAttribute('src')) f.src = '/sensors/' + t + q;
   } else {
     var w = f.contentWindow;
-    if (o.path && w.crFocusPath) w.crFocusPath(o.path);
+    if (o.path && w.crFocusPath) {
+      w.crFocusPath(o.path, o.from ? {tab: o.from, label: NAMES[o.from] || o.from} : null);
+      if (o.from) backTo = null;                    // the way back sits on the path itself, next to what you look at
+    }
     else if (o.lat != null && w.crFocusLoc) w.crFocusLoc(o.lat, o.lon);
   }
   cur = t;
   render();
+  showBack();
 };
 Array.prototype.forEach.call(document.querySelectorAll('#bar a[data-t]'), function(a) {
   a.onclick = function() { window.crShow(a.getAttribute('data-t')); };
@@ -1392,6 +1459,7 @@ details.find.exp{border-left:5px solid #2e86c1}
 #imp h2{margin:0 0 8px;font-size:16px}#imp .warn{color:#9a5b00;margin:6px 0;font-size:12px}
 #imp button{padding:6px 13px;border:0;border-radius:5px;background:#2c3e50;color:#fff;cursor:pointer;margin-right:6px}
 #imp button.go{background:#2e86c1}
+.pin{font-size:16px;cursor:pointer;text-decoration:none}
 .num{width:22px;height:22px;border-radius:50%;color:#fff;font:bold 10px/20px Arial;text-align:center;border:1px solid #fff;box-shadow:0 0 3px rgba(0,0,0,.5)}
 @media print{.day.closed table{display:table}.bar,#map,.noprint{display:none}.day{box-shadow:none;break-inside:auto;margin:8px 0}body{background:#fff}}
 </style></head><body>
@@ -1537,7 +1605,7 @@ details.find.exp{border-left:5px solid #2e86c1}
     d.stops.forEach(function(s) {
       h += '<tr><td class="code">' + esc(s.code) + (s.leg_km != null ? '<br><small style="font-weight:normal;color:#666">' + s.leg_km + ' km from ' +
            (s.code.slice(-2) === '01' && D.start ? 'the start' : 'the previous stop') + '</small>' : '') + '</td><td>' + s.items.map(itemHtml).join('<hr style="margin:6px 0;border:0;border-top:1px dashed #ccc">') + '</td>' +
-           '<td class="noprint" style="white-space:nowrap"><a data-show="' + esc(s.code) + '">show on map</a>' +
+           '<td class="noprint" style="white-space:nowrap"><a data-show="' + esc(s.code) + '" title="Show on map"><span class="pin" title="Show on map">&#128205;</span></a>' +
            (shell ? '<br><a data-tab="' + esc(s.items[0].slug) + '" data-lat="' + s.lat + '" data-lon="' + s.lon + '">' + esc(s.items[0].group) + ' tab</a>' : '') + '</td></tr>';
     });
     sec.innerHTML = h + '</table>';
@@ -1582,7 +1650,7 @@ details.find.exp{border-left:5px solid #2e86c1}
         setTimeout(function() { rm.openPopup(); }, 1100);
       }
     } else if (shell) {
-      shell.crShow(a.getAttribute('data-tab'), {lat: +a.getAttribute('data-lat'), lon: +a.getAttribute('data-lon')});
+      shell.crShow(a.getAttribute('data-tab'), {lat: +a.getAttribute('data-lat'), lon: +a.getAttribute('data-lon'), from: 'visits'});
     }
   });
 
@@ -1627,7 +1695,7 @@ details.find.exp{border-left:5px solid #2e86c1}
            '<td>' + (r.note ? '<div class="note">' + esc(r.note) + '</div><small>' + esc(r.note_at) + '</small>' : '') + '</td>' +
            '<td>' + (r.visit ? (r.visit.done ? '&#10003; ' : '') + esc(r.visit.summary || 'visited, no answers yet') +
                       (r.visit.action_label ? '<br><b>' + esc(r.visit.action_label) + '</b>: ' + esc(r.visit.action_text) : '') + '<br><small>' + esc(r.visit.at) + '</small>' : '') + '</td>' +
-           '<td class="noprint" style="white-space:nowrap">' + (r.lat != null ? '<a data-rv="' + esc(r.key) + '">show on map</a><br><a href="' + nav({lat: r.lat, lon: r.lon}) + '" target="_blank">navigate</a>' : '') +
+           '<td class="noprint" style="white-space:nowrap">' + (r.lat != null ? '<a data-rv="' + esc(r.key) + '" title="Show on map"><span class="pin" title="Show on map">&#128205;</span></a><br><a href="' + nav({lat: r.lat, lon: r.lon}) + '" target="_blank">navigate</a>' : '') +
            (shell && r.lat != null ? '<br><a data-tab="' + esc(r.slug) + '" data-lat="' + r.lat + '" data-lon="' + r.lon + '">' + esc(r.group) + ' tab</a>' : '') + '</td></tr>';
     });
     var what = {notes: 'with a note', visited: 'visited or checked', all: 'with a note or a visit'}[current];
@@ -1676,7 +1744,7 @@ details.find.exp{border-left:5px solid #2e86c1}
            '<td>' + it.kinds.map(function(k) { return '<span class="k">' + dot(k) + esc(D.kinds[k]) + '</span>'; }).join('') + '<div class="why">' + it.why.map(esc).join(' ') + '</div>' +
            (it.status ? '<div class="mon"><b>The monitor says:</b> ' + esc(it.status.text) + '</div>' : '') + '</td>' +
            '<td style="white-space:nowrap">' + (isDone(it) ? '&#10003; visited ' + esc(it.visit.at) : planCode[it.key] ? esc(planCode[it.key]) : '<span style="color:#888">not in the current plan</span>') + '</td>' +
-           '<td class="noprint" style="white-space:nowrap">' + (p ? '<a data-iv="' + esc(it.key) + '">show on map</a><br><a href="' + nav(p) + '" target="_blank">navigate</a>' : '') +
+           '<td class="noprint" style="white-space:nowrap">' + (p ? '<a data-iv="' + esc(it.key) + '" title="Show on map"><span class="pin" title="Show on map">&#128205;</span></a><br><a href="' + nav(p) + '" target="_blank">navigate</a>' : '') +
            (shell && p ? '<br><a data-tab="' + esc(it.slug) + '" data-lat="' + p.lat + '" data-lon="' + p.lon + '">' + esc(it.group) + ' tab</a>' : '') + '</td></tr>';
     });
     ovHost.innerHTML = m;       // the overview sits at the top, under the View buttons; the list is under the map
@@ -1979,6 +2047,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reverse_plan(self):
         """Preview of the reverse of the selected paths. Only READS OMNIA (arcs of the path, OMNIA's own route calculation)."""
+        import bt_wiring
         import omnia_fetch
         import omnia_reverse
         srv = self.server
@@ -2002,6 +2071,7 @@ class Handler(BaseHTTPRequestHandler):
                 feed = srv.wiring_inputs()[0] or {}
             except Exception:
                 feed = {}
+            status = bt_wiring.reverse_status(snap["paths"], feed)
             items, refused = [], []
             for pid in ids:
                 coords = (feed.get(pid) or {}).get("coords") or []
@@ -2014,15 +2084,20 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 it["new_name"] = omnia_reverse.reverse_name(fwd.get("name"), pid)
                 it["copy"] = {k: fwd.get(k) for k in ("speed_min", "speed_max", "start", "end")}
-                dup = omnia_reverse.duplicate_of(fwd, snap["paths"], it["new_name"]) \
-                    or omnia_reverse.duplicate_by_route(pid, (coords[0], coords[-1]) if len(coords) >= 2 else None, feed)
-                if dup:
+                block, warn = existing_reverse(status.get(pid))
+                if block:
                     it["ok"] = False
-                    it["problems"] = ["a reverse seems to exist already: " + dup] + it["problems"]
+                    it["problems"] = [block] + it["problems"]
+                it["warnings"] = [warn] if warn else []
                 items.append(it)
             create_urls = omnia_reverse.derive_create_urls(srv.omnia)
             allowed = bool(srv.allow_edit and all(create_urls))
             ok_items = [it for it in items if it["ok"]]
+            prev = srv.edit_tokens.get(body.get("append_to")) if body.get("append_to") else None
+            if prev and prev[0] == "reverse":                      # the page previews one path per call and adds them up
+                ok_items = [it for it in prev[1] if it["id"] not in {i["id"] for i in ok_items}] + ok_items
+            if len(ok_items) > REVERSE_TOTAL:
+                raise ValueError("At most %d reverse paths per batch." % REVERSE_TOTAL)
             token = None
             if ok_items:
                 token = secrets.token_hex(8)
@@ -2036,6 +2111,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reverse_apply(self):
         """Create the previewed reverse paths in OMNIA. WRITES: needs CONTROL_ROOM_ALLOW_EDIT, the preview's token and a typed YES."""
+        import bt_wiring
         import omnia_fetch
         import omnia_reverse
         import time as _time
@@ -2059,15 +2135,20 @@ class Handler(BaseHTTPRequestHandler):
             fetch = srv.fetch_omnia or omnia_fetch.fetch_snapshot
             snap = fetch(srv.omnia)                                  # the live list: new ids are checked against it
             by_id = {str(p["id"]): p for p in snap["paths"]}
+            try:
+                feed = srv.wiring_inputs()[0] or {}
+            except Exception:
+                feed = {}
+            status = bt_wiring.reverse_status(snap["paths"], feed)
             results, error = [], None
             for i, it in enumerate(items):
                 fwd = by_id.get(str(it["id"]))
                 if fwd is None:
                     error = "Path %s is no longer in OMNIA; nothing more was created." % it["id"]
                     break
-                dup = omnia_reverse.duplicate_of(fwd, snap["paths"], it["new_name"])
-                if dup:
-                    error = "Not created for path %s: a reverse seems to exist already (%s). Nothing more was created." % (it["id"], dup)
+                block, _warn = existing_reverse(status.get(str(it["id"])))
+                if block:
+                    error = "Not created for path %s: %s. Nothing more was created." % (it["id"], block)
                     break
                 res = omnia_reverse.create_reverse(it, fwd, set(by_id), (newid_url, build_url, urls[0]), srv.omnia.get("edit"),
                                                    post, get, srv.create_log)
