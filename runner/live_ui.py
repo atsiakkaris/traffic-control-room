@@ -40,7 +40,7 @@ _CSS = """
 :root{--bg:#f5f6f8;--surface:#fff;--border:rgba(0,0,0,.1);--text:#1a1a2e;--muted:#6b7280;--subsurf:#f1f0e8;color-scheme:light}
 :root[data-theme=dark]{--bg:#111318;--surface:#1c1f26;--border:rgba(255,255,255,.09);--text:#f0f2f5;--muted:#9ca3af;--subsurf:#232730;color-scheme:dark}
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-.wrap{max-width:1180px;margin:0 auto;padding:18px 24px 40px}
+.wrap{max-width:100%;margin:0 auto;padding:18px 32px 40px}
 #bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:16px;font-size:13px;color:var(--muted)}
 #bar .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;font-weight:500;background:#eaf3de;color:#27500a}
 #bar .pill.warn{background:#faeeda;color:#633806} #bar .pill.err{background:#fcebeb;color:#a32d2d}
