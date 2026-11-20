@@ -32,3 +32,6 @@ results/omnia_rename_log.csv
 results/omnia_create_log.csv
 reports/swarco_meeting_questions.md
 reports/swarco_meeting_questions.docx
+
+# per-PC shortcut made by tools/make_shortcut.py (holds this PC's paths)
+Control Room.lnk

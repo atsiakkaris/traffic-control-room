@@ -2816,6 +2816,58 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     return srv
 
 
+APP_ID = "TrafficControlRoom.ControlRoom"          # Windows groups the taskbar button by this, not by pythonw.exe
+APP_ICON = ROOT / "tools" / "control_room.ico"
+
+
+def windows_identity():
+    """Tell Windows this is its own app (own taskbar button and icon, not Python's). Windows only; harmless elsewhere."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        return True
+    except Exception:
+        return False
+
+
+def set_window_icon(hwnd=None, title="Control Room", icon=APP_ICON):
+    """Give the app window the Control Room icon (title bar, taskbar, Alt+Tab). Windows only; returns True when set."""
+    if sys.platform != "win32" or not Path(icon).is_file():
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype = wintypes.HWND
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        hwnd = hwnd or user32.FindWindowW(None, title)
+        if not hwnd:
+            return False
+        done = False
+        for which, metric in ((1, 11), (0, 49)):          # ICON_BIG at SM_CXICON, ICON_SMALL at SM_CXSMICON
+            size = user32.GetSystemMetrics(metric)
+            handle = user32.LoadImageW(None, str(icon), 1, size, size, 0x10)   # IMAGE_ICON, LR_LOADFROMFILE
+            if handle:
+                user32.SendMessageW(hwnd, 0x80, which, handle)                  # WM_SETICON
+                done = True
+        return done
+    except Exception:
+        return False
+
+
+def native_handle(win):
+    """The Windows handle of a pywebview window (its own, so a second Control Room window is never mixed up), or None."""
+    try:
+        h = win.native.Handle
+        return int(h.ToInt64()) if hasattr(h, "ToInt64") else int(h)
+    except Exception:
+        return None
+
+
 def window_available():
     try:
         import webview  # noqa: F401
@@ -2831,8 +2883,13 @@ def run_window(srv, url):
         webview.settings["ALLOW_DOWNLOADS"] = True
     except Exception:
         pass   # older pywebview: no such setting
+    windows_identity()
     win = webview.create_window("Control Room", url, width=1500, height=950, min_size=(900, 600))
     srv.on_quit = win.destroy
+    try:
+        win.events.shown += lambda: set_window_icon(native_handle(win))
+    except Exception:
+        pass   # older pywebview: no events, the window keeps the default icon
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     webview.start()          # blocks until the window is closed
     srv.shutdown()

@@ -57,7 +57,10 @@ as the Bluetooth tab (health, project, spreadsheet match, triangulation verdict)
 `control_room.bat` opens it in **its own window** (needs `pip install pywebview` once; without
 it the page opens in your browser instead, with a console that must stay open). Close the
 window or press **Quit** in the tab bar to stop it; errors, if any, go to
-`results/control_room.log`.
+`results/control_room.log`. The window has its own icon and taskbar button (a road with two sensor dots,
+`tools/control_room.ico`). For the same icon in Explorer and a button to pin, run `python tools/make_shortcut.py` once
+(`--desktop` also puts it on the desktop): it makes a **Control Room** shortcut that opens the app window directly; pin it with
+right-click > Pin to taskbar. Run it again after moving the folder or reinstalling Python.
 
 **Reading the sensor maps.** Above each map (Traffic Detection, Bluetooth, VMS) a summary line counts the dots - under 90% uptime, contract ended, retired or no history - and its buttons show only that group. Under it, the key lists every dot style with its count; click a style to show only that style (click it again to show all, ctrl+click adds or removes one). A dot's colour is lifetime uptime, except on the Bluetooth tab: Bluetooth sensors have no uptime of their own, so there the colour is the triangulation verdict (green working, orange works but some paths fail, red faulty, dashed grey not enough evidence). The key also explains the marks on top of the dots (gold halo = confirmed match, number = sensors at one spot, orange N = your note, big rings on Bluetooth = triangulation verdicts); a short distance line is marked by a dashed ring when you filter to it.
 

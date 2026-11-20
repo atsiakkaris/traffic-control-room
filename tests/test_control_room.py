@@ -756,3 +756,22 @@ def test_reload_starts_a_fresh_copy_with_the_same_options_and_refuses_other_orig
 def test_restart_argv_keeps_the_options_and_does_not_double_the_flag():
     argv = cr.restart_argv(["--port", "8800", "--browser", "--restarted"])
     assert argv[2:] == ["--port", "8800", "--browser", "--restarted"]
+
+
+def test_the_app_has_its_own_icon_and_windows_identity(tmp_path):
+    from PIL import Image
+    ico = Image.open(cr.APP_ICON)
+    assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= set(ico.info["sizes"])        # crisp from the taskbar to Explorer
+    assert cr.APP_ID == "TrafficControlRoom.ControlRoom"
+    assert cr.set_window_icon(hwnd=1, icon=tmp_path / "missing.ico") is False             # no icon file: nothing happens
+    assert cr.native_handle(object()) is None                                            # not a pywebview window: no handle
+    src = Path(cr.__file__).read_text(encoding="utf-8")
+    assert "windows_identity()" in src and "set_window_icon(native_handle(win))" in src
+
+
+def test_make_shortcut_points_at_the_app_window_with_the_icon_and_app_id():
+    import importlib
+    ms = importlib.import_module("make_shortcut")
+    assert ms.pythonw().name.lower() in ("pythonw.exe", "python.exe", "python", "pythonw")
+    src = Path(ms.__file__).read_text(encoding="utf-8")
+    assert "PKEY_AppUserModel_ID" in src and "SetIconLocation" in src and "control_room.py" in src
