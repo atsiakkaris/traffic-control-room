@@ -143,7 +143,8 @@ class FakeOmnia:
             if not self.ignore_renames:
                 p["name"] = params["pathName"]
             return Resp("")
-        p.update(speed_min=params["speedMin"], speed_max=params["speedMax"], start=params["idLogicalNodeStart"], end=params["idLogicalNodeEnd"])
+        p.update(speed_min=params["speedMin"], speed_max=params["speedMax"], start=params["idLogicalNodeStart"], end=params["idLogicalNodeEnd"],
+                 name=params["pathName"])
         return Resp("True")
 
 
@@ -366,3 +367,82 @@ def test_a_replace_suggestion_swaps_a_wrong_known_node_but_a_plain_one_never_doe
     assert keep["items"] == [] and "no clear nearest node" in keep["refused"][0]["reason"]
     swap = oe.plan_edits(s, [pid], suggested={pid: {"end": other, "end_replace": True}})
     assert swap["items"] and swap["items"][0]["after"]["end"] == other
+
+
+# ── one round: speeds, nodes and the name together ──────────────────────────
+
+def _named_state(fake):
+    fake.state["nodes"] = [{"id": 1, "name": "Alpha", "lat": 35.0, "lon": 33.0}, {"id": 2, "name": "Beta", "lat": 35.01, "lon": 33.0},
+                           {"id": 3, "name": "Node 3", "lat": 36.0, "lon": 33.0}, {"id": 4, "name": "Node 4", "lat": 37.0, "lon": 33.0}]
+    return {"a": {"name": "Alpha", "site_code": "1001", "lat": 35.0, "lon": 33.0}, "b": {"name": "Beta", "site_code": "1002", "lat": 35.01, "lon": 33.0}}
+
+
+def test_plan_combined_builds_the_name_from_the_nodes_the_path_will_have():
+    codes = {1: "1001", 2: "1002"}
+    name_for = lambda a, b: "%s->%s" % (codes[a], codes[b]) if a in codes and b in codes else None
+    plan = oe.plan_combined(snap(), ["12"], dict(speed_min="30", speed_max="90", start="1", end="2"), {"standard": True}, name_for)
+    it = plan["items"][0]
+    assert plan["refused"] == [] and it["after"]["start"] == 1 and it["new_name"] == "1001->1002" and it["name"] == "NoNodes"
+    # speeds already equal -> the edit part is "nothing to change", but the rename still goes ahead (rename-only item)
+    only = oe.plan_combined(snap(), ["10"], dict(speed_min="30", speed_max="65"), {"new_name": "Fresh"})
+    assert only["refused"] == [] and only["items"][0]["after"] == only["items"][0]["before"] and only["items"][0]["new_name"] == "Fresh"
+    # nodes that lead to no sensor: the path is refused with the reason, nothing half-done
+    none = oe.plan_combined(snap(), ["12"], dict(speed_min="30", speed_max="90", start="3", end="4"), {"standard": True}, name_for)
+    assert none["items"][0].get("new_name") is None and "not renamed" in none["items"][0]["name_note"]
+    # a real edit refusal (bad speeds) keeps the path out entirely, rename included
+    bad = oe.plan_combined(snap(), ["12"], dict(speed_min="90", speed_max="30", start="1", end="2"), {"new_name": "X"})
+    assert bad["items"] == [] and "0 < min < max" in bad["refused"][0]["reason"]
+    # no edit given at all: a name-only round still works
+    name_only = oe.plan_combined(snap(), ["10", "11"], {}, {"suffix": "-v2"})
+    assert [i["new_name"] for i in name_only["items"]] == ["Alpha-v2", "Beta-v2"]
+
+
+def test_one_round_sets_speeds_nodes_and_name_in_one_request_and_both_logs_are_written(tmp_path):
+    fake = FakeOmnia()
+    sensors = _named_state(fake)
+    srv, base = _server(tmp_path, fake)
+    srv.wiring_inputs = lambda: ({}, sensors)
+    try:
+        code, plan = _req(base + "/api/edit/plan", {"ids": ["12"], "speed_min": "30", "speed_max": "90", "start": "1", "end": "2", "rename": {"standard": True}})
+        assert code == 200 and plan["kind"] == "combined" and plan["allowed"] is True and fake.writes == []
+        assert plan["items"][0]["new_name"] == "1001->1002"
+        code, out = _req(base + "/api/edit/apply", {"token": plan["token"], "confirm": "YES"})
+        assert code == 200 and out["kind"] == "combined" and out["error"] is None and [r["ok"] for r in out["results"]] == [True]
+        assert len(fake.writes) == 1 and fake.writes[0]["pathName"] == "1001->1002"          # one call, new name inside
+        p = fake.state["paths"][2]
+        assert (p["name"], p["start"], p["end"], p["speed_min"], p["speed_max"]) == ("1001->1002", 1, 2, 30, 90)
+        assert "12" in (tmp_path / "edit.csv").read_text() and "1001->1002" in (tmp_path / "rename.csv").read_text()
+        code, undo = _req(base + "/api/edit/plan", {"undo_rename": True})                    # each undo reverts its own part
+        assert code == 200 and undo["items"][0]["new_name"] == "NoNodes"
+    finally:
+        srv.shutdown()
+
+
+def test_one_round_with_a_rename_only_path_and_a_name_that_did_not_stick(tmp_path):
+    fake = FakeOmnia()
+    srv, base = _server(tmp_path, fake)
+    try:
+        code, plan = _req(base + "/api/edit/plan", {"ids": ["10"], "speed_min": "30", "speed_max": "65", "rename": {"new_name": "Fresh"}})
+        assert plan["kind"] == "combined" and plan["items"][0]["after"] == plan["items"][0]["before"]
+        code, out = _req(base + "/api/edit/apply", {"token": plan["token"], "confirm": "YES"})
+        assert out["error"] is None and fake.writes[0] == {"pathId": "10", "pathName": "Fresh"} and fake.state["paths"][0]["name"] == "Fresh"
+    finally:
+        srv.shutdown()
+    fake = FakeOmnia()
+    fake.ignore_renames = True
+    srv, base = _server(tmp_path, fake)
+    try:
+        code, plan = _req(base + "/api/edit/plan", {"ids": ["10"], "speed_min": "30", "speed_max": "65", "rename": {"new_name": "Fresh"}})
+        code, out = _req(base + "/api/edit/apply", {"token": plan["token"], "confirm": "YES"})
+        assert out["results"][0]["ok"] is False and "did not change" in out["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_cancel_button_empties_the_edit_boxes_and_keeps_the_selection():
+    import re
+    html = cr.make_server  # noqa: F841  (module imported above)
+    src = Path(cr.__file__).read_text(encoding="utf-8")
+    assert 'id="cnl"' in src and "preview = null; drawEdit();" in src
+    cancel = src[src.index("document.getElementById('cnl').onclick"):][:420]
+    assert "selected" not in re.sub(r"//.*", "", cancel)               # it never touches the selection

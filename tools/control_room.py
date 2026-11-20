@@ -840,13 +840,23 @@ h2{font-size:15px;margin:22px 0 8px}
       + '<label title="OMNIA\'s node id (the small grey number in the table), NOT the site code: the two number ranges overlap, so a site code would pick the wrong node. The text next to the box shows the site code and sensor of the node you typed.">Start node id <input type="number" id="nstart" min="1" step="1"></label><span class="note" id="nsl"></span><label title="OMNIA\'s node id, not the site code (see the start box)">End node id <input type="number" id="nend" min="1" step="1"></label><span class="note" id="nel"></span></div>'
       + '<div class="row"><b>Rename:</b><label>Find <input id="rfind" size="9"></label><label>Replace with <input id="rrep" size="9"></label><label>Prefix <input id="rpre" size="6"></label><label>Suffix <input id="rsuf" size="6"></label>'
       + '<label>New name (one path) <input id="rnew" size="14"></label><label><input type="checkbox" id="rstd"> name from its nodes (site codes)</label></div>'
-      + '<div class="row"><button id="pv">Preview changes</button><button class="sec" id="pvr">Preview rename</button><button class="sec" id="pvu">Preview undo of last batch</button><button class="sec" id="pvru">Preview undo of last rename</button><button class="sec" id="clr">Clear selection</button>' + (D.can_delete ? '<button class="danger" id="del">Delete selected paths...</button>' : '') + '<span class="note" id="pvs"></span></div>'
+      + '<div class="row"><button id="pv">Preview changes</button><button class="sec" id="cnl" title="Empty the edit boxes and close the preview. Your selected paths stay selected.">Cancel</button><button class="sec" id="pvu">Preview undo of last batch</button><button class="sec" id="pvru">Preview undo of last rename</button><button class="sec" id="clr">Clear selection</button>' + (D.can_delete ? '<button class="danger" id="del">Delete selected paths...</button>' : '') + '<span class="note" id="pvs"></span></div>'
       + '<div id="pvbox"></div>';
     el.innerHTML = h;
     Object.keys(keep).forEach(function(id) { var x = document.getElementById(id); if (x) { if (x.type === 'checkbox') x.checked = keep[id]; else x.value = keep[id]; } });
     function labels() { document.getElementById('nsl').textContent = nodeLabel(+document.getElementById('nstart').value); document.getElementById('nel').textContent = nodeLabel(+document.getElementById('nend').value); }
     document.getElementById('nstart').oninput = labels; document.getElementById('nend').oninput = labels; labels();
     document.getElementById('clr').onclick = function() { selected = {}; preview = null; draw(); };
+    var editIds = ['smin', 'smax', 'nstart', 'nend', 'swap', 'sugg', 'rfind', 'rrep', 'rpre', 'rsuf', 'rnew', 'rstd'];
+    function syncCancel() {
+      var any = !!preview || editIds.some(function(id) { var x = document.getElementById(id); return x && (x.type === 'checkbox' ? x.checked : x.value !== ''); });
+      document.getElementById('cnl').disabled = !any;
+    }
+    el.oninput = syncCancel; el.onchange = syncCancel; syncCancel();
+    document.getElementById('cnl').onclick = function() {
+      editIds.forEach(function(id) { var x = document.getElementById(id); if (x) { if (x.type === 'checkbox') x.checked = false; else x.value = ''; } });
+      preview = null; drawEdit();                       // the selection is not touched
+    };
     ['smin', 'smax', 'nstart', 'nend'].forEach(function(id) {
       document.getElementById(id).onkeydown = function(e) { if (['-', '+', 'e', 'E', '.', ','].indexOf(e.key) >= 0) e.preventDefault(); };
     });
@@ -863,28 +873,28 @@ h2{font-size:15px;margin:22px 0 8px}
       var lo = document.getElementById('smin').value, hi = document.getElementById('smax').value;
       if (!bad && lo !== '' && hi !== '' && +lo >= +hi) bad = 'Speed min must be below speed max.';
       if (!bad && !countSelected()) bad = 'Select at least one path first.';
-      if (!bad && lo === '' && hi === '' && !document.getElementById('swap').checked && !document.getElementById('sugg').checked && !document.getElementById('nstart').value.trim() && !document.getElementById('nend').value.trim()) bad = 'Set a speed, a node, or tick swap or the nearest-node option first.';
+      var r = {find: document.getElementById('rfind').value, replace: document.getElementById('rrep').value, prefix: document.getElementById('rpre').value,
+               suffix: document.getElementById('rsuf').value, new_name: document.getElementById('rnew').value, standard: document.getElementById('rstd').checked};
+      var wantsName = r.standard || r.find || r.prefix || r.suffix || r.new_name.trim();
+      var wantsEdit = lo !== '' || hi !== '' || document.getElementById('swap').checked || document.getElementById('sugg').checked || document.getElementById('nstart').value.trim() || document.getElementById('nend').value.trim();
+      if (!bad && !wantsEdit && !wantsName) bad = 'Set a speed, a node, a name, or tick one of the options first.';
+      if (!bad && r.standard && (r.find || r.prefix || r.suffix || r.new_name.trim())) bad = 'Untick "name from its nodes" to use your own name, find/replace, prefix or suffix (the tick overrides them).';
+      if (!bad && r.new_name.trim() && countSelected() > 1) bad = 'A whole new name can only be given to one path; use find/replace, prefix or suffix for several.';
       if (bad) { document.getElementById('pvs').textContent = bad; return; }
-      runPreview({ids: Object.keys(selected), speed_min: document.getElementById('smin').value, speed_max: document.getElementById('smax').value,
-                  swap: document.getElementById('swap').checked, use_suggested: document.getElementById('sugg').checked, start: document.getElementById('nstart').value, end: document.getElementById('nend').value});
+      var req = {ids: Object.keys(selected), speed_min: document.getElementById('smin').value, speed_max: document.getElementById('smax').value,
+                 swap: document.getElementById('swap').checked, use_suggested: document.getElementById('sugg').checked, start: document.getElementById('nstart').value, end: document.getElementById('nend').value};
+      if (wantsName) req.rename = r;
+      runPreview(req);
     };
     document.getElementById('pvu').onclick = function() { runPreview({undo: true}); };
     document.getElementById('pvru').onclick = function() { runPreview({undo_rename: true}); };
-    document.getElementById('pvr').onclick = function() {
-      var r = {find: document.getElementById('rfind').value, replace: document.getElementById('rrep').value, prefix: document.getElementById('rpre').value,
-               suffix: document.getElementById('rsuf').value, new_name: document.getElementById('rnew').value, standard: document.getElementById('rstd').checked};
-      var s = document.getElementById('pvs');
-      if (!countSelected()) { s.textContent = 'Select at least one path first.'; return; }
-      if (!r.standard && !r.find && !r.prefix && !r.suffix && !r.new_name.trim()) { s.textContent = 'Give a new name, a find/replace, a prefix or a suffix first.'; return; }
-      runPreview({ids: Object.keys(selected), rename: r});
-    };
     if (preview) drawPreview();
   }
   function runPreview(req) {
     var s = document.getElementById('pvs'); s.textContent = 'Reading OMNIA (can take up to a minute)... nothing is sent yet.';
     post('/api/edit/plan', req).then(function(r) {
       if (r.error) { s.textContent = r.error; return; }
-      preview = r; s.textContent = ''; drawPreview();
+      preview = r; drawEdit();                 // redraws the panel and the preview, and turns Cancel on
     }).catch(function(e) { s.textContent = 'Could not preview: ' + e; });
   }
   function chgN(a, b) { return a === b ? nodeShort(a) : '<span class="del">' + nodeShort(a) + '</span> &rarr; <span class="add">' + nodeShort(b) + '</span>'; }
@@ -907,7 +917,7 @@ h2{font-size:15px;margin:22px 0 8px}
     } else if (preview.items.length) {
       h += '<table class="pv"><thead><tr><th>Path ID</th><th>Path name</th><th>Speed min</th><th>Speed max</th><th>Start node</th><th>End node</th></tr></thead><tbody>';
       preview.items.forEach(function(it) {
-        h += '<tr><td><b>' + esc(it.id) + '</b></td><td>' + esc(it.name) + '</td><td class="ch">' + chg(it.before.speed_min, it.after.speed_min) + '</td><td class="ch">' + chg(it.before.speed_max, it.after.speed_max)
+        h += '<tr><td><b>' + esc(it.id) + '</b></td><td' + (it.new_name ? ' class="ch">' + chg(it.name, it.new_name) : '>' + esc(it.name)) + (it.name_note ? '<div class="note">' + esc(it.name_note) + '</div>' : '') + '</td><td class="ch">' + chg(it.before.speed_min, it.after.speed_min) + '</td><td class="ch">' + chg(it.before.speed_max, it.after.speed_max)
           + '</td><td class="ch">' + chgN(it.before.start, it.after.start) + ' ' + esc(it.start_name) + '</td><td class="ch">' + chgN(it.before.end, it.after.end) + ' ' + esc(it.end_name) + '</td></tr>';
       });
       h += '</tbody></table>';
@@ -945,7 +955,7 @@ h2{font-size:15px;margin:22px 0 8px}
           if (r.__status !== 200) { res.innerHTML = '<div class="msg err">' + esc(r.error || 'failed') + '</div>'; return; }
           var ok = r.results.filter(function(x) { return x.ok; }).length;
           res.innerHTML = '<div class="msg' + (r.error ? ' err' : '') + '"><b>' + ok + ' of ' + preview.items.length + (r.kind === 'delete' ? ' path(s) deleted.</b> ' : r.kind === 'rename' ? ' path(s) renamed.</b> ' : ' path(s) changed.</b> ') + esc(r.error || '')
-            + (r.kind === 'delete' ? ' Logged in results/delete_log.csv.' : r.kind === 'rename' ? ' Logged as batch ' + esc(r.batch) + ' ("Preview undo of last rename" reverts it).' : ' Logged as batch ' + esc(r.batch) + ' (results/omnia_edit_log.csv; "Preview undo of last batch" reverts it).')
+            + (r.kind === 'delete' ? ' Logged in results/delete_log.csv.' : r.kind === 'rename' ? ' Logged as batch ' + esc(r.batch) + ' ("Preview undo of last rename" reverts it).' : ' Logged as batch ' + esc(r.batch) + (r.kind === 'combined' ? ' (results/omnia_edit_log.csv for speeds and nodes, results/omnia_rename_log.csv for names; each undo button reverts its own part).' : ' (results/omnia_edit_log.csv; "Preview undo of last batch" reverts it).'))
             + ' <button id="rl">Reload with the new data</button></div>';
           document.getElementById('rl').onclick = function() { location.reload(); };
           preview = null;
@@ -1870,6 +1880,19 @@ class Handler(BaseHTTPRequestHandler):
         save_review(data, self.server.review_file)
         self._send(200, {"saved": len(clean_review(data))})
 
+    def _name_builder(self, snap):
+        """name_for(start node id, end node id) -> '7052->7053' from the sensors those nodes belong to, or None."""
+        import bt_wiring
+        _feed, sensors = self.server.wiring_inputs()
+        matches = bt_wiring.match_nodes(snap["nodes"], sensors)
+
+        def name_for(start, end):
+            a, b = matches.get(start), matches.get(end)
+            if a and b and a["sensor"] is not None and b["sensor"] is not None:
+                return "%s->%s" % (sensors[a["sensor"]].get("site_code"), sensors[b["sensor"]].get("site_code"))
+            return None
+        return name_for
+
     def _standard_names(self, snap, ids):
         """{path id: name built from the site codes of its two nodes' sensors, e.g. 1001->1002}."""
         import bt_wiring
@@ -1908,6 +1931,13 @@ class Handler(BaseHTTPRequestHandler):
                     plan = omnia_edit.plan_deletes(snap, body.get("ids") or [])
                 elif body.get("undo_rename"):
                     plan = omnia_edit.undo_renames(srv.rename_log, snap)
+                elif body.get("rename") and any(body.get(k) for k in ("speed_min", "speed_max", "swap", "use_suggested", "start", "end")):
+                    r = body["rename"]
+                    suggested = self._suggested_nodes(snap) if body.get("use_suggested") else None
+                    edit = dict(speed_min=body.get("speed_min"), speed_max=body.get("speed_max"), swap=bool(body.get("swap")),
+                                start=body.get("start"), end=body.get("end"), suggested=suggested)
+                    plan = omnia_edit.plan_combined(snap, body.get("ids") or [], edit, r,
+                                                    self._name_builder(snap) if r.get("standard") else None)
                 elif body.get("rename"):
                     r = body["rename"]
                     standard = self._standard_names(snap, body.get("ids") or []) if r.get("standard") else None
@@ -1919,12 +1949,17 @@ class Handler(BaseHTTPRequestHandler):
                     suggested = self._suggested_nodes(snap) if body.get("use_suggested") else None
                     plan = omnia_edit.plan_edits(snap, body.get("ids") or [], body.get("speed_min"), body.get("speed_max"),
                                                  bool(body.get("swap")), body.get("start"), body.get("end"), suggested)
-                kind = "delete" if body.get("delete") else "rename" if (body.get("rename") or body.get("undo_rename")) else "edit"
+                combined = bool(body.get("rename")) and any(body.get(k) for k in ("speed_min", "speed_max", "swap", "use_suggested", "start", "end")) \
+                    and not body.get("delete") and not body.get("undo_rename") and not body.get("undo")
+                kind = "delete" if body.get("delete") else "combined" if combined else "rename" if (body.get("rename") or body.get("undo_rename")) else "edit"
                 token = None
                 if plan["items"]:
                     token = secrets.token_hex(8)
                     srv.edit_tokens = {token: (kind, plan["items"])}      # only the newest preview can be applied
-                allowed = (srv.allow_delete and bool(srv.delete_url)) if kind == "delete" else (srv.allow_edit and bool(srv.omnia["rename" if kind == "rename" else "edit"]))
+                if kind == "combined":
+                    allowed = srv.allow_edit and bool(srv.omnia["edit"]) and bool(srv.omnia["rename"])
+                else:
+                    allowed = (srv.allow_delete and bool(srv.delete_url)) if kind == "delete" else (srv.allow_edit and bool(srv.omnia["rename" if kind == "rename" else "edit"]))
                 return self._send(200, dict(plan, token=token, kind=kind, allowed=allowed, fetched_at=snap["fetched_at"]))
             held = srv.edit_tokens.get(body.get("token"))
             kind = held[0] if held else "edit"
@@ -1934,8 +1969,8 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("confirm") != "DELETE":
                     return self._send(400, {"error": "Type DELETE to confirm."})
             else:
-                needed = "CONTROL_ROOM_OMNIA_RENAME_URL" if kind == "rename" else "CONTROL_ROOM_OMNIA_EDIT_URL"
-                if not (srv.allow_edit and srv.omnia["rename" if kind == "rename" else "edit"]):
+                needed = "CONTROL_ROOM_OMNIA_RENAME_URL" if kind == "rename" else "CONTROL_ROOM_OMNIA_EDIT_URL (and CONTROL_ROOM_OMNIA_RENAME_URL)" if kind == "combined" else "CONTROL_ROOM_OMNIA_EDIT_URL"
+                if not (srv.allow_edit and srv.omnia["rename" if kind == "rename" else "edit"] and (kind != "combined" or srv.omnia["rename"])):
                     return self._send(403, {"error": "Editing is switched off on this PC (CONTROL_ROOM_ALLOW_EDIT=1 and "
                                                      + needed + " in .env)."})
                 if body.get("confirm") != "YES":
@@ -1953,13 +1988,17 @@ class Handler(BaseHTTPRequestHandler):
                 batch = "deleted"
             elif kind == "rename":
                 batch, results, error = omnia_edit.apply_renames(items, srv.omnia["rename"], srv.rename_log, post=srv.omnia_post)
+            elif kind == "combined":
+                batch, results, error = omnia_edit.apply_combined(items, srv.omnia["edit"], srv.omnia["rename"], srv.edit_log, srv.rename_log,
+                                                                  post=srv.omnia_post)
             else:
                 batch, results, error = omnia_edit.apply_items(items, srv.omnia["edit"], srv.edit_log, post=srv.omnia_post)
             after = fetch(srv.omnia)
-            if kind == "rename":
-                took = omnia_edit.verify_renames(items, after)      # OMNIA's answer is not trusted: read the names back
+            if kind in ("rename", "combined"):
+                took = omnia_edit.verify_renames([it for it in items if it.get("new_name")], after)   # OMNIA's answer is not trusted: read the names back
                 for r in results:
-                    r["ok"] = r["ok"] and took.get(r["id"], False)
+                    if r["id"] in took:
+                        r["ok"] = r["ok"] and took[r["id"]]
                 if not error and not all(r["ok"] for r in results):
                     error = "OMNIA answered but did not change every name (see the list); nothing else was sent."
             omnia_fetch.save_snapshot(after, srv.snapshot_file)

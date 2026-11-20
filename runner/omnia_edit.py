@@ -95,7 +95,9 @@ def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=
         missing = [k for k in FIELDS if after[k] is None]
         if missing:
             refused.append({"id": pid, "reason": "OMNIA needs all of speed min, speed max, start and end node; "
-                                                 "still empty: " + ", ".join(missing)})
+                                                 "still empty: " + ", ".join(missing)
+                                                 + ("; no clear nearest node was found to fill them (a path that is not in the API feed yet "
+                                                    "has no drawn route to read: press Refresh first)" if suggested is not None and not (suggested.get(pid) or {}) else "")})
         elif not 0 < after["speed_min"] < after["speed_max"] <= SPEED_LIMIT:
             refused.append({"id": pid, "reason": "speed range %s-%s is not 0 < min < max <= %d"
                                                  % (after["speed_min"], after["speed_max"], SPEED_LIMIT)})
@@ -108,6 +110,69 @@ def plan_edits(snapshot, ids, speed_min=None, speed_max=None, swap=False, start=
         else:
             items.append({"id": pid, "name": p.get("name") or "", "before": before, "after": after,
                           "start_name": nodes.get(after["start"], ""), "end_name": nodes.get(after["end"], "")})
+    return {"items": items, "refused": refused}
+
+
+_SOFT_REFUSALS = ("nothing to change", "no clear nearest node to suggest (see the finding on the path)")
+
+
+def plan_combined(snapshot, ids, edit, rename, name_for=None):
+    """Speeds, nodes and the name in one preview. Returns {items, refused}.
+
+    edit   = keyword arguments for plan_edits (speed_min, speed_max, swap, start, end, suggested); may all be empty.
+    rename = {find, replace, prefix, suffix, new_name, standard} (at least one given).
+    name_for(start node, end node) -> "7052->7053" or None: with rename['standard'] the name is built from the nodes the
+    path will have AFTER this change (typed, swapped or suggested), so a new path needs one round, not two.
+    items: [{id, name, before, after, start_name, end_name, new_name?, name_note?}]; after == before for a rename-only item.
+    """
+    ids = [str(i).strip() for i in dict.fromkeys(ids) if str(i).strip()]
+    edit_plan = {"items": [], "refused": []}
+    try:
+        edit_plan = plan_edits(snapshot, ids, **edit)
+    except ValueError as exc:
+        if not str(exc).startswith("Nothing to change"):
+            raise
+    by_id = {it["id"]: it for it in edit_plan["items"]}
+    soft = {r["id"]: r["reason"] for r in edit_plan["refused"] if r["reason"] in _SOFT_REFUSALS}
+    refused = [r for r in edit_plan["refused"] if r["id"] not in soft]
+    hard = {r["id"] for r in refused}
+    paths = {str(p["id"]): p for p in snapshot["paths"]}
+    nodes = {n["id"]: n["name"] for n in snapshot["nodes"]}
+    cands = [i for i in ids if i not in hard]
+    standard = None
+    if rename.get("standard"):
+        standard = {}
+        for pid in cands:
+            if pid not in paths:
+                continue
+            nodes_after = by_id[pid]["after"] if pid in by_id else current_values(paths[pid])
+            name = name_for(nodes_after["start"], nodes_after["end"]) if name_for else None
+            if name:
+                standard[pid] = name
+    rn = {"items": [], "refused": []}
+    if cands:
+        rn = plan_renames(snapshot, cands, rename.get("find") or "", rename.get("replace") or "", rename.get("prefix") or "",
+                          rename.get("suffix") or "", rename.get("new_name") or "", standard)
+    new_names = {it["id"]: it["new_name"] for it in rn["items"]}
+    why_not = {r["id"]: r["reason"] for r in rn["refused"]}
+    items = []
+    for pid in cands:
+        if pid in by_id:
+            it = dict(by_id[pid])
+            if pid in new_names:
+                it["new_name"] = new_names[pid]
+            elif why_not.get(pid) not in (None, "nothing to change"):
+                it["name_note"] = "not renamed: " + why_not[pid]
+            items.append(it)
+        elif pid in new_names:
+            p = paths[pid]
+            before = current_values(p)
+            items.append({"id": pid, "name": p.get("name") or "", "before": before, "after": dict(before), "new_name": new_names[pid],
+                          "start_name": nodes.get(before["start"], ""), "end_name": nodes.get(before["end"], "")})
+        elif pid in soft:
+            refused.append({"id": pid, "reason": soft[pid]})
+        elif pid in why_not:
+            refused.append({"id": pid, "reason": why_not[pid]})
     return {"items": items, "refused": refused}
 
 
@@ -261,7 +326,7 @@ def stale_ids(items, snapshot):
 def request_params(item):
     """The query parameters for one path: every value explicit, the current name sent back unchanged."""
     a = item["after"]
-    return {"pathId": item["id"], "pathName": item["name"], "speedMin": a["speed_min"], "speedMax": a["speed_max"],
+    return {"pathId": item["id"], "pathName": item.get("new_name") or item["name"], "speedMin": a["speed_min"], "speedMax": a["speed_max"],
             "idLogicalNodeStart": a["start"], "idLogicalNodeEnd": a["end"]}
 
 
@@ -286,6 +351,44 @@ def apply_items(items, edit_url, log_path, post=None, sleep=None, now=None):
             ok, status = False, type(exc).__name__
         results.append({"id": it["id"], "ok": ok, "status": status})
         _log(log_path, batch, it, ok, status, now)
+        if not ok:
+            error = "OMNIA refused path %s (%s); the remaining paths were not changed." % (it["id"], status)
+            break
+        if i < len(items):
+            sleep(DELAY_S)
+    return batch, results, error
+
+
+def apply_combined(items, edit_url, rename_url, edit_log, rename_log, post=None, sleep=None, now=None):
+    """Send speed/node changes and renames together, one path at a time (one request when a path changes both).
+
+    A path with a new name and an edit goes in ONE call to the edit address with the new name in it; a rename-only path
+    uses the rename address. Both logs get the same batch id, so each undo button still reverts its own part.
+    Returns (batch, results, error).
+    """
+    import time
+    if post is None:
+        import httpx
+        post = httpx.post
+    sleep = sleep or time.sleep
+    batch = uuid.uuid4().hex[:8]
+    results, error = [], None
+    for i, it in enumerate(items, 1):
+        has_edit = it["after"] != it["before"]
+        try:
+            if has_edit:
+                resp = post(edit_url, params=request_params(it), timeout=60)
+                ok, status = resp.status_code == 200 and str(resp.text).strip().lower() == "true", resp.status_code
+            else:
+                resp = post(rename_url, params={"pathId": it["id"], "pathName": it["new_name"]}, timeout=60)
+                ok, status = resp.status_code == 200, resp.status_code
+        except Exception as exc:
+            ok, status = False, type(exc).__name__
+        results.append({"id": it["id"], "ok": ok, "status": status})
+        if has_edit:
+            _log(edit_log, batch, it, ok, status, now)
+        if it.get("new_name"):
+            _log_rename(rename_log, batch, it, ok, status, now)
         if not ok:
             error = "OMNIA refused path %s (%s); the remaining paths were not changed." % (it["id"], status)
             break

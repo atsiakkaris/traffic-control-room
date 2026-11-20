@@ -474,7 +474,10 @@ anything OMNIA would reject), `apply_items` POSTs the update address one path at
 idLogicalNodeStart, idLogicalNodeEnd are required - found by trying it on a test path - and the current pathName is always
 resent because omitting it makes OMNIA rebuild the name), `undo_items` reads the last batch from the log. Renames use their own
 address and log: `plan_renames` / `apply_renames` / `undo_renames` send only the id and the new name, and `verify_renames` re-reads
-OMNIA afterwards because the answer text of that call is not relied on. In `tools/control_room.py`:
+OMNIA afterwards because the answer text of that call is not relied on. `plan_combined` / `apply_combined` do speeds, nodes and
+name in one round (the single *Preview changes* button): the standard name is built from the nodes the path will have after
+the edit via `name_for`, a path that changes both goes out as one call to the edit address with the new name in it, a
+rename-only path uses the rename address, and both logs get the same batch id (kind `combined` in the plan/apply tokens). In `tools/control_room.py`:
 `POST /api/edit/plan` (reads OMNIA live, sends nothing, returns a single-use token) and `POST /api/edit/apply` (needs
 `CONTROL_ROOM_ALLOW_EDIT`, the typed YES, the token, and re-reads OMNIA to refuse paths edited since the preview).
 **Local Live tab** (`/live`, `runner/live_local.py`): the published Live page's data now comes from `report.live_page_ctx` (shared by

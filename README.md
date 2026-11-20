@@ -165,10 +165,15 @@ shown old value -> new value, nothing is sent. OMNIA needs all of
 speed min, speed max, start and end node for every call, so a path with no nodes only changes once both nodes are given;
 each path's current name is always sent back so nothing is renamed. Every change is logged with its old values in
 `results/omnia_edit_log.csv`, and *Preview undo of last batch* puts the last batch back (paths edited by hand since are
-left alone). Only whole numbers above 0 are accepted. **Rename** works the same way (preview, then apply): give one path a
-new name, or find/replace, a prefix or a suffix across the selected paths, or tick *name from its nodes* to rebuild
-`start->end` from the site codes of its two nodes' sensors; after sending, the names are read back from OMNIA to confirm they
-changed, and *Preview undo of last rename* restores the old ones (`results/omnia_rename_log.csv`).
+left alone). Only whole numbers above 0 are accepted. **Rename is part of the same round:** give one path a
+new name, or find/replace, a prefix or a suffix across the selected paths, or tick *name from its nodes* to build
+`start->end` from the site codes of its two nodes' sensors, and *Preview changes* shows speeds, nodes and name together.
+The name is built from the nodes the path will have after this change (typed, swapped or filled with the nearest node), so
+a new path needs one round: speed range + *fill missing or wrong nodes with the nearest one* + *name from its nodes*. A path
+that changes both is sent in one call; if the name cannot be built (its nodes lead to no known sensor) the preview says so
+and only the speeds and nodes are changed. After sending, the names are read back from OMNIA to confirm they
+changed, and *Preview undo of last rename* restores the old ones (`results/omnia_rename_log.csv`; the edit undo button
+reverts only the speeds and nodes, each part has its own log).
 
 **A path was re-created under a new id? (history merge).** OMNIA cannot turn a path into another geometry and never gives a
 deleted id out again, so a re-drawn path gets a new id and starts with an empty history. `python tools/merge_path_history.py 250=661`
