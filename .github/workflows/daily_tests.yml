@@ -22,9 +22,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run unit tests
-        run: python -m pytest tests/ -q
-
       - name: Run API tests
         env:
           BASE_URL:      ${{ secrets.BASE_URL }}
@@ -35,6 +32,13 @@ jobs:
           DB_PATH:       results/history.db
           DASHBOARD_NOTE: ${{ vars.DASHBOARD_NOTE }}
         run: python runner/run_tests.py
+
+      # After the API tests, not before: a broken unit test must turn the run red
+      # without also skipping the data collection (a failing test once cost ~2.5
+      # days of results, 2026-11-20 to 11-23).
+      - name: Run unit tests
+        if: always()
+        run: python -m pytest tests/ -q
 
       - name: Refresh published BT paths map
         if: always()

@@ -759,9 +759,13 @@ def test_restart_argv_keeps_the_options_and_does_not_double_the_flag():
 
 
 def test_the_app_has_its_own_icon_and_windows_identity(tmp_path):
-    from PIL import Image
-    ico = Image.open(cr.APP_ICON)
-    assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= set(ico.info["sizes"])        # crisp from the taskbar to Explorer
+    import struct
+    head = Path(cr.APP_ICON).read_bytes()
+    reserved, kind, count = struct.unpack_from("<HHH", head, 0)                         # ICONDIR: 0, 1 (icon), image count
+    assert (reserved, kind) == (0, 1)
+    # Each ICONDIRENTRY is 16 bytes with width then height first; a 0 there means 256.
+    sizes = {(w or 256, h or 256) for w, h in (struct.unpack_from("<BB", head, 6 + 16 * i) for i in range(count))}
+    assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= sizes                          # crisp from the taskbar to Explorer
     assert cr.APP_ID == "TrafficControlRoom.ControlRoom"
     assert cr.set_window_icon(hwnd=1, icon=tmp_path / "missing.ico") is False             # no icon file: nothing happens
     assert cr.native_handle(object()) is None                                            # not a pywebview window: no handle
