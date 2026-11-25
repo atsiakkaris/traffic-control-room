@@ -60,6 +60,7 @@ td.n{text-align:right;white-space:nowrap}
   <button class="act" id="add">Add path</button><button class="act sec" id="clr">Clear</button>
   <div id="next"></div>
 </div>
+<div id="upd" class="sm"></div>
 <div id="out"></div>
 <div class="sm" id="foot"></div>
 </div><div id="map"></div></div>
@@ -133,7 +134,7 @@ function drawPicks(){
   if (A && D.sites[A]) L.marker([D.sites[A].lat, D.sites[A].lon], {icon:epIcon('A', 'a'), interactive:false}).addTo(pickMarks);
   if (B && D.sites[B]) L.marker([D.sites[B].lat, D.sites[B].lon], {icon:epIcon('B', ''), interactive:false}).addTo(pickMarks);
 }
-function drawRoute(ids){
+function drawRoute(ids, keepView){
   routeLayer.clearLayers(); var pts = [];
   ids.forEach(function(id){
     var c = D.paths[id] && D.paths[id].coords; if (!c || c.length < 2) return;
@@ -141,7 +142,7 @@ function drawRoute(ids){
     if (L.polylineDecorator && L.Symbol) L.polylineDecorator(l, {patterns:[{offset:15, repeat:60, symbol:L.Symbol.arrowHead({pixelSize:10, headAngle:40, pathOptions:{color:'#222', fillColor:'#222', fillOpacity:0.9, weight:0, interactive:false}})}]}).addTo(routeLayer);
     pts = pts.concat(c);
   });
-  if (pts.length) map.fitBounds(L.latLngBounds(pts), {padding:[40, 40], maxZoom:16});
+  if (pts.length && !keepView) map.fitBounds(L.latLngBounds(pts), {padding:[40, 40], maxZoom:16});
 }
 
 /* ---- feed line ---- */
@@ -162,7 +163,7 @@ function setSite(which, s){
 }
 function pickSite(s){
   if (A && !B && s !== A){ setSite('B', s); plan(); return; }
-  setSite('A', s); setSite('B', null); routes = []; $('out').textContent = ''; routeLayer.clearLayers();
+  setSite('A', s); setSite('B', null); routes = []; $('out').textContent = ''; routeLayer.clearLayers(); stamp('');
 }
 function fromInput(which){
   var v = $(which === 'A' ? 'from' : 'to').value.trim().toLowerCase();
@@ -172,15 +173,20 @@ $('from').onchange = function(){ fromInput('A'); if (A && B) plan(); };
 $('to').onchange = function(){ fromInput('B'); if (A && B) plan(); };
 $('swap').onclick = function(){ var a = A, b = B; setSite('A', b); setSite('B', a); if (A && B) plan(); };
 $('go').onclick = function(){ fromInput('A'); fromInput('B'); plan(); };
-function plan(){
-  var out = $('out'); out.textContent = '';
-  if (!A || !B){ out.appendChild(el('div', 'warn', 'Pick both nodes from the list (or click two nodes on the map).')); return; }
-  out.appendChild(el('div', 'sm', 'Looking for the fastest route...'));
-  api('/api/routes/plan?from=' + encodeURIComponent(A) + '&to=' + encodeURIComponent(B)).then(function(j){
+function sig(r){ return r.legs.map(function(l){ return l.id; }).join(','); }
+// auto = the 60-second refresh: same route stays selected, the map keeps its view, an error leaves the old numbers on screen.
+function plan(auto){
+  var out = $('out');
+  if (!A || !B){ out.textContent = ''; out.appendChild(el('div', 'warn', 'Pick both nodes from the list (or click two nodes on the map).')); return; }
+  if (!auto){ out.textContent = ''; out.appendChild(el('div', 'sm', 'Looking for the fastest route...')); }
+  var keep = auto && routes[pick] ? sig(routes[pick]) : null;
+  return api('/api/routes/plan?from=' + encodeURIComponent(A) + '&to=' + encodeURIComponent(B)).then(function(j){
     drawFeed(j.measured); routes = j.routes || []; pick = 0; out.textContent = '';
+    routes.forEach(function(r, i){ if (keep && sig(r) === keep) pick = i; });
+    stamp();
     if (!routes.length){
       out.appendChild(el('div', 'warn', j.note || 'No route found.'));
-      if (j.gap) drawRoute(j.gap.legs.map(function(l){ return l.id; }));
+      if (j.gap) drawRoute(j.gap.legs.map(function(l){ return l.id; }), auto);
       return;
     }
     routes.forEach(function(r, i){
@@ -191,8 +197,11 @@ function plan(){
       out.appendChild(c);
     });
     out.appendChild(el('div', null)).id = 'detail';
-    showRoutes();
-  }).catch(function(e){ out.textContent = ''; out.appendChild(el('div', 'warn', 'Could not get the live times: ' + e.message)); });
+    showRoutes(auto);
+  }).catch(function(e){
+    if (auto){ stamp('Could not refresh (' + e.message + '): these are the values from ' + (updated ? clockNow(updated) : 'before')); return; }
+    out.textContent = ''; out.appendChild(el('div', 'warn', 'Could not get the live times: ' + e.message));
+  });
 }
 function legsTable(legs, removable){
   var t = el('table'), h = el('tr'); ['', 'Path', 'Live time'].forEach(function(x){ h.appendChild(el('th', null, x)); }); if (removable) h.appendChild(el('th')); t.appendChild(h);
@@ -205,10 +214,10 @@ function legsTable(legs, removable){
   });
   return t;
 }
-function showRoutes(){
+function showRoutes(keepView){
   Array.prototype.forEach.call(document.querySelectorAll('#out .card'), function(c, i){ c.className = 'card' + (i === pick ? ' on' : ''); });
   var d = $('detail'); if (!d || !routes[pick]) return; d.textContent = '';
-  d.appendChild(legsTable(routes[pick].legs, false)); drawRoute(routes[pick].legs.map(function(l){ return l.id; }));
+  d.appendChild(legsTable(routes[pick].legs, false)); drawRoute(routes[pick].legs.map(function(l){ return l.id; }), keepView);
 }
 
 /* ---- add paths ---- */
@@ -225,25 +234,49 @@ $('add').onclick = function(){
 };
 $('addp').onkeydown = function(e){ if (e.key === 'Enter') $('add').onclick(); };
 $('clr').onclick = function(){ chain = []; runChain(); };
-function runChain(){
-  var out = $('out'), nx = $('next'); out.textContent = ''; nx.textContent = '';
-  if (!chain.length){ routeLayer.clearLayers(); return; }
-  api('/api/routes/chain?ids=' + chain.join(',')).then(function(j){
+function runChain(auto){
+  var out = $('out'), nx = $('next');
+  if (!auto){ out.textContent = ''; nx.textContent = ''; }
+  if (!chain.length){ out.textContent = ''; nx.textContent = ''; routeLayer.clearLayers(); stamp(''); return; }
+  return api('/api/routes/chain?ids=' + chain.join(',')).then(function(j){
+    out.textContent = ''; nx.textContent = ''; stamp();
     drawFeed(j.measured); var r = j.result;
     out.appendChild(el('div', 'sm', r.complete ? 'Total live time' : 'Total live time (see the notes)'));
     out.appendChild(el('div', 'total', fmt(r.seconds)));
     out.appendChild(el('div', 'sm', km(r.length_m) + ', ' + r.legs.length + (r.legs.length === 1 ? ' path' : ' paths') + (r.kmh ? ', about ' + r.kmh + ' km/h' : '')));
     r.problems.forEach(function(p){ out.appendChild(el('div', 'warn', p)); });
     out.appendChild(legsTable(r.legs, true));
-    drawRoute(chain);
+    drawRoute(chain, auto);
     if (j.next && j.next.length){
       nx.appendChild(el('div', 'sm', 'Continue with (starts where the last path ends):'));
       j.next.forEach(function(l){
         var c = el('button', 'chip', l.id + ' ' + l.name + ' - ' + (l.seconds == null ? 'no reading' : fmt(l.seconds))); c.onclick = function(){ addPath(l.id); }; nx.appendChild(c);
       });
     }
-  }).catch(function(e){ out.appendChild(el('div', 'warn', 'Could not get the live times: ' + e.message)); });
+  }).catch(function(e){
+    if (auto){ stamp('Could not refresh (' + e.message + '): these are the values from ' + (updated ? clockNow(updated) : 'before')); return; }
+    out.appendChild(el('div', 'warn', 'Could not get the live times: ' + e.message));
+  });
 }
+
+/* ---- refresh by itself, every minute ---- */
+var updated = null, REFRESH_MS = 60000, refreshing = false;
+function clockNow(ms){ return new Date(ms).toLocaleTimeString('en-GB', {timeZone:'Asia/Nicosia', hour:'2-digit', minute:'2-digit', second:'2-digit'}); }
+// stamp() = a fresh answer just arrived; stamp(text) = show that text instead (an error, or '' to clear).
+function stamp(text){
+  var u = $('upd');
+  if (text === undefined){ updated = Date.now(); u.className = 'sm'; u.textContent = 'Updated ' + clockNow(updated) + ' - refreshes by itself every minute'; }
+  else { u.className = text ? 'warn' : 'sm'; u.textContent = text; }
+}
+function autoRefresh(){
+  if (refreshing || document.hidden) return;
+  var p = mode === 'ab' ? (A && B && routes.length ? plan(true) : null) : (chain.length ? runChain(true) : null);
+  if (!p) return;
+  refreshing = true;
+  p.then(function(){ refreshing = false; }, function(){ refreshing = false; });
+}
+setInterval(autoRefresh, REFRESH_MS);
+document.addEventListener('visibilitychange', function(){ if (!document.hidden && updated && Date.now() - updated >= REFRESH_MS) autoRefresh(); });
 
 // A click on empty map clears the selection (clicks on a node or a path are handled by them and do not reach the map).
 map.on('click', function(){
@@ -256,7 +289,7 @@ map.on('click', function(){
 /* ---- mode ---- */
 function setMode(m){
   mode = m; $('m-ab').className = m === 'ab' ? 'on' : ''; $('m-ch').className = m === 'ch' ? 'on' : '';
-  $('ab').hidden = m !== 'ab'; $('ch').hidden = m !== 'ch'; $('out').textContent = ''; routeLayer.clearLayers();
+  $('ab').hidden = m !== 'ab'; $('ch').hidden = m !== 'ch'; $('out').textContent = ''; routeLayer.clearLayers(); stamp('');
   if (m === 'ch') runChain(); else if (A && B) plan();
 }
 $('m-ab').onclick = function(){ setMode('ab'); };

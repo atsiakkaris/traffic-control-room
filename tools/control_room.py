@@ -2454,6 +2454,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/restart" and self._same_origin():
             self._send(200, {"restarting": True})
             def go():
+                save_window_state(self.server)         # the new window comes back the same size, or maximized, or full screen
                 try:
                     self.server.spawn(restart_argv())
                 except Exception:
@@ -2874,6 +2875,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.downloads_dir = downloads_dir
     srv.choose_path = choose_path   # the Save as dialog; tests pass None or a fake
     srv.on_quit = None   # set by the app-window launcher to close the window
+    srv.window_state = None   # set by the app-window launcher: the window's size and state, kept across a reload
     srv.visit_inputs = visit_inputs or (lambda: globals()["visit_inputs"](srv.views))   # tests pass a fake
     srv.live_builder = live_builder or (lambda: __import__("live_local").build())      # tests pass a fake
     srv.visits_file = visits_file or SITE_VISITS_FILE
@@ -2936,6 +2938,90 @@ def native_handle(win):
         return None
 
 
+WINDOW_STATE_FILE = ROOT / "results" / "control_room_window.json"
+
+
+def _placement_type():
+    import ctypes
+    from ctypes import wintypes
+
+    class Placement(ctypes.Structure):
+        _fields_ = [("length", wintypes.UINT), ("flags", wintypes.UINT), ("showCmd", wintypes.UINT),
+                    ("ptMin", wintypes.POINT), ("ptMax", wintypes.POINT), ("rc", wintypes.RECT)]
+    return Placement
+
+
+def get_window_state(hwnd):
+    """{maximized, fullscreen, rect: [left, top, right, bottom] of the normal (not maximized) window} for a window, or None.
+    Windows only. Full screen means the title bar is gone (what the window's full-screen toggle does)."""
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        P = _placement_type()
+        wp = P()
+        wp.length = ctypes.sizeof(P)
+        u = ctypes.windll.user32
+        u.GetWindowPlacement.argtypes = [wintypes.HWND, ctypes.POINTER(P)]
+        u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        if not u.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+            return None
+        style = u.GetWindowLongW(hwnd, -16) & 0xFFFFFFFF          # GWL_STYLE
+        return {"maximized": wp.showCmd == 3, "fullscreen": not (style & 0xC00000),    # SW_SHOWMAXIMIZED, WS_CAPTION
+                "rect": [wp.rc.left, wp.rc.top, wp.rc.right, wp.rc.bottom]}
+    except Exception:
+        return None
+
+
+def set_window_state(hwnd, state):
+    """Put a window back where get_window_state found it (position and size, maximized or not). Returns True when done.
+    A full-screen state is not handled here: the caller toggles full screen."""
+    if sys.platform != "win32" or not hwnd or not state or state.get("fullscreen"):
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        left, top, right, bottom = [int(v) for v in state["rect"]]
+        if right - left < 300 or bottom - top < 200:
+            return False
+        P = _placement_type()
+        wp = P()
+        wp.length = ctypes.sizeof(P)
+        wp.showCmd = 3 if state.get("maximized") else 1
+        wp.ptMin.x = wp.ptMin.y = wp.ptMax.x = wp.ptMax.y = -1
+        wp.rc.left, wp.rc.top, wp.rc.right, wp.rc.bottom = left, top, right, bottom
+        u = ctypes.windll.user32
+        u.SetWindowPlacement.argtypes = [wintypes.HWND, ctypes.POINTER(P)]
+        return bool(u.SetWindowPlacement(hwnd, ctypes.byref(wp)))      # Windows keeps it on a screen that still exists
+    except Exception:
+        return False
+
+
+def save_window_state(srv, path=None):
+    """Remember the window just before a reload (nothing when there is no app window, e.g. in a browser)."""
+    try:
+        state = srv.window_state() if srv.window_state else None
+        if state:
+            Path(path or WINDOW_STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass            # a reload must never fail because the window state could not be saved
+
+
+def take_window_state(path=None):
+    """The state saved by the last reload (read once, then forgotten), or None."""
+    p = Path(path or WINDOW_STATE_FILE)
+    try:
+        state = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    return state if isinstance(state, dict) and isinstance(state.get("rect"), list) and len(state["rect"]) == 4 else None
+
+
 def window_available():
     try:
         import webview  # noqa: F401
@@ -2944,8 +3030,9 @@ def window_available():
         return False
 
 
-def run_window(srv, url):
-    """Show the app in its own window; closing the window stops the server."""
+def run_window(srv, url, state=None):
+    """Show the app in its own window; closing the window stops the server.
+    state: the window as it was before a reload (see get_window_state); None opens the usual 1500 x 950 window."""
     import webview
     try:
         webview.settings["ALLOW_DOWNLOADS"] = True
@@ -2954,10 +3041,22 @@ def run_window(srv, url):
     windows_identity()
     win = webview.create_window("Control Room", url, width=1500, height=950, min_size=(900, 600))
     srv.on_quit = win.destroy
+    srv.window_state = lambda: get_window_state(native_handle(win))
+
+    def shown():
+        hwnd = native_handle(win)
+        set_window_icon(hwnd)
+        if state and state.get("fullscreen"):
+            try:
+                win.toggle_fullscreen()
+            except Exception:
+                pass
+        elif state:
+            set_window_state(hwnd, state)
     try:
-        win.events.shown += lambda: set_window_icon(native_handle(win))
+        win.events.shown += shown
     except Exception:
-        pass   # older pywebview: no events, the window keeps the default icon
+        pass   # older pywebview: no events, the window keeps the default icon and size
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     webview.start()          # blocks until the window is closed
     srv.shutdown()
@@ -2987,7 +3086,7 @@ def main():
     use_window = not (args.browser or args.no_browser) and window_available()
     if use_window:
         print("Control Room starting in its own window...")
-        run_window(srv, url)
+        run_window(srv, url, take_window_state() if args.restarted else None)
         print("Stopped.")
         return
 

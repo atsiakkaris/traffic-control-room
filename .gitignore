@@ -35,3 +35,4 @@ reports/swarco_meeting_questions.docx
 
 # per-PC shortcut made by tools/make_shortcut.py (holds this PC's paths)
 Control Room.lnk
+results/control_room_window.json

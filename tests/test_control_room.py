@@ -770,7 +770,7 @@ def test_the_app_has_its_own_icon_and_windows_identity(tmp_path):
     assert cr.set_window_icon(hwnd=1, icon=tmp_path / "missing.ico") is False             # no icon file: nothing happens
     assert cr.native_handle(object()) is None                                            # not a pywebview window: no handle
     src = Path(cr.__file__).read_text(encoding="utf-8")
-    assert "windows_identity()" in src and "set_window_icon(native_handle(win))" in src
+    assert "windows_identity()" in src and "set_window_icon(hwnd)" in src and "hwnd = native_handle(win)" in src
 
 
 def test_make_shortcut_points_at_the_app_window_with_the_icon_and_app_id():
@@ -814,6 +814,7 @@ def test_routes_tab_adds_live_times_and_finds_the_fastest_route(tmp_path):
         assert len(calls) == 1                                                          # the feed is read once, then kept 30 s
         page = urllib.request.urlopen(base + "/routes").read().decode("utf-8")
         assert '"has_network": true' in page and "A->B" in page
+        assert "REFRESH_MS = 60000" in page and "setInterval(autoRefresh, REFRESH_MS)" in page      # re-times what is on screen every minute
         assert "map.on('click'" in page and "doubleClickZoom:false" in page                         # a click on empty map clears the selection
         if shutil.which("node"):
             (tmp_path / "r.js").write_text(page.split("<script>", 1)[1].rsplit("</script>", 1)[0], encoding="utf-8")
@@ -838,3 +839,54 @@ def test_routes_tab_without_saved_omnia_data_says_what_to_do(tmp_path):
         assert code == 404 and "Wiring" in out["error"]
     finally:
         srv.shutdown()
+
+
+# ── reload keeps the window ──────────────────────────────────────────────────
+
+def test_window_state_is_saved_for_the_reload_and_read_once(tmp_path):
+    f = tmp_path / "w.json"
+    state = {"maximized": True, "fullscreen": False, "rect": [10, 20, 1500, 950]}
+
+    class Fake:
+        window_state = staticmethod(lambda: state)
+    cr.save_window_state(Fake, f)
+    assert cr.take_window_state(f) == state and not f.exists()                    # read once, then forgotten
+    assert cr.take_window_state(f) is None
+    f.write_text("[1, 2]", encoding="utf-8")
+    assert cr.take_window_state(f) is None                                        # not a window state: ignored
+
+    class NoWindow:
+        window_state = None
+    cr.save_window_state(NoWindow, f)                                             # browser mode: nothing to save
+    assert not f.exists()
+
+    class Broken:
+        window_state = staticmethod(lambda: 1 / 0)
+    cr.save_window_state(Broken, f)                                               # a reload never fails over this
+    assert not f.exists()
+    assert cr.set_window_state(None, state) is False and cr.get_window_state(None) is None
+
+
+def test_reload_saves_the_window_state_before_starting_the_new_copy(tmp_path, monkeypatch):
+    f = tmp_path / "w.json"
+    monkeypatch.setattr(cr, "WINDOW_STATE_FILE", f)
+    started = []
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv", page_builder=lambda: ("", {}),
+                         paths_provider=dict, views={}, db_file=tmp_path / "none.db", choose_path=None)
+    srv.window_state = lambda: {"maximized": False, "fullscreen": False, "rect": [100, 80, 1300, 900]}
+    srv.spawn = lambda argv: started.append(f.exists())                         # the file must exist by the time the copy starts
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        req = urllib.request.Request(base + "/api/restart", data=b"{}", method="POST",
+                                     headers={"Origin": base, "Content-Type": "application/json"})
+        assert urllib.request.urlopen(req).status == 200
+        for _ in range(50):
+            if started:
+                break
+            threading.Event().wait(0.1)
+        assert started == [True] and cr.take_window_state()["rect"] == [100, 80, 1300, 900]
+    finally:
+        srv.shutdown()
+    src = Path(cr.__file__).read_text(encoding="utf-8")
+    assert "take_window_state() if args.restarted else None" in src               # only a reload restores; a normal start opens as usual

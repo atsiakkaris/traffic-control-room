@@ -73,7 +73,7 @@ sensor whose contract is active and that failed 80% of its last 20 runs also get
 no contract on record says so; one whose contract ended says a failure is expected. Bluetooth sensors get their triangulation
 verdict as the sentence. Rules: [docs/how-the-checks-work.md](docs/how-the-checks-work.md#9-the-popup-sentence).
 
-**Reload app (top bar).** Restarts the Control Room with the latest code and the local database, for when files changed or you copied in a newer `history.db`; nothing is fetched from the live feed or OMNIA (that is *Refresh*). The window closes and reopens within a few seconds; flags and notes are already saved.
+**Reload app (top bar).** Restarts the Control Room with the latest code and the local database, for when files changed or you copied in a newer `history.db`; nothing is fetched from the live feed or OMNIA (that is *Refresh*). The window closes and reopens within a few seconds, in the same place and size (or maximized, or full screen) as it was; flags and notes are already saved.
 
 **Notes on sensors.** Click a sensor on the Traffic Detection, Bluetooth or VMS tab (or a Bluetooth sensor on the Paths
 tab) and write in the *Note* box of its popup; it saves by itself and the sensor gets an orange N badge on the map. Notes are kept in
@@ -95,7 +95,9 @@ name, or click a node on the map) and get the fastest chain of paths between the
 minutes, length, average speed and the paths used (drawn on the map with direction arrows). *Add paths*: type or click paths in order and
 get the total; each path must start where the one before ends, and the tab says where two do not join. Only live readings are used: a
 path with no reading is never guessed, it is left out of a fastest route and called out in a chain, so a total is never quietly short; a
-warning shows when the live feed is more than 20 minutes old. It works from the saved OMNIA data (Wiring tab, *Fetch from OMNIA*), so
+warning shows when the live feed is more than 20 minutes old. The tab refreshes by itself every minute (while it is visible): the route or
+chain on screen is re-timed in place, keeping the selected alternative and the map view, with an "Updated hh:mm:ss" line; if a refresh
+fails the old numbers stay and the line says so. It works from the saved OMNIA data (Wiring tab, *Fetch from OMNIA*), so
 paths with no start or end node there cannot be used (the tab lists them), and look-alike nodes with the same name within 100 m count as
 one place.
 
