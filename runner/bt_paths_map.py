@@ -1272,6 +1272,7 @@ var QA_MODE = {json.dumps(bool(include_live_data))};
 // Short or narrow windows start with the summary cards, legend and review panel collapsed.
 var SMALL_Q = '(max-height: 1000px), (max-width: 1100px)';
 var FEATURES = {features_json};
+function fmtMMSS(v) {{ var t = Math.round(v), r = t % 60; return Math.floor(t / 60) + ':' + (r < 10 ? '0' : '') + r + ' min'; }}
 var SENSORS  = {sensors_json};
 var REF_SENSORS = {ref_json};
 var DUPLICATE_GROUPS = {duplicate_groups_json};
@@ -1700,7 +1701,7 @@ FEATURES.forEach(function(f) {{
   if (f.live) {{
     var spd = f.live.speed_kmh, tt = f.live.travel_time_s;
     detailHtml += '<br>Speed: ' + (spd === -1 ? '<span style="color:#c0392b">malfunctioning</span>' : (spd != null ? spd + ' km/h' : '&#8212;'));
-    detailHtml += '<br>Travel time: ' + (tt != null ? tt + ' s' : '&#8212;');
+    detailHtml += '<br>Travel time: ' + (tt != null ? fmtMMSS(tt) : '&#8212;');
     detailHtml += '<br><span style="color:#888;font-size:11px">as of ' + f.live.last_seen + '</span>';
   }} else if (QA_MODE) {{
     detailHtml += '<br><span style="color:#888;font-size:11px">No live speed/travel-time data recorded</span>';
@@ -1762,7 +1763,7 @@ FEATURES.forEach(function(f) {{
     if (dqc.last) {{
       detailHtml += '<br><span style="color:#888;font-size:11px">Last stored values: ' +
                     (dqc.last.speed_kmh != null ? dqc.last.speed_kmh + ' km/h' : '&#8212;') + ', ' +
-                    (dqc.last.travel_time_s != null ? dqc.last.travel_time_s + ' s' : '&#8212;') +
+                    (dqc.last.travel_time_s != null ? fmtMMSS(dqc.last.travel_time_s) : '&#8212;') +
                     ' (' + dqc.last.at + ')</span>';
     }}
   }} else if (dqc) {{

@@ -158,7 +158,7 @@ function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.cla
 function nicDay(ms){ return new Date(ms).toLocaleDateString('en-GB', {timeZone:'Asia/Nicosia', day:'2-digit', month:'2-digit'}); }
 function clock(d){ var ms = d ? new Date(d).getTime() : NaN; if (isNaN(ms)) return '-'; var t = new Date(ms).toLocaleTimeString('en-GB', {timeZone:'Asia/Nicosia', hour:'2-digit', minute:'2-digit'}); return nicDay(ms) === nicDay(Date.now()) ? t : nicDay(ms) + ' ' + t; }
 function ago(ms){ var m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; }
-function ttext(s){ if (s == null) return ''; s = Math.round(s); return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + (s % 60 ? (s % 60) + ' s' : ''); }
+function ttext(s){ if (s == null) return ''; s = Math.round(s); var r = s % 60; return Math.floor(s / 60) + ':' + (r < 10 ? '0' : '') + r + ' min'; }
 function reading(q){ return q ? (Math.round(q.speed_kmh * 10) / 10) + ' km/h' + (q.travel_time_s != null ? ', ' + ttext(q.travel_time_s) : '') : ''; }
 function tip(title, sub){ var s = document.createElement('span'); s.className = 'tip'; var a = document.createElement('div'); a.appendChild(document.createElement('b')).textContent = title; s.appendChild(a); if (sub){ var b = document.createElement('div'); b.textContent = sub; s.appendChild(b); } return s; }
 function reporting(p){ return p && p.speed_kmh != null && p.speed_kmh >= 0; }

@@ -2416,8 +2416,8 @@ function fmtSpeed(v) {
 function fmtFlow(v)  { return (v===null||v===undefined) ? null : v+' veh/hr'; }
 function fmtTT(v) {
   if (v===null||v===undefined) return null;
-  var mins=Math.floor(v/60), secs=Math.round(v%60);
-  return (mins>0?mins+'m ':'')+secs+'s';
+  var t=Math.round(v), mins=Math.floor(t/60), secs=t%60;
+  return mins+':'+(secs<10?'0':'')+secs+' min';
 }
 
 /* -- Contract filter + not-live state ----------------------------- */
