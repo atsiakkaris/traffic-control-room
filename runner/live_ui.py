@@ -32,7 +32,8 @@ _MAP_HEAD = (
     '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
     '<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"/>'
     '<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>'
-    '<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>')
+    '<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>'
+    '<script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>')
 
 _CSS = """
 <style>
@@ -478,15 +479,71 @@ function initMap(){
   ['paths','bt','vms'].forEach(function(k){ LAY[k] = L.layerGroup().addTo(MAP); });
   drawMapHead();
 }
+/* Paths often run over the same road (a path and its reverse, or a short leg inside a long route), so the line on top hides the rest.
+   Like the Bluetooth paths map: hovering lists every path under the cursor, and clicking again steps to the next one. */
+function pathSub(u){ return u.rep ? reading(u.live) : (u.quiet ? 'No reading (often silent)' : 'No reading'); }
+function mPerDeg(lat){ return [110574, 111320 * Math.cos(lat * Math.PI / 180)]; }
+function distSeg(p, a, b){
+  var k = mPerDeg(p.lat), ax = (a.lng - p.lng) * k[1], ay = (a.lat - p.lat) * k[0], bx = (b.lng - p.lng) * k[1], by = (b.lat - p.lat) * k[0];
+  var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+  return Math.hypot(ax + dx * t, ay + dy * t);
+}
+// Compass direction of a path from its first to its last point.
+function compass(s){
+  var pts = s.getLatLngs(); if (pts.length < 2) return '';
+  var k = mPerDeg(pts[0].lat), a = pts[0], b = pts[pts.length - 1];
+  var deg = (Math.atan2((b.lng - a.lng) * k[1], (b.lat - a.lat) * k[0]) * 180 / Math.PI + 360) % 360;
+  return ['↑ N', '↗ NE', '→ E', '↘ SE', '↓ S', '↙ SW', '← W', '↖ NW'][Math.round(deg / 45) % 8];
+}
+// Keys of the shown paths passing within about 5 pixels of the point.
+function stackAt(ll){
+  var tol = Math.max(15, 5 * 40075016 * Math.cos(ll.lat * Math.PI / 180) / (256 * Math.pow(2, MAP.getZoom())));
+  var out = [];
+  Object.keys(SHAPES).forEach(function(k){
+    var s = SHAPES[k], u = M.U[k];
+    if (!u || u.kind !== 'path' || !LAY.paths.hasLayer(s)) return;
+    var pts = s.getLatLngs();
+    for (var i = 0; i < pts.length - 1; i++){ if (distSeg(ll, pts[i], pts[i + 1]) <= tol){ out.push(k); return; } }
+  });
+  return out.sort(function(a, b){ return M.U[a].name < M.U[b].name ? -1 : (M.U[a].name > M.U[b].name ? 1 : 0); });
+}
+function stackTip(key, ll){
+  var ks = stackAt(ll), u = M.U[key];
+  if (ks.length < 2) return tip(u.name, pathSub(u));
+  var s = document.createElement('span'); s.className = 'tip';
+  s.appendChild(el('div', null, ks.length + ' paths overlap here - click to cycle')).style.fontWeight = '700';
+  ks.slice(0, 8).forEach(function(k){
+    var v = M.U[k], row = el('div', null, '• ' + v.name + ' (' + compass(SHAPES[k]) + '): ' + pathSub(v));
+    if (k === (sel || HLKEY)) row.style.fontWeight = '700';
+    s.appendChild(row);
+  });
+  if (ks.length > 8) s.appendChild(el('div', null, '... and ' + (ks.length - 8) + ' more (zoom in to separate them)'));
+  return s;
+}
+function pathClick(key, ll){
+  var ks = stackAt(ll), cur = sel || HLKEY, i = ks.indexOf(cur);
+  var next = ks.length > 1 && i >= 0 ? ks[(i + 1) % ks.length] : key;
+  openPanel(next);
+  if (SHAPES[key] && SHAPES[key].setTooltipContent) SHAPES[key].setTooltipContent(stackTip(next, ll));
+}
 function drawMap(){
   if (!live) return; initMap(); if (!MAP) return;
   Object.keys(M.U).forEach(function(key){
     var u = M.U[key], s = SHAPES[key], col = colorOf(u);
     if (u.kind === 'path'){
       var src = u.live && Array.isArray(u.live.coords) && u.live.coords.length > 1 ? u.live.coords : null;
-      if (!s && src){ s = L.polyline(src, {weight:3, bubblingMouseEvents:false}); s.on('click', function(){ openPanel(key); }); s.bindTooltip(tip(u.name), {sticky:true}); s.addTo(LAY.paths); SHAPES[key] = s; }
-      if (s) s.setTooltipContent(tip(u.name, u.rep ? reading(u.live) : (u.quiet ? 'No reading (often silent)' : 'No reading')));
-      if (s){ if (key === HLKEY) s.setStyle({color:'#facc15', weight:7, opacity:1, dashArray:null}); else s.setStyle({color:col, weight: u.state === 'up' ? 3 : 5, opacity: u.state === 'up' ? 0.7 : 0.95, dashArray: u.state === 'never' ? '6,6' : null}); if (u.state !== 'up' && key !== HLKEY) s.bringToFront(); }
+      if (!s && src){
+        s = L.polyline(src, {weight:3, bubblingMouseEvents:false});
+        s.on('click', function(e){ pathClick(key, e.latlng); });
+        s.on('mouseover', function(e){ s.setTooltipContent(stackTip(key, e.latlng)); });
+        s.bindTooltip(tip(u.name), {sticky:true}); s.addTo(LAY.paths); SHAPES[key] = s;
+        // Small arrowheads along the line show which way the path runs (first point to last), as on the Bluetooth paths map.
+        if (L.polylineDecorator && L.Symbol){
+          s._dec = L.polylineDecorator(s, {patterns:[{offset:20, repeat:80, symbol:L.Symbol.arrowHead({pixelSize:9, headAngle:40,
+            pathOptions:{color:'#222', fillColor:'#222', fillOpacity:0.85, weight:0, interactive:false}})}]}).addTo(LAY.paths);
+        }
+      }
+      if (s){ if (key === HLKEY) s.setStyle({color:'#facc15', weight:7, opacity:1, dashArray:null}); else s.setStyle({color:col, weight: u.state === 'up' ? 3 : 5, opacity: u.state === 'up' ? 0.7 : 0.95, dashArray: u.state === 'never' ? '6,6' : null}); if (u.state !== 'up' && key !== HLKEY) s.bringToFront(); if (s._dec) s._dec.bringToFront(); }
     } else if (u.kind === 'bt' && u.lat != null){
       if (!s){ s = L.circleMarker([u.lat, u.lon], {radius:7, weight:2, color:'#fff', fillOpacity:1, bubblingMouseEvents:false}); s.on('click', function(){ openPanel(key); }); s.bindTooltip(tip(u.name)); s.addTo(LAY.bt); SHAPES[key] = s; }
       s.setTooltipContent(tip(u.name, u.reason));
@@ -509,7 +566,7 @@ function highlight(key){
   HLKEY = key; if (EPS && MAP){ MAP.removeLayer(EPS); } EPS = null;
   drawMap();
   var s = key && SHAPES[key]; if (!s || !MAP) return;
-  s.bringToFront();
+  s.bringToFront(); if (s._dec) s._dec.bringToFront();
   var pts = s.getLatLngs(); if (pts.length > 1){ EPS = L.layerGroup([endMark(pts[0], 'A'), endMark(pts[pts.length - 1], 'B')]).addTo(MAP); }
 }
 function showOnMap(u){
