@@ -821,11 +821,53 @@ step — it only sends an email.
 
 ## 11. Extending the system
 
-Both documented in `README.md`'s "Adding Endpoints and Groups" section, but
-in short: **adding an endpoint** to an existing group is a pure
+In short: **adding an endpoint** to an existing group is a pure
 `endpoints.yaml` edit. **Adding a whole new sensor group** touches three
 files — `ui_labels.yaml` (visual metadata), `endpoints.yaml` (what to test),
 and `tests.py` (a new check function registered in `REGISTRY`, only if the
 group needs custom per-sensor status parsing). Nothing in `report.py`,
 `digest.py`, or the map JS needs to change — they're all driven off
 `GROUP_META` and the DB's `group_name` column.
+
+### Adding an endpoint to an existing group
+
+Add an entry under the group in `config/endpoints.yaml`:
+
+```yaml
+- name: My New Endpoint
+  path: MyEndpointPath
+  expected_status: 200
+  max_response_ms: 5000
+  checks:
+    - valid_xml
+    - feed_freshness
+```
+
+For live endpoints that track per-sensor health, add `health_check: my_check_name`
+(the check function that produces the health %). To store sensor results under a
+different group name than the parent group (for example Bluetooth Paths inside the
+Bluetooth group), add `sensor_group: "Other Group Name"`.
+
+Available checks: `valid_xml`, `feed_freshness`, `vms_controller_status`,
+`predefined_paths_count`, `bt_paths_speed_and_traveltime`, `bt_site_count`,
+`sensor_speed_status`.
+
+### Adding a new sensor group
+
+1. **`config/ui_labels.yaml`** — add a block under `groups:`:
+
+```yaml
+  Radars:
+    display:       "Radars"
+    color:         "#8b0000"
+    layer_key:     "radar"
+    map_label:     "Radars"
+    history_label: "Radars"
+    icon:          "ti-antenna"
+    icon_size:     24
+```
+
+2. **`config/endpoints.yaml`** — add the group with its endpoints (with `health_check` on live endpoints).
+3. **`runner/tests.py`** — add the check function for the group's live data and register it in `REGISTRY`.
+
+The next run picks the group up everywhere automatically.
