@@ -251,8 +251,8 @@ function runChain(auto){
   if (!auto){ out.textContent = ''; nx.textContent = ''; }
   if (!chain.length){ out.textContent = ''; nx.textContent = ''; routeLayer.clearLayers(); stamp(''); return; }
   return api('/api/routes/chain?ids=' + chain.join(',')).then(function(j){
-    out.textContent = ''; nx.textContent = ''; stamp();
-    drawFeed(j.measured); var r = j.result;
+    out.textContent = ''; nx.textContent = '';
+    drawFeed(j.measured); stamp(); var r = j.result;
     out.appendChild(el('div', 'sm', r.complete ? 'Total live time' : 'Total live time (see the notes)'));
     out.appendChild(el('div', 'total', fmt(r.seconds)));
     out.appendChild(el('div', 'sm', km(r.length_m) + ', ' + r.legs.length + (r.legs.length === 1 ? ' path' : ' paths') + (r.kmh ? ', about ' + r.kmh + ' km/h' : '')));
@@ -277,7 +277,10 @@ function clockNow(ms){ return new Date(ms).toLocaleTimeString('en-GB', {timeZone
 // stamp() = a fresh answer just arrived; stamp(text) = show that text instead (an error, or '' to clear).
 function stamp(text){
   var u = $('upd');
-  if (text === undefined){ updated = Date.now(); u.className = 'sm'; u.textContent = 'Updated ' + clockNow(updated) + ' - refreshes by itself every minute'; }
+  if (text === undefined){   // "Checked" = when this page last asked the feed; "newest data" = the feed's own measurement time, which only moves every few minutes
+    updated = Date.now(); u.className = 'sm';
+    u.textContent = 'Checked at ' + clockNow(updated) + (measured ? ', newest data from ' + clock(measured) : '') + ' - checks again every minute';
+  }
   else { u.className = text ? 'warn' : 'sm'; u.textContent = text; }
 }
 function autoRefresh(){

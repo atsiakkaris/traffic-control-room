@@ -96,7 +96,7 @@ minutes, length, average speed and the paths used (drawn on the map with directi
 get the total; each path must start where the one before ends, and the tab says where two do not join. Only live readings are used: a
 path with no reading is never guessed, it is left out of a fastest route and called out in a chain, so a total is never quietly short; a
 warning shows when the live feed is more than 20 minutes old. The tab refreshes by itself every minute (while it is visible): the route or
-chain on screen is re-timed in place, keeping the selected alternative and the map view, with an "Updated hh:mm:ss" line; if a refresh
+chain on screen is re-timed in place, keeping the selected alternative and the map view, with a "Checked at hh:mm:ss, newest data from hh:mm" line (the feed only publishes a new reading every 5 minutes, a few minutes late, so a check can return the same numbers); if a refresh
 fails the old numbers stay and the line says so. It works from the saved OMNIA data (Wiring tab, *Fetch from OMNIA*), so
 paths with no start or end node there cannot be used (the tab lists them), and look-alike nodes with the same name within 100 m count as
 one place.
