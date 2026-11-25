@@ -2759,9 +2759,18 @@ def save_csv(name, rows, folder=None, dest=None):
 class Server(ThreadingHTTPServer):
     """HTTP server that remembers built pages until results/history.db changes."""
 
+    def lock(self, name):
+        """One lock per page (or per cached result) instead of one for everything: building the Live tab must not make a click on
+        another tab wait, only a second request for the same page, which then gets the finished one."""
+        with self.locks_guard:
+            lk = self.locks.get(name)
+            if lk is None:
+                lk = self.locks[name] = threading.Lock()
+            return lk
+
     def cached(self, key, build, force=False):
         stamp = os.stat(self.db_file).st_mtime if os.path.exists(self.db_file) else 0
-        with self.build_lock:
+        with self.lock("page:" + key):
             hit = self.page_cache.get(key)
             if hit and hit[0] == stamp and not force:
                 return hit[1]
@@ -2774,7 +2783,7 @@ class Server(ThreadingHTTPServer):
         import bt_wiring
         import omnia_fetch
         stamps = tuple(os.stat(f).st_mtime if os.path.exists(f) else 0 for f in (self.snapshot_file, self.db_file))
-        with self.build_lock:
+        with self.lock("wiring"):
             hit = getattr(self, "_wiring", None)
             if hit and hit[0] == stamps:
                 return hit[1], hit[2]
@@ -2791,7 +2800,7 @@ class Server(ThreadingHTTPServer):
         import omnia_fetch
         import route_times
         stamps = tuple(os.stat(f).st_mtime if os.path.exists(f) else 0 for f in (self.snapshot_file, self.db_file))
-        with self.build_lock:
+        with self.lock("routes"):
             hit = getattr(self, "_routes", None)
             if hit and hit[0] == stamps:
                 return hit[1], hit[2]
@@ -2816,7 +2825,7 @@ class Server(ThreadingHTTPServer):
         if "bluetooth" not in self.views:
             return {}
         page = self.cached("bluetooth", lambda: self.sensor_builder("bluetooth"))
-        with self.build_lock:
+        with self.lock("details"):
             if getattr(self, "_details", (None, None))[0] is not page:
                 self._details = (page, sensor_details(page))
             return self._details[1]
@@ -2830,7 +2839,7 @@ class Server(ThreadingHTTPServer):
         """The Site visits inputs, rebuilt when the database or QA Locations.xlsx changes (notes are read per request)."""
         files = (self.db_file, ROOT / "QA Locations.xlsx")
         stamps = tuple(os.stat(f).st_mtime if os.path.exists(f) else 0 for f in files)
-        with self.build_lock:
+        with self.lock("visits"):
             hit = getattr(self, "_visits", None)
             if hit and hit[0] == stamps and not force:
                 return hit[1]
@@ -2839,11 +2848,18 @@ class Server(ThreadingHTTPServer):
             return data
 
     def warm(self):
-        """Build every page once, so the first browser load is instant."""
-        for key, build in [("map", lambda: self.page_builder()[0])] + \
-                          [(slug, (lambda s=slug: self.sensor_builder(s))) for slug in self.views]:
+        """Build every tab once in the background, so a click finds it ready. The first tab comes first, then the ones most likely
+        to be opened next. Each step is the same call the page's own request makes, so a request that arrives mid-way waits only
+        for its own page, never for the others."""
+        steps = [lambda: self.cached("map", lambda: self.page_builder()[0]),
+                 lambda: self.live_page(),
+                 lambda: self.wiring(),
+                 lambda: self.routes_network()]
+        steps += [(lambda s=slug: self.cached(s, lambda: self.sensor_builder(s))) for slug in self.views]
+        steps += [lambda: self.visits()]
+        for step in steps:
             try:
-                self.cached(key, build)
+                step()
             except Exception:
                 pass  # surfaced when the page is requested
 
@@ -2858,7 +2874,7 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
     srv.route_lock = threading.Lock()
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
-    srv.build_lock = threading.Lock()
+    srv.locks, srv.locks_guard = {}, threading.Lock()
     srv.review_file = review_file
     srv.notes_file = notes_file or SENSOR_NOTES_FILE
     srv.delete_log = delete_log

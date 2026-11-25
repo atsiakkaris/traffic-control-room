@@ -31,7 +31,10 @@ Verdicts per sensor (see VERDICTS):
 
 import json
 import math
+import os
 import re
+import sqlite3
+import threading
 from collections import defaultdict
 
 import bt_data_quality as dq
@@ -233,19 +236,91 @@ def judge_sensors(sensors, resolved, states):
 
 # ── loading + the one-call entry point ───────────────────────────────────────
 
+_RUNS_MEMO = {}
+_RUNS_LOCK = threading.Lock()
+
+
+def _db_stamp(conn):
+    """(file, modified time, size) of the database behind a connection, or None (an in-memory database has no file)."""
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        path = row[2] if row else ""
+        if not path:
+            return None
+        st = os.stat(path)
+        return (path, st.st_mtime_ns, st.st_size)
+    except (OSError, sqlite3.Error, IndexError, TypeError):
+        return None
+
+
 def load_run_statuses(conn, group=GROUP):
-    """({run_id: [status]}, {path_id: {run_id: {run_at, status, unrealistic}}}) for the newest runs."""
+    """({run_id: [status]}, {path_id: {run_id: {run_at, status, unrealistic}}}) for the newest runs.
+
+    Reading the 150 newest runs is the slowest step of every Bluetooth analysis (about 2 s on the real database) and several
+    tabs ask for the same thing, so the answer is kept until the database file changes. Callers get their own copy: the
+    analysis removes runs from it (skip_runs), which must never leak into the next caller."""
+    stamp = _db_stamp(conn)
+    if stamp is None:
+        return _load_run_statuses(conn, group)
+    with _RUNS_LOCK:
+        hit = _RUNS_MEMO.get((stamp, group))
+        if hit is None:
+            for k in [k for k in _RUNS_MEMO if k[0][0] == stamp[0]]:
+                del _RUNS_MEMO[k]                          # the file changed: forget what was read from the old one
+            hit = _RUNS_MEMO[(stamp, group)] = _load_run_statuses(conn, group)
+        per_run, per_path = hit
+        return {r: list(v) for r, v in per_run.items()}, defaultdict(dict, {p: dict(v) for p, v in per_path.items()})
+
+
+_RUN_COLS = "run_id, run_at, sensor_id, status, data"
+
+
+def _recent_rows(conn, group):
+    """(run ids newest first, their rows) the fast way, or None when the runs table is not there to ask.
+
+    The plain way (_scan_rows) finds the newest runs by grouping all of the group's rows (322,000 on the real database) and
+    then scans them again for the rows: about 2.2 s. Here the small `runs` table gives a cut-off time a margin of runs back,
+    and one pass over the index (group, sensor, run_at) reads only the rows from that time on, about 0.1 s. The newest
+    LOOKBACK_RUNS runs are then picked exactly as before (by their earliest row time), so the result is the same."""
+    margin = 20                                   # extra runs read in case some runs have no rows for this group
+    while True:
+        try:
+            cut = conn.execute("SELECT run_at FROM runs ORDER BY run_at DESC LIMIT 1 OFFSET ?",
+                               (LOOKBACK_RUNS + margin - 1,)).fetchone()
+            rows = conn.execute(f"SELECT {_RUN_COLS} FROM sensor_results WHERE group_name=?" + (" AND run_at >= ?" if cut else ""),
+                                (group, cut[0]) if cut else (group,)).fetchall()
+        except sqlite3.OperationalError:
+            return None                           # no runs table (a bare database): use the plain way
+        first = {}
+        for row in rows:
+            if row[0] not in first or row[1] < first[row[0]]:
+                first[row[0]] = row[1]
+        if cut is None or len(first) >= LOOKBACK_RUNS:
+            break                                 # read everything, or enough runs to pick the newest from
+        margin *= 2                               # too many runs without rows for this group: reach further back
+    run_ids = sorted(first, key=lambda r: first[r], reverse=True)[:LOOKBACK_RUNS]
+    keep = set(run_ids)
+    return run_ids, [row for row in rows if row[0] in keep]
+
+
+def _scan_rows(conn, group):
     run_ids = [r[0] for r in conn.execute(
         "SELECT run_id FROM sensor_results WHERE group_name=? GROUP BY run_id ORDER BY MIN(run_at) DESC LIMIT ?",
         (group, LOOKBACK_RUNS))]
+    if not run_ids:
+        return run_ids, []
+    marks = ",".join("?" * len(run_ids))
+    return run_ids, conn.execute(f"SELECT {_RUN_COLS} FROM sensor_results WHERE group_name=? AND run_id IN ({marks})",
+                                 (group, *run_ids)).fetchall()
+
+
+def _load_run_statuses(conn, group=GROUP):
+    run_ids, rows = _recent_rows(conn, group) or _scan_rows(conn, group)
     per_run = {r: [] for r in run_ids}      # newest first: run ids are random UUIDs, not a clock
     per_path = defaultdict(dict)
     if not run_ids:
         return per_run, per_path
-    marks = ",".join("?" * len(run_ids))
-    for run_id, run_at, sid, status, data in conn.execute(
-            f"SELECT run_id, run_at, sensor_id, status, data FROM sensor_results "
-            f"WHERE group_name=? AND run_id IN ({marks})", (group, *run_ids)):
+    for run_id, run_at, sid, status, data in rows:
         unrealistic = False
         if data:
             try:

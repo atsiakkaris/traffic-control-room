@@ -5,6 +5,7 @@ Database helpers — SQLite-backed test history.
 import json
 import sqlite3
 import os
+import threading
 from datetime import datetime, timezone
 
 DB_PATH = os.environ.get("DB_PATH", "results/history.db")
@@ -97,6 +98,7 @@ _SCHEMA = """
 # while skipping the repeated reflection. Keyed by path so tests that point
 # DB_PATH at a fresh file still get migrated.
 _SCHEMA_APPLIED = set()
+_SCHEMA_LOCK = threading.Lock()
 
 
 def get_connection():
@@ -104,9 +106,11 @@ def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     if DB_PATH not in _SCHEMA_APPLIED:
-        conn.executescript(_SCHEMA)
-        _migrate(conn)
-        _SCHEMA_APPLIED.add(DB_PATH)
+        with _SCHEMA_LOCK:                       # two threads opening the first connection at once must not both migrate
+            if DB_PATH not in _SCHEMA_APPLIED:
+                conn.executescript(_SCHEMA)
+                _migrate(conn)
+                _SCHEMA_APPLIED.add(DB_PATH)
     return conn
 
 

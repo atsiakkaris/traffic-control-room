@@ -894,3 +894,57 @@ def test_reload_saves_the_window_state_before_starting_the_new_copy(tmp_path, mo
         srv.shutdown()
     src = Path(cr.__file__).read_text(encoding="utf-8")
     assert "take_window_state() if args.restarted else None" in src               # only a reload restores; a normal start opens as usual
+
+
+# ── warm-up and locking ──────────────────────────────────────────────────────
+
+def test_warm_builds_every_tab_in_the_background(tmp_path):
+    built = []
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv",
+                         page_builder=lambda: built.append("map") or ("<map>", {}), paths_provider=dict,
+                         views={"bluetooth": ("Bluetooth", "Bluetooth", 100), "vms": ("VMS", "VMS", 100)},
+                         sensor_builder=lambda slug: built.append(slug) or "<%s>" % slug, db_file=tmp_path / "none.db",
+                         snapshot_file=tmp_path / "none.json", live_builder=lambda: built.append("live") or "<live>",
+                         visit_inputs=lambda: built.append("visits") or [], omnia_urls={}, choose_path=None)
+    srv.warm()
+    assert built == ["map", "live", "bluetooth", "vms", "visits"]                  # first tab first, then the likeliest next ones
+    assert srv.page_cache["map"][1] == "<map>" and srv.page_cache["bluetooth"][1] == "<bluetooth>"
+    assert any(k.startswith("live:") for k in srv.page_cache)
+    srv.warm()
+    assert built == ["map", "live", "bluetooth", "vms", "visits"]                  # nothing is built twice
+
+
+def test_a_slow_page_build_does_not_make_other_pages_wait_and_one_page_is_built_once(tmp_path):
+    started, release, built = threading.Event(), threading.Event(), []
+
+    def slow_map():
+        built.append("map")
+        started.set()
+        release.wait(20)
+        return "<map>", {}
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv", page_builder=slow_map,
+                         paths_provider=dict, views={"vms": ("VMS", "VMS", 100)}, sensor_builder=lambda slug: "<vms>",
+                         db_file=tmp_path / "none.db", omnia_urls={}, choose_path=None)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    got = []
+
+    def fetch(path):
+        got.append((path, urllib.request.urlopen(base + path, timeout=30).read().decode("utf-8")))
+    try:
+        a = threading.Thread(target=fetch, args=("/map",))
+        b = threading.Thread(target=fetch, args=("/map",))                         # a second request for the same page
+        a.start()
+        assert started.wait(10)
+        b.start()
+        import time
+        t0 = time.time()
+        fetch("/sensors/vms")                                                       # another page: must not wait for the map
+        assert time.time() - t0 < 5 and ("/sensors/vms", "<vms>") in got
+        release.set()
+        a.join(20)
+        b.join(20)
+        assert built == ["map"] and [h for p, h in got if p == "/map"] == ["<map>", "<map>"]     # built once, both got it
+    finally:
+        release.set()
+        srv.shutdown()

@@ -505,6 +505,18 @@ the unread paths that would complete one. `find_gaps` (Gaps mode, `/api/routes/g
 (`_all_from`) over *places* (`_places`: sites within `same_m`, default 150 m, are merged, since a replacement sensor beside an old one is not
 a neighbour) and reports pairs within the radius whose chain is `min_ratio` times the straight line or missing, by the worse direction.
 All pure functions; the page only draws.
+**Speed of the Control Room's tabs:** reading the 150 newest runs (`bt_sensor_suspects.load_run_statuses`, about 2 s on the real database)
+is shared by the Live, Bluetooth sensors and Site visits tabs, so it is remembered per database version (file path, modified time and
+size) and each caller gets its own copy; an in-memory database is never remembered. The read itself (`_recent_rows`) takes a cut-off time
+a margin of 20 runs back from the small `runs` table and reads only the rows from then on through the existing (group, sensor,
+run_at) index, then picks the newest runs exactly as the plain scan (`_scan_rows`, kept as the fallback for a database with no `runs`
+table) does: 0.14 s instead of 2.2 s on the real database, with identical rows (a test compares them on awkward cases). The server prepares every tab in a background thread at start (`Server.warm`: Paths, Live, Wiring, Routes, the sensor tabs, then Site
+visits), each through the same call its own request uses, and keeps one lock per page (`Server.lock`) instead of one for everything, so
+a click on a tab that is still being built waits only for that tab (a second request for the same page waits for the first build and
+shares it). `db.get_connection` applies the schema under a lock so two threads opening the first connection cannot both migrate.
+`bt_paths_map._overlap_fraction` (the "running
+alongside" test behind path colours and duplicate detection) skips pairs that are further apart than the threshold in latitude or
+longitude before working out the exact distance; it gives the same answers as the plain test (a test compares them).
 
 **Popup sentence** (`runner/sensor_status.py`, pure): `qa.load_api_sensors` now also reads each sensor's run history and merges
 `history_fields()` (current state, fault age, last status, 20-run window, lifetime tier, all taken from `stability.py`) into the

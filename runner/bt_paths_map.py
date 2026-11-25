@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -107,13 +108,28 @@ def _bboxes_overlap(a, b, buffer_deg):
             a_min_lon - buffer_deg <= b_max_lon and b_min_lon - buffer_deg <= a_max_lon)
 
 
+_DEG_PER_M = 180 / (math.pi * 6_371_000)     # degrees of latitude per metre (the radius qa._haversine_m uses)
+
+
 def _overlap_fraction(samples_a, samples_b, threshold_m):
+    """Share of samples_a within threshold_m of some point of samples_b.
+
+    Same answer as testing every pair with the haversine distance, much faster: a pair that is further apart than the
+    threshold in latitude (or in longitude, scaled by cos(latitude), with a small margin) cannot be within it, so the exact
+    distance is only worked out for the few pairs that are close."""
     if not samples_a:
         return 0.0
-    close = sum(
-        1 for pa in samples_a
-        if any(_haversine_m(pa[0], pa[1], pb[0], pb[1]) <= threshold_m for pb in samples_b)
-    )
+    lat_lim = threshold_m * _DEG_PER_M * 1.01
+    close = 0
+    for pa in samples_a:
+        la, lo = pa[0], pa[1]
+        lon_lim = lat_lim / max(math.cos(math.radians(min(abs(la) + lat_lim, 89.0))), 0.01) * 1.02
+        for pb in samples_b:
+            if abs(pb[0] - la) > lat_lim or abs(pb[1] - lo) > lon_lim:
+                continue
+            if _haversine_m(la, lo, pb[0], pb[1]) <= threshold_m:
+                close += 1
+                break
     return close / len(samples_a)
 
 
