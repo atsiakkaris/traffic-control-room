@@ -496,6 +496,12 @@ route -> the edit call with the forward speeds and nodes swapped. Stops at the f
 VMS already carries its own) and switches `show_projects` on, which is what makes `live_ui`'s `projOf` print Contract lines. The published
 build never calls `add_projects`, so no project name can reach the public page from this path. `stale_note` compares the workbook's
 modified time with the newest `sensor_projects.updated_at`. The page is cached on the database and workbook mtimes.
+**Routes tab** (`/routes`, `tools/routes_page.py`, `runner/route_times.py`): `build_network` joins the saved OMNIA snapshot (path -> start/end
+node) with the drawn geometry; nodes with the same name within 100 m share a site id (look-alike nodes), and drawn paths without nodes are
+listed as unlinked. `live_times` reads the public live feed (`/api/routes/*` fetch it server-side, kept 30 s) and counts a reading only when
+speed >= 0 and travel time > 0. `chain_total` adds picked paths and reports non-joining or unread legs; `fastest` is Dijkstra over
+paths with a reading only, alternatives found by forbidding each path of the best route in turn, and when no timed route exists it names
+the unread paths that would complete one. All pure functions; the page only draws.
 
 **Popup sentence** (`runner/sensor_status.py`, pure): `qa.load_api_sensors` now also reads each sensor's run history and merges
 `history_fields()` (current state, fault age, last status, 20-run window, lifetime tier, all taken from `stability.py`) into the

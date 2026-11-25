@@ -90,6 +90,15 @@ print-ready pages; *Save for Google My Maps (KML)* can be imported into Google M
 prints the day lists. Click a day's heading to fold or unfold it (*Fold all days* / *Unfold all days* do all at once; folded days still print open). Each day also has *Open in Google Maps* links that drive through its stops. The order uses straight-line
 distance and nothing is sent anywhere until you open a Google link.
 
+**Route times (Control Room, *Routes*).** Adds up the **live** travel times of Bluetooth paths. *A to B*: pick two existing nodes (type a
+name, or click a node on the map) and get the fastest chain of paths between them, plus up to three alternatives, each with its total in
+minutes, length, average speed and the paths used (drawn on the map with direction arrows). *Add paths*: type or click paths in order and
+get the total; each path must start where the one before ends, and the tab says where two do not join. Only live readings are used: a
+path with no reading is never guessed, it is left out of a fastest route and called out in a chain, so a total is never quietly short; a
+warning shows when the live feed is more than 20 minutes old. It works from the saved OMNIA data (Wiring tab, *Fetch from OMNIA*), so
+paths with no start or end node there cannot be used (the tab lists them), and look-alike nodes with the same name within 100 m count as
+one place.
+
 **Live tab with contracts (Control Room, *Live*).** The Control Room has its own copy of the dashboard's Live tab (it reads the same public
 live feed, every 5 minutes) with one addition the published page never has: each sensor's **contract (project)**. A VMS sign, a
 Bluetooth sensor and, for a Bluetooth path, the sensors at its two ends show a *Contract* line in the side panel (with *(contract ended)*

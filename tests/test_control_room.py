@@ -339,7 +339,7 @@ def test_sensor_pages_talk_to_the_app_shell_not_a_second_tab():
 
 def test_shell_has_one_frame_per_view_and_a_refresh_button(tmp_path):
     shell = cr.build_shell(cr.sensor_views(), "?path=7")
-    assert shell.count("<iframe") == 4 + len(cr.sensor_views())        # paths + wiring + site visits + live + sensor tabs
+    assert shell.count("<iframe") == 5 + len(cr.sensor_views())        # paths + wiring + site visits + live + routes + sensor tabs
     assert 'data-t="wiring"' in shell and 'data-t="visits"' in shell and 'data-t="live"' in shell
     assert 'src="/map?path=7"' in shell and 'id="rf"' in shell and "crShow" in shell
 
@@ -779,3 +779,62 @@ def test_make_shortcut_points_at_the_app_window_with_the_icon_and_app_id():
     assert ms.pythonw().name.lower() in ("pythonw.exe", "python.exe", "python", "pythonw")
     src = Path(ms.__file__).read_text(encoding="utf-8")
     assert "PKEY_AppUserModel_ID" in src and "SetIconLocation" in src and "control_room.py" in src
+
+
+# ── routes tab ───────────────────────────────────────────────────────────────
+
+def test_routes_tab_adds_live_times_and_finds_the_fastest_route(tmp_path):
+    import shutil
+    import subprocess
+    import urllib.request
+    nodes = [{"id": 1, "name": "A", "lat": 35.00, "lon": 33.0}, {"id": 2, "name": "B", "lat": 35.01, "lon": 33.0},
+             {"id": 3, "name": "C", "lat": 35.02, "lon": 33.0}]
+    paths = [{"id": 10, "name": "A->B", "start": 1, "end": 2}, {"id": 11, "name": "B->C", "start": 2, "end": 3},
+             {"id": 12, "name": "A->C", "start": 1, "end": 3}]
+    feed = {str(p["id"]): {"name": p["name"], "coords": [[35.0, 33.0], [35.02, 33.0]]} for p in paths}
+    (tmp_path / "snap.json").write_text(json.dumps({"fetched_at": "2026-11-25T10:00:00+00:00", "nodes": nodes, "paths": paths}), encoding="utf-8")
+    live = {"common_measurement_timestamp": "2026-11-25T10:00:00",
+            "paths": [{"id": 10, "speed_kmh": 40, "travel_time_s": 100}, {"id": 11, "speed_kmh": 40, "travel_time_s": 200},
+                      {"id": 12, "speed_kmh": 40, "travel_time_s": 400}]}
+    calls = []
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv", page_builder=lambda: ("", {}),
+                         paths_provider=lambda: feed, views={}, db_file=tmp_path / "none.db", snapshot_file=tmp_path / "snap.json",
+                         omnia_urls={}, live_feed=lambda: calls.append(1) or live, choose_path=None)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        code, out = _req(base + "/api/routes/chain?ids=10,11")
+        assert code == 200 and out["result"]["seconds"] == 300 and out["result"]["complete"] and out["measured"] == "2026-11-25T10:00:00"
+        assert out["next"] == []                                                        # nothing starts at C
+        code, out = _req(base + "/api/routes/chain?ids=10")
+        assert [n["id"] for n in out["next"]] == ["11"]
+        code, out = _req(base + "/api/routes/plan?from=1&to=3")
+        assert code == 200 and [r["seconds"] for r in out["routes"]] == [300, 400]
+        assert _req(base + "/api/routes/plan?from=x&to=3")[0] == 400
+        assert len(calls) == 1                                                          # the feed is read once, then kept 30 s
+        page = urllib.request.urlopen(base + "/routes").read().decode("utf-8")
+        assert '"has_network": true' in page and "A->B" in page
+        assert "map.on('click'" in page and "doubleClickZoom:false" in page                         # a click on empty map clears the selection
+        if shutil.which("node"):
+            (tmp_path / "r.js").write_text(page.split("<script>", 1)[1].rsplit("</script>", 1)[0], encoding="utf-8")
+            chk = subprocess.run([shutil.which("node"), "--check", str(tmp_path / "r.js")], capture_output=True, text=True)
+            assert chk.returncode == 0, chk.stderr
+        shell = urllib.request.urlopen(base + "/").read().decode("utf-8")
+        assert 'data-t="routes"' in shell and 'id="f-routes"' in shell
+    finally:
+        srv.shutdown()
+
+
+def test_routes_tab_without_saved_omnia_data_says_what_to_do(tmp_path):
+    import urllib.request
+    srv = cr.make_server(port=0, review_file=tmp_path / "r.json", delete_log=tmp_path / "l.csv", page_builder=lambda: ("", {}),
+                         paths_provider=dict, views={}, db_file=tmp_path / "none.db", snapshot_file=tmp_path / "none.json",
+                         omnia_urls={}, live_feed=lambda: {"paths": []}, choose_path=None)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        assert '"has_network": false' in urllib.request.urlopen(base + "/routes").read().decode("utf-8")
+        code, out = _req(base + "/api/routes/chain?ids=1")
+        assert code == 404 and "Wiring" in out["error"]
+    finally:
+        srv.shutdown()

@@ -1197,9 +1197,9 @@ html,body{margin:0;height:100%;background:#0f1720;font:13px Arial,sans-serif}
 #back.on{display:block}
 #back:hover{background:#3498db}
 </style></head><body>
-<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><a data-t="visits" title="Plan on-site checks of sensors whose position or existence is in doubt">Site visits</a><a data-t="live" title="The Live tab of the dashboard, with each sensor's contract added (only here, never on the published page)">Live</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
+<div id="bar"><b>Control Room</b><a data-t="paths" class="on">Paths</a><a data-t="wiring" title="Are the paths wired to the sensors they are drawn between?">Wiring</a><a data-t="visits" title="Plan on-site checks of sensors whose position or existence is in doubt">Site visits</a><a data-t="live" title="The Live tab of the dashboard, with each sensor's contract added (only here, never on the published page)">Live</a><a data-t="routes" title="Add up the live travel times of paths along a route, or find the fastest way between two nodes">Routes</a><span class="sep">Sensor locations:</span>__TABS__<span class="sp"></span>__BADGE__<a id="rl" title="Restart the Control Room with the latest code and the local database. Nothing is fetched from the live feed or OMNIA.">Reload app</a><a id="rf" title="Read the live feed and OMNIA again (like run.bat), then reload every tab. Takes a few minutes.">Refresh</a><a id="qt" title="Stop the Control Room (the console closes by itself)">Quit</a></div>
 <button id="back" title="Go back to where you were: the list keeps its filter, sort, scroll and ticked paths"></button>
-<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe><iframe id="f-visits"></iframe><iframe id="f-live" allow="fullscreen"></iframe>__FRAMES__</div>
+<div id="stage"><iframe id="f-paths" class="on" src="/map__Q__"></iframe><iframe id="f-wiring"></iframe><iframe id="f-visits"></iframe><iframe id="f-live" allow="fullscreen"></iframe><iframe id="f-routes"></iframe>__FRAMES__</div>
 <script>
 var cur = 'paths';
 function frame(t) { return document.getElementById('f-' + t); }
@@ -1212,7 +1212,7 @@ function render() {
   });
 }
 // Called by the pages inside the frames: show a tab, optionally aimed at a path or a spot.
-var backTo = null, NAMES = {wiring: 'Wiring', visits: 'Site visits', live: 'Live', paths: 'Paths'};
+var backTo = null, NAMES = {wiring: 'Wiring', visits: 'Site visits', live: 'Live', routes: 'Routes', paths: 'Paths'};
 function showBack() {
   var b = document.getElementById('back');
   b.className = backTo && backTo !== cur ? 'on' : '';
@@ -1223,7 +1223,7 @@ window.crShow = function(t, o) {
   o = o || {};
   backTo = o.from || (t === backTo ? null : backTo);     // a jump from a page offers the way back; arriving there clears it
   var f = frame(t);
-  if (t === 'wiring' || t === 'visits' || t === 'live') {
+  if (t === 'wiring' || t === 'visits' || t === 'live' || t === 'routes') {
     if (!f.getAttribute('src')) f.src = '/' + t;
   } else if (t !== 'paths') {
     var q = o.lat != null ? '?lat=' + o.lat + '&lon=' + o.lon + (o.path ? '&path=' + encodeURIComponent(o.path) : '') : '';
@@ -1964,6 +1964,38 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send(500, f"Could not build the Live page: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/routes":
+            try:
+                import routes_page
+                net, fetched = self.server.routes_network()
+                page = routes_page.build_routes_page(net, fetched)
+            except Exception as exc:
+                return self._send(500, f"Could not build the Routes page: {exc}".encode("utf-8"), "text/plain")
+            return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+        if path in ("/api/routes/chain", "/api/routes/plan"):
+            import route_times
+            q = parse_qs(parts.query)
+            net, _fetched = self.server.routes_network()
+            if not net:
+                return self._send(404, {"error": "No saved OMNIA data: fetch it on the Wiring tab first."})
+            try:
+                live = self.server.route_live()
+            except Exception as exc:
+                return self._send(502, {"error": "the live feed did not answer (%s)" % type(exc).__name__})
+            times, _silent, measured = route_times.live_times(live)
+            if path == "/api/routes/chain":
+                ids = [i for i in (q.get("ids") or [""])[0].split(",") if i.strip()]
+                result = route_times.chain_total(net, [i.strip() for i in ids], times)
+                legs = result["legs"]
+                nxt = route_times.next_paths(net, legs[-1]["b"], times) if legs else []
+                return self._send(200, {"result": result, "next": [n for n in nxt if n["id"] not in {l["id"] for l in legs}], "measured": measured})
+            try:
+                a, b = int((q.get("from") or [""])[0]), int((q.get("to") or [""])[0])
+            except ValueError:
+                return self._send(400, {"error": "from and to must be node numbers"})
+            out = route_times.fastest(net, times, a, b)
+            out["measured"] = measured
+            return self._send(200, out)
         if path == "/visits":
             try:
                 kinds, groups, per_day, show_done = visit_params(parts.query, self.server.views)
@@ -2595,6 +2627,15 @@ def _can_fetch(omnia):
     return bool(omnia.get("nodes") and omnia.get("paths"))
 
 
+def fetch_live_feed():
+    """The public live feed's JSON (the same one the Live tab reads)."""
+    import httpx
+    import live_ui
+    r = httpx.get(live_ui.LIVE_FEED_URL, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
 def current_sensors():
     import db
     return db.fetch_sensor_coords().get("Bluetooth", {})
@@ -2731,6 +2772,31 @@ class Server(ThreadingHTTPServer):
             self._wiring = (stamps, result, snap)
             return result, snap
 
+    def routes_network(self):
+        """(network, snapshot time) for the Routes tab from the saved OMNIA snapshot and the drawn paths, or (None, None)."""
+        import omnia_fetch
+        import route_times
+        stamps = tuple(os.stat(f).st_mtime if os.path.exists(f) else 0 for f in (self.snapshot_file, self.db_file))
+        with self.build_lock:
+            hit = getattr(self, "_routes", None)
+            if hit and hit[0] == stamps:
+                return hit[1], hit[2]
+            snap = omnia_fetch.load_snapshot(self.snapshot_file)
+            net = route_times.build_network(snap, self.paths_provider()) if snap else None
+            fetched = (snap or {}).get("fetched_at")
+            self._routes = (stamps, net, fetched)
+            return net, fetched
+
+    def route_live(self):
+        """The live feed's JSON for the Routes tab, kept 30 seconds so a few clicks do not each hit the feed."""
+        with self.route_lock:
+            hit = getattr(self, "_route_live", None)
+            if hit and time.monotonic() - hit[0] < 30:
+                return hit[1]
+            data = self.live_feed()
+            self._route_live = (time.monotonic(), data)
+            return data
+
     def sensor_details(self):
         """Details of every Bluetooth sensor, rebuilt only when the Bluetooth page itself was rebuilt."""
         if "bluetooth" not in self.views:
@@ -2772,8 +2838,10 @@ def make_server(port=DEFAULT_PORT, review_file=REVIEW_FILE, notes_file=None, del
                 page_builder=None, paths_provider=None, post=None,
                 sensor_builder=None, views=None, db_file=None, snapshot_file=None, omnia_urls=None, allow_edit=None, edit_log=None, rename_log=None, omnia_post=None, omnia_get=None, create_log=None,
                 fetch_omnia=None, wiring_inputs=None, allow_delete=None, delete_url=None, downloads_dir=None, choose_path=choose_save_path,
-                visit_inputs=None, visits_file=None, choose_open=choose_open_path, visit_start="env", live_builder=None):
+                visit_inputs=None, visits_file=None, choose_open=choose_open_path, visit_start="env", live_builder=None, live_feed=None):
     srv = Server(("127.0.0.1", port), Handler)
+    srv.live_feed = live_feed or fetch_live_feed        # the public live feed; tests pass a fake
+    srv.route_lock = threading.Lock()
     srv.db_file = db_file or DB_FILE
     srv.page_cache = {}
     srv.build_lock = threading.Lock()
