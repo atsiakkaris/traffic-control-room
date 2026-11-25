@@ -209,3 +209,119 @@ def next_paths(network, site, times):
     """Paths that start at a site, for 'continue with ...': [{id, name, seconds}] by id."""
     out = [_leg(network, pid, times) for pid, p in network["paths"].items() if p["a"] == site]
     return sorted(out, key=lambda l: int(l["id"]) if l["id"].isdigit() else 0)
+
+
+# ── gaps: nearby nodes the paths do not join sensibly ────────────────────────
+
+GAP_RADIUS_M = 3000        # only nodes this close in a straight line are compared
+GAP_MIN_RATIO = 3.0        # a chain this many times longer than the straight line counts as a detour
+GAP_MAX_ROWS = 600
+GAP_SAME_PLACE_M = 150      # nodes this close are one place: a replacement sensor beside the old one
+
+
+def _all_from(network, start, out):
+    """Shortest chain length (metres) from one site to every site it can reach, and the path used to get into each."""
+    dist, prev, done, queue = {start: 0.0}, {}, set(), [(0.0, start)]
+    while queue:
+        d, site = heapq.heappop(queue)
+        if site in done:
+            continue
+        done.add(site)
+        for pid in out.get(site, ()):
+            p = network["paths"][pid]
+            nd = d + p["length_m"]
+            if p["b"] not in done and nd < dist.get(p["b"], math.inf):
+                dist[p["b"]] = nd
+                prev[p["b"]] = pid
+                heapq.heappush(queue, (nd, p["b"]))
+    return dist, prev
+
+
+def _chain(network, prev, start, goal):
+    legs, site = [], goal
+    while site != start:
+        pid = prev[site]
+        legs.append(pid)
+        site = network["paths"][pid]["a"]
+    return legs[::-1]
+
+
+def _places(network, same_m):
+    """{site: place id} - sites within same_m of each other are one place (a replacement sensor put up beside an old one)."""
+    sites = network["sites"]
+    ids = sorted(sites)
+    parent = {s: s for s in ids}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            if haversine_m((sites[a]["lat"], sites[a]["lon"]), (sites[b]["lat"], sites[b]["lon"])) <= same_m:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[max(ra, rb)] = min(ra, rb)
+    return {s: find(s) for s in ids}
+
+
+def find_gaps(network, radius_m=GAP_RADIUS_M, min_ratio=GAP_MIN_RATIO, limit=GAP_MAX_ROWS, same_m=GAP_SAME_PLACE_M):
+    """Pairs of places close together whose shortest chain of paths is far longer than the straight line (or does not exist).
+
+    Nodes within same_m of each other are one place: a sensor added next to an old one is a replacement, not a neighbour,
+    so such a pair is never listed and a chain may pass from one to the other. Lengths only: live readings do not matter,
+    a path with no reading still joins two places. Each pair is judged in both directions and reported by its worse one.
+    Returns {rows, total, none, detour}; rows are worst first: no chain at all (closest pairs first), then by how many times
+    longer the chain is. Row: {a, b (place ids: the lowest node id of each; the worse direction runs a to b), a_names,
+    b_names, straight_m, chain_m (None = no chain), ratio (None = no chain), legs [path ids], back: {chain_m, ratio}}."""
+    sites = network["sites"]
+    place = _places(network, same_m)
+    members = {}
+    for s, pl in place.items():
+        members.setdefault(pl, []).append(s)
+    paths = {}
+    for pid, p in network["paths"].items():
+        pa, pb = place[p["a"]], place[p["b"]]
+        if pa != pb:                                  # a path between two sensors of one place joins nothing new
+            paths[pid] = dict(p, a=pa, b=pb)
+    net2 = {"sites": {pl: sites[pl] for pl in members}, "paths": paths}
+    out = {}
+    for pid, p in paths.items():
+        out.setdefault(p["a"], []).append(pid)
+    ids = sorted(members)
+    runs = {}
+
+    def run(s):
+        if s not in runs:
+            runs[s] = _all_from(net2, s, out)
+        return runs[s]
+
+    def apart(x, y):
+        return min(haversine_m((sites[i]["lat"], sites[i]["lon"]), (sites[j]["lat"], sites[j]["lon"]))
+                   for i in members[x] for j in members[y])
+
+    rows = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            straight = apart(a, b)
+            if straight > radius_m:
+                continue
+            base = max(straight, 50.0)
+            res = {}
+            for x, y in ((a, b), (b, a)):
+                d = run(x)[0].get(y)
+                res[(x, y)] = {"chain_m": None if d is None else round(d), "ratio": None if d is None else round(d / base, 2)}
+            bad = [k for k, v in res.items() if v["ratio"] is None or v["ratio"] >= min_ratio]
+            if not bad:
+                continue
+            worst = sorted(bad, key=lambda k: (res[k]["ratio"] is not None, -(res[k]["ratio"] or 0)))[0]
+            back = res[(worst[1], worst[0])]
+            rows.append({"a": worst[0], "b": worst[1], "straight_m": round(straight), "chain_m": res[worst]["chain_m"],
+                         "a_names": [sites[m]["name"] for m in members[worst[0]]], "b_names": [sites[m]["name"] for m in members[worst[1]]],
+                         "ratio": res[worst]["ratio"],
+                         "legs": [] if res[worst]["chain_m"] is None else _chain(net2, run(worst[0])[1], worst[0], worst[1]),
+                         "back": back})
+    rows.sort(key=lambda r: (r["ratio"] is not None, r["straight_m"] if r["ratio"] is None else -r["ratio"]))
+    none = sum(1 for r in rows if r["ratio"] is None)
+    return {"rows": rows[:limit], "total": len(rows), "none": none, "detour": len(rows) - none}

@@ -501,7 +501,10 @@ node) with the drawn geometry; nodes with the same name within 100 m share a sit
 listed as unlinked. `live_times` reads the public live feed (`/api/routes/*` fetch it server-side, kept 30 s) and counts a reading only when
 speed >= 0 and travel time > 0. `chain_total` adds picked paths and reports non-joining or unread legs; `fastest` is Dijkstra over
 paths with a reading only, alternatives found by forbidding each path of the best route in turn, and when no timed route exists it names
-the unread paths that would complete one. All pure functions; the page only draws.
+the unread paths that would complete one. `find_gaps` (Gaps mode, `/api/routes/gaps`) runs one length-only Dijkstra per site
+(`_all_from`) over *places* (`_places`: sites within `same_m`, default 150 m, are merged, since a replacement sensor beside an old one is not
+a neighbour) and reports pairs within the radius whose chain is `min_ratio` times the straight line or missing, by the worse direction.
+All pure functions; the page only draws.
 
 **Popup sentence** (`runner/sensor_status.py`, pure): `qa.load_api_sensors` now also reads each sensor's run history and merges
 `history_fields()` (current state, fault age, last status, 20-run window, lifetime tier, all taken from `stability.py`) into the

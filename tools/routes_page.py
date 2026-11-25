@@ -24,6 +24,7 @@ h2{margin:0 0 4px;font-size:17px;color:#fff}
 .seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0}
 .seg button.on{background:#2e86c1;color:#fff;border-color:#2e86c1}
 label{display:block;margin:8px 0 3px;color:#8fa3b3;font-size:12px}
+select{width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #2e4358;background:#0f1720;color:#fff;font:13px Arial}
 input{width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #2e4358;background:#0f1720;color:#fff;font:13px Arial}
 button.act{background:#2e86c1;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;font:13px Arial;margin:8px 6px 0 0}
 button.act.sec{background:#34495e}
@@ -39,6 +40,7 @@ td.n{text-align:right;white-space:nowrap}
 .warn{background:#4b3a12;color:#ffe9a8;border-radius:6px;padding:7px 10px;margin:6px 0;font-size:12px;line-height:1.4}
 .chip{display:inline-block;margin:3px 4px 0 0;padding:5px 9px;border-radius:999px;background:#243342;color:#cfd8dc;cursor:pointer;font-size:12px;border:0}
 .chip:hover{background:#34495e}
+.chip.on{background:#2e86c1;color:#fff}
 .x{background:none;border:0;color:#e57373;cursor:pointer;font-size:15px}
 .ep{width:22px;height:22px;border-radius:50%;background:#1a1a2e;color:#fff;border:2px solid #fff;text-align:center;line-height:18px;font-weight:700;font-size:11px}
 .ep.a{background:#1d9e75}
@@ -48,7 +50,7 @@ td.n{text-align:right;white-space:nowrap}
 <h2>Route times</h2>
 <div class="sm">Adds up the <b>live</b> travel times of Bluetooth paths. Only existing nodes can be picked, and a path with no live reading is never guessed: it is left out and called out.</div>
 <div id="feed" class="feed">Reading the live feed...</div>
-<div class="seg"><button id="m-ab" class="on">A to B</button><button id="m-ch">Add paths</button></div>
+<div class="seg"><button id="m-ab" class="on">A to B</button><button id="m-ch">Add paths</button><button id="m-gp">Gaps</button></div>
 <div id="ab">
   <label for="from">From (a node, or click one on the map)</label><input id="from" list="siteList" autocomplete="off" placeholder="Type a node name">
   <label for="to">To</label><input id="to" list="siteList" autocomplete="off" placeholder="Type a node name">
@@ -59,6 +61,16 @@ td.n{text-align:right;white-space:nowrap}
   <input id="addp" list="pathList" autocomplete="off" placeholder="Path ID or name">
   <button class="act" id="add">Add path</button><button class="act sec" id="clr">Clear</button>
   <div id="next"></div>
+</div>
+<div id="gp" hidden>
+  <div class="sm">Nodes close together whose chain of paths is much longer than the straight line, or does not exist: a path may be missing there. Lengths only, live readings do not matter. Worst first.</div>
+  <div style="display:flex;gap:10px"><div style="flex:1"><label for="gr">Within (km)</label><input id="gr" type="number" min="0.5" max="10" step="0.5" value="3"></div>
+  <div style="flex:1"><label for="gx">Detour of at least</label><input id="gx" type="number" min="1.5" max="20" step="0.5" value="3"></div>
+  <div style="flex:1"><label for="gm" title="Nodes closer than this are one place: a replacement sensor beside the old one. They are never listed against each other and a chain may pass from one to the other.">Same place (m)</label><input id="gm" type="number" min="0" max="1000" step="25" value="150"></div></div>
+  <label for="gsort">Order</label><select id="gsort"><option value="worst">Worst first (no chain, then biggest detour)</option><option value="close">Closest nodes first</option></select>
+  <button class="act" id="gfind">Find gaps</button><button class="act sec" id="gcsv">Save list as CSV</button>
+  <div class="sm" id="gstat"></div>
+  <div id="gchips"></div>
 </div>
 <div id="upd" class="sm"></div>
 <div id="out"></div>
@@ -270,7 +282,7 @@ function stamp(text){
 }
 function autoRefresh(){
   if (refreshing || document.hidden) return;
-  var p = mode === 'ab' ? (A && B && routes.length ? plan(true) : null) : (chain.length ? runChain(true) : null);
+  var p = mode === 'ab' ? (A && B && routes.length ? plan(true) : null) : (mode === 'ch' && chain.length ? runChain(true) : null);   // Gaps use lengths, not live times: nothing to refresh
   if (!p) return;
   refreshing = true;
   p.then(function(){ refreshing = false; }, function(){ refreshing = false; });
@@ -283,17 +295,92 @@ map.on('click', function(){
   if (mode === 'ab'){
     if (!A && !B) return;
     setSite('A', null); setSite('B', null); routes = []; $('out').textContent = ''; routeLayer.clearLayers(); stamp('');
+  } else if (mode === 'gp'){
+    if (gsel) { gsel = null; gapLayer.clearLayers(); drawGaps(); }
   } else if (chain.length){ chain = []; runChain(); }
 });
 
+/* ---- gaps: nearby nodes the paths do not join sensibly ---- */
+var gaps = null, gsel = null, gfilter = {none:true, detour:true}, gapLayer = L.layerGroup().addTo(map);
+function gname(s){ return D.sites[s] ? D.sites[s].name : String(s); }
+function gkm(m){ return (m / 1000).toFixed(1) + ' km'; }
+function loadGaps(){
+  var out = $('out'); out.textContent = ''; $('gstat').textContent = ''; out.appendChild(el('div', 'sm', 'Looking for gaps...'));
+  api('/api/routes/gaps?radius=' + encodeURIComponent($('gr').value) + '&ratio=' + encodeURIComponent($('gx').value) + '&same=' + encodeURIComponent($('gm').value)).then(function(j){
+    gaps = j; gsel = null; gapLayer.clearLayers(); drawGaps();
+  }).catch(function(e){ out.textContent = ''; out.appendChild(el('div', 'warn', 'Could not look for gaps: ' + e.message)); });
+}
+function gapRows(){
+  var rows = gaps.rows.filter(function(r){ return r.ratio === null ? gfilter.none : gfilter.detour; });
+  if ($('gsort').value === 'close') rows = rows.slice().sort(function(x, y){ return x.straight_m - y.straight_m; });   // else the server's order: no chain first, then biggest detour
+  return rows;
+}
+function drawGaps(){
+  var out = $('out'), ch = $('gchips'); out.textContent = ''; ch.textContent = '';
+  [['none', 'No chain', gaps.none], ['detour', 'Detour', gaps.detour]].forEach(function(k){
+    var b = el('button', 'chip' + (gfilter[k[0]] ? ' on' : ''), k[1] + ' ' + k[2]);
+    b.onclick = function(){ gfilter[k[0]] = !gfilter[k[0]]; gsel = null; gapLayer.clearLayers(); drawGaps(); };
+    ch.appendChild(b);
+  });
+  var rows = gapRows();
+  if (!rows.length) out.appendChild(el('div', 'warn', gaps.total ? 'Nothing to show with these filters.' : 'No gaps found with these settings.'));
+  if (gaps.total > gaps.rows.length) out.appendChild(el('div', 'sm', 'Showing the worst ' + gaps.rows.length + ' of ' + gaps.total + '. Narrow the distance or raise the detour to see fewer.'));
+  rows.forEach(function(r){
+    var c = el('div', 'card' + (gsel === r ? ' on' : '')), top = el('div'), mid = el('div'), sub = el('div', 'sm');
+    top.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;gap:8px';
+    var lead = el('b', null, r.ratio === null ? 'No chain' : r.ratio.toFixed(1) + 'x detour'); if (r.ratio === null) lead.style.color = '#ff9b9b';
+    top.appendChild(lead); top.appendChild(el('span', 'sm', gkm(r.straight_m) + (r.chain_m === null ? ' straight' : ' vs ' + gkm(r.chain_m))));
+    mid.textContent = r.a_names.join(' / ') + ' to ' + r.b_names.join(' / ');   // a place with a replacement sensor shows both names
+    sub.textContent = (r.chain_m === null ? 'No chain of paths from the first to the second' :
+      r.legs.length === 1 ? 'One winding path' : r.legs.length + ' paths, through ' + gname(D.paths[r.legs[Math.floor(r.legs.length / 2)]].a)) +
+      '. The other way: ' + (r.back.chain_m === null ? 'no chain' : gkm(r.back.chain_m)) + '.';
+    c.appendChild(top); c.appendChild(mid); c.appendChild(sub);
+    c.onclick = function(){ gsel = r; drawGaps(); showGap(r); };
+    out.appendChild(c);
+  });
+}
+function showGap(r){
+  gapLayer.clearLayers(); var pts = [], a = D.sites[r.a], b = D.sites[r.b];
+  r.legs.forEach(function(id){
+    var c = D.paths[id] && D.paths[id].coords; if (!c || c.length < 2) return;
+    var l = L.polyline(c, {color:'#EF9F27', weight:6, opacity:0.95, interactive:false}).addTo(gapLayer);
+    if (L.polylineDecorator && L.Symbol) L.polylineDecorator(l, {patterns:[{offset:15, repeat:60, symbol:L.Symbol.arrowHead({pixelSize:10, headAngle:40, pathOptions:{color:'#222', fillColor:'#222', fillOpacity:0.9, weight:0, interactive:false}})}]}).addTo(gapLayer);
+    pts = pts.concat(c);
+  });
+  L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {color:'#E24B4A', weight:3, dashArray:'7 5', interactive:false}).addTo(gapLayer);
+  L.marker([a.lat, a.lon], {icon:epIcon('A', 'a'), interactive:false}).addTo(gapLayer);
+  L.marker([b.lat, b.lon], {icon:epIcon('B', ''), interactive:false}).addTo(gapLayer);
+  map.fitBounds(L.latLngBounds(pts.concat([[a.lat, a.lon], [b.lat, b.lon]])), {padding:[50, 50], maxZoom:16});
+}
+$('gfind').onclick = loadGaps;
+$('gsort').onchange = function(){ if (gaps){ gsel = null; gapLayer.clearLayers(); drawGaps(); } };
+$('gcsv').onclick = function(){
+  if (!gaps) return;
+  var rows = [['From', 'To', 'Straight line (km)', 'Chain of paths (km)', 'Times longer', 'Paths in the chain', 'Other direction chain (km)']];
+  gapRows().forEach(function(r){
+    rows.push([r.a_names.join(' / '), r.b_names.join(' / '),(r.straight_m / 1000).toFixed(2), r.chain_m === null ? 'none' : (r.chain_m / 1000).toFixed(2),
+               r.ratio === null ? 'none' : r.ratio, r.legs.join(' '), r.back.chain_m === null ? 'none' : (r.back.chain_m / 1000).toFixed(2)]);
+  });
+  var st = $('gstat'); st.textContent = 'Choose where to save in the dialog that opened (it may be behind this window)...';
+  fetch('/api/save-csv', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:'routes_gaps', rows:rows})})
+    .then(function(r){ return r.json(); })
+    .then(function(r){ st.textContent = r.cancelled ? 'Cancelled - nothing saved.' : r.path ? 'Saved to ' + r.path + (r.fallback ? ' (no Save dialog available, so the Downloads folder was used)' : '') : 'Could not save: ' + (r.error || 'unknown error'); })
+    .catch(function(e){ st.textContent = 'Could not save: ' + e; });
+};
+
 /* ---- mode ---- */
 function setMode(m){
-  mode = m; $('m-ab').className = m === 'ab' ? 'on' : ''; $('m-ch').className = m === 'ch' ? 'on' : '';
-  $('ab').hidden = m !== 'ab'; $('ch').hidden = m !== 'ch'; $('out').textContent = ''; routeLayer.clearLayers(); stamp('');
-  if (m === 'ch') runChain(); else if (A && B) plan();
+  mode = m;
+  ['ab', 'ch', 'gp'].forEach(function(k){ $('m-' + k).className = m === k ? 'on' : ''; $(k).hidden = m !== k; });
+  $('out').textContent = ''; routeLayer.clearLayers(); gapLayer.clearLayers(); stamp(''); $('feed').hidden = m === 'gp';
+  if (m === 'ab') drawPicks(); else pickMarks.clearLayers();
+  if (m === 'ch') runChain();
+  else if (m === 'ab'){ if (A && B) plan(); }
+  else if (gaps){ gsel = null; drawGaps(); } else loadGaps();
 }
 $('m-ab').onclick = function(){ setMode('ab'); };
 $('m-ch').onclick = function(){ setMode('ch'); };
+$('m-gp').onclick = function(){ setMode('gp'); };
 setInterval(function(){ drawFeed(); }, 30000);
 api('/api/routes/chain?ids=').then(function(j){ drawFeed(j.measured); }).catch(function(e){ $('feed').className = 'feed bad'; $('feed').textContent = 'Could not read the live feed: ' + e.message; });
 })();

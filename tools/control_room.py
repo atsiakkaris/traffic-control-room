@@ -1972,6 +1972,19 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send(500, f"Could not build the Routes page: {exc}".encode("utf-8"), "text/plain")
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/api/routes/gaps":
+            import route_times
+            q = parse_qs(parts.query)
+            try:
+                radius = min(max(float((q.get("radius") or ["3"])[0]), 0.2), 10) * 1000
+                ratio = min(max(float((q.get("ratio") or ["3"])[0]), 1.5), 20)
+                same = min(max(float((q.get("same") or ["150"])[0]), 0), 1000)
+            except ValueError:
+                return self._send(400, {"error": "radius, ratio and same must be numbers"})
+            net, _fetched = self.server.routes_network()
+            if not net:
+                return self._send(404, {"error": "No saved OMNIA data: fetch it on the Wiring tab first."})
+            return self._send(200, route_times.find_gaps(net, radius, ratio, same_m=same))
         if path in ("/api/routes/chain", "/api/routes/plan"):
             import route_times
             q = parse_qs(parts.query)
@@ -2653,7 +2666,7 @@ SNAPSHOT_FILE = ROOT / "results" / "omnia_snapshot.json"
 EDIT_LOG = ROOT / "results" / "omnia_edit_log.csv"
 RENAME_LOG = ROOT / "results" / "omnia_rename_log.csv"
 CREATE_LOG = ROOT / "results" / "omnia_create_log.csv"
-EXPORT_NAMES = ("bt_sensor_suspects", "bt_wiring")   # the only files the page may ask the server to write
+EXPORT_NAMES = ("bt_sensor_suspects", "bt_wiring", "routes_gaps")   # the only files the page may ask the server to write
 
 
 def default_csv_name(name):

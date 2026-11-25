@@ -812,6 +812,10 @@ def test_routes_tab_adds_live_times_and_finds_the_fastest_route(tmp_path):
         assert code == 200 and [r["seconds"] for r in out["routes"]] == [300, 400]
         assert _req(base + "/api/routes/plan?from=x&to=3")[0] == 400
         assert len(calls) == 1                                                          # the feed is read once, then kept 30 s
+        code, g = _req(base + "/api/routes/gaps?radius=3&ratio=1.5")                    # lengths only: no live feed needed
+        assert code == 200 and len(calls) == 1 and g["total"] == g["none"] + g["detour"] and isinstance(g["rows"], list)
+        assert _req(base + "/api/routes/gaps?radius=abc")[0] == 400
+        assert cr.save_csv("routes_gaps", [["a", 1]], tmp_path).read_bytes().decode("utf-8-sig").strip() == "a,1"          # the gap list can be exported
         page = urllib.request.urlopen(base + "/routes").read().decode("utf-8")
         assert '"has_network": true' in page and "A->B" in page
         assert "REFRESH_MS = 60000" in page and "setInterval(autoRefresh, REFRESH_MS)" in page      # re-times what is on screen every minute

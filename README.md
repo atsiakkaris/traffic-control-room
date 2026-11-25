@@ -101,6 +101,16 @@ fails the old numbers stay and the line says so. It works from the saved OMNIA d
 paths with no start or end node there cannot be used (the tab lists them), and look-alike nodes with the same name within 100 m count as
 one place.
 
+*Gaps* (third mode) looks for **missing paths**: pairs of nodes within a chosen distance (3 km by default) whose shortest chain of paths
+is at least N times longer than the straight line (3 by default), or does not exist. Lengths only, so a path with no live reading still
+counts as joined. Each pair is judged both ways and listed by its worse direction, with the chain length, the number of paths, the road
+node it passes through and the other direction's result; filter chips split *No chain* from *Detour*, and the list can be ordered worst
+first or closest nodes first. Clicking a row draws the chain in amber with arrows and a dashed red line for the straight gap; *Save list
+as CSV* exports it. It is a list of candidates to judge, not a verdict: a river, motorway or ring road can sit between two close nodes.
+Nodes within 150 m of each other (setting *Same place*) count as **one place**: a new sensor put up beside an old one that is running out of
+contract is a replacement, not a neighbour, so such a pair is never listed against each other, a chain may pass from one to the other, and a
+row shows both names ("old / new").
+
 **Live tab with contracts (Control Room, *Live*).** The Control Room has its own copy of the dashboard's Live tab (it reads the same public
 live feed, every 5 minutes) with one addition the published page never has: each sensor's **contract (project)**. A VMS sign, a
 Bluetooth sensor and, for a Bluetooth path, the sensors at its two ends show a *Contract* line in the side panel (with *(contract ended)*
