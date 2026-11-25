@@ -4,8 +4,17 @@
 //
 // Write calls honour dry-run mode: they are recorded and not sent.
 const Api = (function () {
-  const BASE = '/VmsDataService/VmsDataServiceHandler.ashx';
-  const state = { dry: false, log: [], fakeId: 9000 };
+  // The tool can run in a new tab opened from the OMNIA page (about:blank, same origin),
+  // so build absolute URLs from the OMNIA origin instead of relying on the page URL.
+  const ORIGIN = (function () {
+    try {
+      if (/^https?:$/.test(location.protocol)) return location.origin;
+      if (window.opener && /^https?:$/.test(window.opener.location.protocol)) return window.opener.location.origin;
+    } catch (e) { /* opener is on another origin */ }
+    return '';
+  })();
+  const BASE = ORIGIN + '/VmsDataService/VmsDataServiceHandler.ashx';
+  const state = { dry: false, log: [], fakeId: 9000, writes: 0 }; // writes = changes OMNIA accepted
   const WRITES = new Set(['SaveLayout', 'SaveVU', 'DeleteVU', 'DeleteLinkOnDeleteVu', 'DeleteLayout', 'LinkVu', 'DeleteLinkVu']);
 
   function url(fn, params) {
@@ -29,6 +38,8 @@ const Api = (function () {
     const text = await res.text();
     state.log.push({ fn, params, status: res.status, reply: text.slice(0, 120) });
     if (!res.ok) throw new Error(`${fn} failed: HTTP ${res.status}`);
+    // SaveLayout / SaveVU answer with an id when they worked and with a message when refused
+    if (WRITES.has(fn) && (fn !== 'SaveLayout' && fn !== 'SaveVU' ? true : /^\d+$/.test(text.trim()))) state.writes += 1;
     return text;
   }
 
@@ -127,5 +138,5 @@ const Api = (function () {
     return String(await send(b, a)).trim() === '1';
   }
 
-  return { state, getStyles, getLayouts, getLinks, saveLayout, saveVU, deleteVU, deleteLayout, linkVu, unlinkVu };
+  return { origin: ORIGIN, state, getStyles, getLayouts, getLinks, saveLayout, saveVU, deleteVU, deleteLayout, linkVu, unlinkVu };
 })();

@@ -437,6 +437,8 @@
     const d = S.drag; if (!d) return;
     const { W, H } = S.style, s = S.scale;
     let dx = Math.round((e.clientX - d.sx) / s), dy = Math.round((e.clientY - d.sy) / s);
+    // a plain click must not nudge a box: only start dragging after a few screen pixels
+    if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 5) return;
     if (!d.moved && !dx && !dy) return;
     if (!d.moved) { pushUndo(); d.moved = true; }
     const ids = new Set(d.orig.map((o) => o.uid));
@@ -559,52 +561,15 @@
         : `Create layout "${name}" on ${S.style.name} with ${S.boxes.length} boxes?`;
       if (!confirm(msg)) return;
     }
-    S.busy = true; Api.state.dry = S.dry; Api.state.log = [];
+    S.busy = true; Api.state.dry = S.dry; Api.state.log = []; Api.state.writes = 0;
     ui.status.textContent = S.dry ? 'DRY RUN — nothing is sent.\n' : 'Saving…\n';
     try {
-      let lid, existing;
-      if (existingEdit) {
-        lid = S.layoutId;
-        const cur = (await Api.getLayouts(S.style.id)).find((l) => l.id === lid);
-        existing = cur ? cur.boxes : [];
-        const meta = S.layouts.find((l) => l.id === lid);
-        if (meta && (meta.name !== name || meta.asStyle !== S.asStyle)) await Api.saveLayout({ id: lid, name, styleId: S.style.id, asStyle: S.asStyle });
-      } else {
-        lid = await Api.saveLayout({ id: -1, name, styleId: S.style.id, asStyle: S.asStyle });
-        const cur = S.dry ? null : (await Api.getLayouts(S.style.id)).find((l) => l.id === lid);
-        existing = cur ? cur.boxes : [{ vid: 1, type: 'Graphic', raw: null }]; // OMNIA creates a full-size pictogram box 1 by default
-      }
-      const address = '01';
-      const desired = S.boxes.map((b) => ({ ...b }));
-      const claimed = new Set();
-      if (existingEdit) {
-        desired.forEach((d) => { if (d.vid != null && existing.some((e) => e.vid === d.vid)) claimed.add(d.vid); else d.vid = null; });
-      } else {
-        desired.forEach((d) => { d.vid = null; d.raw = null; });
-        existing.forEach((e) => { const d = desired.find((x) => x.vid == null && x.type === e.type); if (d) { d.vid = e.vid; d.raw = e.raw || null; claimed.add(e.vid); } });
-      }
-      for (const e of existing.filter((x) => !claimed.has(x.vid))) await Api.deleteVU(lid, address, S.style.id, e.vid);
-      const idOf = new Map();
-      for (const d of desired) { const vid = await Api.saveVU(lid, address, S.style.id, d); idOf.set(d.uid, vid); }
-      // links that existed in OMNIA but were removed in the editor
-      if (existingEdit) {
-        for (const [a, b] of S.linkPairs || []) {
-          const ba = S.boxes.find((x) => x.vid === a), bb = S.boxes.find((x) => x.vid === b);
-          if (!ba || !bb) continue; // a deleted box loses its links with DeleteVU
-          const ga = groupOf(ba.uid);
-          if (ga >= 0 && ga === groupOf(bb.uid)) continue; // still linked
-          if (!(await Api.unlinkVu(S.style.id, lid, address, a, b))) throw new Error(`OMNIA would not remove the link between boxes ${a} and ${b}.`);
-        }
-      }
-      // links to create
-      for (const g of S.links) {
-        const ids = g.map((u) => idOf.get(u)).filter((v) => v != null).sort((a, b) => a - b);
-        for (let i = 1; i < ids.length; i++) {
-          let already = false;
-          if (!S.dry) { try { already = (await Api.getLinks(lid, address, ids[i])).some((k) => k.VirtualUnitID === ids[0]); } catch (e) { /* link below */ } }
-          if (!already) await Api.linkVu(S.style.id, lid, address, ids[i], ids[0]);
-        }
-      }
+      const meta = S.layouts.find((l) => l.id === S.layoutId);
+      const lid = await Sync.run(Api, {
+        styleId: S.style.id, address: '01', existingEdit, layoutId: S.layoutId, name, asStyle: S.asStyle,
+        metaChanged: !!meta && (meta.name !== name || meta.asStyle !== S.asStyle),
+        boxes: S.boxes, links: S.links, linkPairs: S.linkPairs || [], dry: S.dry,
+      });
       const describe = (c) => {
         const p = c.params || {};
         if (c.fn === 'SaveVU') { const v = p.vunit; return `box ${v.vUnitId === '-1' ? 'NEW' : '#' + v.vUnitId} ${v.custom.Type} ${v.StartX},${v.StartY} → ${v.EndX},${v.EndY}`; }
@@ -614,7 +579,18 @@
       ui.status.textContent = (S.dry ? 'DRY RUN — these calls would be sent:\n' : `Saved layout "${name}" (id ${lid}). Reopen the Layout/Style Designer to see it.\n`) + lines.join('\n');
       if (!S.dry) { await loadLayouts(lid); await selectLayout(String(lid)); }
     } catch (e) {
-      ui.status.textContent = 'STOPPED: ' + e.message + '\n\nCalls so far:\n' + Api.state.log.map((c) => `${c.fn} → ${c.status || 'dry'} ${c.reply || ''}`).join('\n') + '\n\nThe layout may be partly saved; check it in the designer.';
+      const changed = Api.state.writes > 0;
+      const state = e.rolledBack ? 'The half-made layout was removed again, so nothing was left behind.'
+        : e.rollbackFailed ? 'The layout was only partly saved and could NOT be cleaned up automatically; check it in the designer and delete it if it is incomplete.'
+        : changed ? 'Some changes were already saved before it stopped. Check the layout in the designer.' : 'Nothing was changed in OMNIA.';
+      let lead = 'STOPPED: ' + e.message;
+      if (/Default Value Management/i.test(e.message)) {
+        lead = 'OMNIA will not let this layout be changed because it is in use ("involved in Default Value Management operations"), '
+          + 'most likely as default content of a sign. ' + state
+          + '\n\nWhat you can do: use "Save as a copy" with a new name (this always works), '
+          + 'or free the layout in OMNIA first and then save again.';
+      } else lead += '\n' + state;
+      ui.status.textContent = lead + '\n\nOMNIA said / calls so far:\n' + Api.state.log.map((c) => `${c.fn} → ${c.status || 'dry'} ${c.reply || ''}`).join('\n');
     } finally { S.busy = false; Api.state.dry = false; }
   }
 
@@ -623,14 +599,15 @@
     if (!confirm(`Permanently delete layout "${S.name}"?\nThis cannot be undone. OMNIA refuses if signs use it.`)) return;
     try {
       Api.state.dry = S.dry; Api.state.log = [];
-      for (const b of S.boxes) if (b.vid != null) await Api.deleteVU(S.layoutId, '01', S.style.id, b.vid);
+      // highest id first: OMNIA renumbers the remaining boxes after each delete
+      for (const b of S.boxes.filter((x) => x.vid != null).sort((p, q) => q.vid - p.vid)) await Api.deleteVU(S.layoutId, '01', S.style.id, b.vid);
       await Api.deleteLayout(S.layoutId);
       say(S.dry ? 'DRY RUN: would delete the layout.' : 'Layout deleted.');
       if (!S.dry) { S.layoutId = null; S.boxes = []; await loadLayouts(); ui.layout.value = 'new'; refresh(); }
     } catch (e) { say('Delete failed: ' + e.message); } finally { Api.state.dry = false; }
   }
 
-  function close() { window.removeEventListener('keydown', onKey, true); window.removeEventListener('resize', fitScale); host.remove(); window.__vlt = null; }
+  function close() { window.removeEventListener('keydown', onKey, true); window.removeEventListener('resize', fitScale); host.remove(); window.__vlt = null; if (window.__vltTabMode) window.close(); }
   function open() { if (!document.body.contains(host)) document.body.append(host); fitScale(); ui.wrap.focus({ preventScroll: true }); }
 
   window.__vlt = { open, close, state: S };
@@ -638,13 +615,13 @@
   async function init() {
     ui.banner.style.display = 'none'; ui.retry.style.display = 'none';
     try {
-      if (!/^https?:$/.test(location.protocol)) throw new Error('This is not the OMNIA page. Log in to OMNIA first, then click the bookmark there (not on the install page).');
+      if (!Api.origin) throw new Error('This is not the OMNIA page. Log in to OMNIA first, then click the bookmark there (not on the install page).');
       S.styles = await Api.getStyles();
       if (!S.styles.length) throw new Error('OMNIA returned no drawable sign styles.');
       ui.style.replaceChildren(...S.styles.map((s) => el('option', { value: s.id, text: `${s.name} (${s.W}×${s.H})` })));
       const pref = S.styles.find((s) => s.W === 272) || S.styles[0];
       await selectStyle(pref.id);
-      say('Ready. Pick a preset and press "Build layout", or add boxes by hand. Tick "dry run" first if you want to see the calls without sending them.');
+      say((window.__vltNote ? window.__vltNote + '\n\n' : '') + 'Ready. Pick a preset and press "Build layout", or add boxes by hand. Tick "dry run" first if you want to see the calls without sending them.');
     } catch (e) {
       console.error('[VMS Layout Tool]', e);
       ui.banner.textContent = 'Could not load from OMNIA — ' + (e && e.message ? e.message : e) + ' (page: ' + location.origin + ')';
