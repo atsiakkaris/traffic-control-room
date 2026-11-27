@@ -94,6 +94,7 @@ Deleting paths and editing OMNIA are off by default. Everything is explained in 
 
 - **Checks:** every 6 hours, triggered by cron-job.org. You can also start the workflow from the GitHub Actions tab.
 - **Weekly digest email:** Mondays at 07:30 Cyprus time. It covers the past 7 days: sensors with no good runs, unstable ones, recoveries, retired sensors and the *Sensors by contract* census.
+- **Live feed alert email:** sent by `feed_alert.yml`, which the cyprus-live-traffic Worker triggers when the upstream feed has been frozen for 30+ minutes and again once it has been moving for another 30 minutes (`runner/feed_alert.py`, same Gmail sender as the digest). Recipients come from a `NOTIFICATIONS_LIST` repository variable (or secret) — addresses separated by commas, semicolons or new lines; it is separate from the digest's `NOTIFY_EMAIL`, and nothing is sent if it is empty. Times in the mail are Cyprus time and durations are `dd:hh:mm`.
 
 ---
 
@@ -107,7 +108,7 @@ Deleting paths and editing OMNIA are off by default. Everything is explained in 
 ├── docs/              Published pages (live.html, bt-paths-map.html) and guides
 ├── reports/           Generated dashboard (latest.html)
 ├── results/           history.db, the SQLite store
-├── .github/workflows/ daily_tests.yml, weekly_digest.yml
+├── .github/workflows/ daily_tests.yml, weekly_digest.yml, feed_alert.yml
 ├── index.html         Tabbed landing page (GitHub Pages root)
 └── *.bat              Local shortcuts (see Everyday tasks)
 ```

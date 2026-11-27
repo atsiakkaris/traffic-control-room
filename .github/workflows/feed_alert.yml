@@ -1,0 +1,44 @@
+name: Live Feed Alert Email
+
+on:
+  # Triggered by the cyprus-live-traffic Cloudflare Worker (workflow_dispatch via
+  # the GitHub API) when the upstream feed has been frozen for 30+ minutes, and
+  # again once it has been moving for another 30 minutes.
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "frozen or recovered"
+        required: true
+        type: choice
+        options:
+          - frozen
+          - recovered
+      detail:
+        description: "One line of context shown in the email"
+        required: false
+        default: ""
+
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Send alert
+        env:
+          KIND:          ${{ inputs.kind }}
+          DETAIL:        ${{ inputs.detail }}
+          GMAIL_USER:    ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:  ${{ secrets.GMAIL_APP_PW }}
+          # The recipient list is its own setting, separate from the digest's
+          # NOTIFY_EMAIL. A repository variable (visible and editable) wins over a
+          # secret of the same name.
+          NOTIFICATIONS_LIST: ${{ vars.NOTIFICATIONS_LIST || secrets.NOTIFICATIONS_LIST }}
+        run: python runner/feed_alert.py
